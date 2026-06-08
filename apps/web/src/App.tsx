@@ -8,6 +8,8 @@ import {
   Gift,
   HeartHandshake,
   LineChart,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck,
   Sparkles,
   Trophy
@@ -128,6 +130,7 @@ const rewardCards = [
 
 export function App() {
   const [activePage, setActivePage] = useState<PageId>("create");
+  const [isLabelNavCollapsed, setIsLabelNavCollapsed] = useState(false);
   const [session, setSession] = useState<AuthResponse | null>(null);
   const [createdGoal, setCreatedGoal] = useState<Goal | null>(null);
   const [goalForm, setGoalForm] = useState({
@@ -584,14 +587,42 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <section className="workspace-panel">
+      <section
+        className={`workspace-panel ${isLabelNavCollapsed ? "nav-collapsed" : ""}`}
+      >
         <aside className="app-sidebar" aria-label="功能标签">
-          <div className="brand">
-            <span className="brand-mark">
-              <HeartHandshake size={20} aria-hidden="true" />
-            </span>
-            <span>GoalPilot AI</span>
+          <div className="sidebar-header">
+            <div className="brand">
+              <span className="brand-mark">
+                <HeartHandshake size={20} aria-hidden="true" />
+              </span>
+              <span>GoalPilot AI</span>
+            </div>
+            <button
+              aria-expanded={!isLabelNavCollapsed}
+              aria-label={isLabelNavCollapsed ? "展开功能标签" : "收起功能标签"}
+              className="sidebar-toggle"
+              data-testid="label-nav-toggle"
+              type="button"
+              onClick={() => setIsLabelNavCollapsed((current) => !current)}
+            >
+              {isLabelNavCollapsed ? (
+                <PanelLeftOpen size={17} aria-hidden="true" />
+              ) : (
+                <PanelLeftClose size={17} aria-hidden="true" />
+              )}
+            </button>
           </div>
+
+          <button
+            className="active-page-chip"
+            data-testid="active-page-chip"
+            type="button"
+            onClick={() => setIsLabelNavCollapsed(false)}
+          >
+            <span>{activeNavItem.label}</span>
+            <small>{activeNavItem.description}</small>
+          </button>
 
           <nav className="label-nav">
             {navItems.map((item) => {
