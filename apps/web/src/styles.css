@@ -143,6 +143,7 @@ h1 {
 .goal-card,
 .vision-board,
 .heatmap-panel,
+.auth-panel,
 .journey-item {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -226,8 +227,55 @@ textarea:focus {
 }
 
 .vision-board,
-.heatmap-panel {
+.heatmap-panel,
+.auth-panel {
   padding: 18px;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.auth-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-weight: 800;
+}
+
+.auth-tabs button.active {
+  color: #ffffff;
+  border-color: var(--sage-dark);
+  background: var(--sage-dark);
+}
+
+.auth-form {
+  display: grid;
+  gap: 12px;
+}
+
+.auth-message {
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.signed-in h2 {
+  margin-bottom: 8px;
+  font-size: 1.08rem;
+}
+
+.full-width {
+  width: 100%;
 }
 
 .vision-board h2,
@@ -366,4 +414,3 @@ textarea:focus {
     width: 100%;
   }
 }
-

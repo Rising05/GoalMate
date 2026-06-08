@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Bell,
   CalendarCheck,
@@ -9,6 +10,8 @@ import {
   Sparkles,
   Trophy
 } from "lucide-react";
+import { AuthPanel } from "./AuthPanel";
+import { AuthResponse } from "./api";
 
 const setupFields = [
   "目标描述",
@@ -48,6 +51,8 @@ const heatmapCells = [
 ];
 
 export function App() {
+  const [session, setSession] = useState<AuthResponse | null>(null);
+
   return (
     <main className="app-shell">
       <section className="guide-panel" aria-labelledby="goal-title">
@@ -116,6 +121,18 @@ export function App() {
           </div>
 
           <aside className="status-column" aria-label="MVP 状态预览">
+            {session ? (
+              <section className="auth-panel signed-in" aria-label="当前账号">
+                <p className="section-label">当前账号</p>
+                <h2>{session.user.displayName ?? session.user.email}</h2>
+                <p className="auth-message">
+                  {session.user.membership?.plan ?? "FREE"} 计划已就绪，可以继续创建目标。
+                </p>
+              </section>
+            ) : (
+              <AuthPanel onAuthenticated={setSession} />
+            )}
+
             <div className="summary-strip">
               {setupFields.map((field) => (
                 <span key={field}>{field}</span>
@@ -175,4 +192,3 @@ export function App() {
     </main>
   );
 }
-
