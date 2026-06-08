@@ -1,0 +1,30 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: goalmate-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: goalmate
+      MYSQL_USER: goalmate
+      MYSQL_PASSWORD: goalmate
+    ports:
+      - "3307:3306"
+    volumes:
+      - goalmate_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ugoalmate", "-pgoalmate"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    container_name: goalmate-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - goalmate_redis_data:/data
+
+volumes:
+  goalmate_mysql_data:
+  goalmate_redis_data:

@@ -1,7 +1,10 @@
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
+import { loadEnv } from "./config/load-env";
 
 async function bootstrap() {
+  loadEnv();
+
   const app = await NestFactory.create(AppModule);
   app.enableCors({
     origin: process.env.WEB_ORIGIN ?? "http://localhost:5173",

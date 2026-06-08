@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   Bell,
   CalendarCheck,
@@ -11,7 +11,7 @@ import {
   Trophy
 } from "lucide-react";
 import { AuthPanel } from "./AuthPanel";
-import { AuthResponse } from "./api";
+import { AuthResponse, Goal, createGoal } from "./api";
 
 const setupFields = [
   "目标描述",
@@ -52,6 +52,66 @@ const heatmapCells = [
 
 export function App() {
   const [session, setSession] = useState<AuthResponse | null>(null);
+  const [createdGoal, setCreatedGoal] = useState<Goal | null>(null);
+  const [goalForm, setGoalForm] = useState({
+    title: "",
+    description: "",
+    category: "study",
+    startDate: "",
+    endDate: "",
+    dailyTimeBudgetMinutes: "",
+    toleranceDaysAllowed: "3",
+    currentBaseline: "",
+    constraints: "",
+    finalReward: ""
+  });
+  const [goalMessage, setGoalMessage] = useState("登录后可保存目标草稿。");
+  const [isCreatingGoal, setIsCreatingGoal] = useState(false);
+
+  function updateGoalField(field: keyof typeof goalForm, value: string) {
+    setGoalForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  async function handleCreateGoal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session) {
+      setGoalMessage("请先注册或登录，再创建目标草稿。");
+      return;
+    }
+
+    setIsCreatingGoal(true);
+    setGoalMessage("正在保存目标草稿...");
+
+    try {
+      const response = await createGoal(session.token, {
+        title: goalForm.title || undefined,
+        description: goalForm.description,
+        category: goalForm.category,
+        startDate: goalForm.startDate,
+        endDate: goalForm.endDate,
+        dailyTimeBudgetMinutes: goalForm.dailyTimeBudgetMinutes
+          ? Number(goalForm.dailyTimeBudgetMinutes)
+          : undefined,
+        toleranceDaysAllowed: goalForm.toleranceDaysAllowed
+          ? Number(goalForm.toleranceDaysAllowed)
+          : undefined,
+        currentBaseline: goalForm.currentBaseline || undefined,
+        constraints: goalForm.constraints || undefined,
+        finalReward: goalForm.finalReward || undefined
+      });
+
+      setCreatedGoal(response.goal);
+      setGoalMessage(`目标草稿已保存：${response.goal.title}`);
+    } catch (error) {
+      setGoalMessage(error instanceof Error ? error.message : "目标创建失败");
+    } finally {
+      setIsCreatingGoal(false);
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -77,46 +137,133 @@ export function App() {
               先填写关键约束，AI 会判断目标可行性并生成计划。计划确认后才进入执行状态。
             </p>
 
-            <form className="goal-card">
+            <form className="goal-card" onSubmit={handleCreateGoal}>
+              <label>
+                <span>目标标题</span>
+                <input
+                  value={goalForm.title}
+                  onChange={(event) => updateGoalField("title", event.target.value)}
+                  placeholder="例如：90 天完成 React 项目"
+                />
+              </label>
+
               <label>
                 <span>我想完成的目标</span>
                 <textarea
+                  value={goalForm.description}
+                  onChange={(event) =>
+                    updateGoalField("description", event.target.value)
+                  }
                   placeholder="例如：90 天系统学习 React，并完成一个可展示的项目"
                   rows={4}
+                  required
                 />
+              </label>
+
+              <label>
+                <span>目标类型</span>
+                <select
+                  value={goalForm.category}
+                  onChange={(event) => updateGoalField("category", event.target.value)}
+                >
+                  <option value="study">学习考证</option>
+                  <option value="career">职业成长</option>
+                  <option value="fitness">健身减脂</option>
+                  <option value="habit">自律习惯</option>
+                  <option value="custom">其他目标</option>
+                </select>
               </label>
 
               <div className="form-row">
                 <label>
                   <span>开始日期</span>
-                  <input type="date" />
+                  <input
+                    value={goalForm.startDate}
+                    onChange={(event) =>
+                      updateGoalField("startDate", event.target.value)
+                    }
+                    type="date"
+                    required
+                  />
                 </label>
                 <label>
                   <span>结束日期</span>
-                  <input type="date" />
+                  <input
+                    value={goalForm.endDate}
+                    onChange={(event) =>
+                      updateGoalField("endDate", event.target.value)
+                    }
+                    type="date"
+                    required
+                  />
                 </label>
               </div>
 
               <div className="form-row">
                 <label>
-                  <span>每日投入</span>
-                  <input placeholder="例如：60 分钟" />
+                  <span>每日投入分钟</span>
+                  <input
+                    value={goalForm.dailyTimeBudgetMinutes}
+                    onChange={(event) =>
+                      updateGoalField("dailyTimeBudgetMinutes", event.target.value)
+                    }
+                    min={1}
+                    placeholder="例如：60"
+                    type="number"
+                  />
                 </label>
                 <label>
                   <span>容错次数</span>
-                  <input placeholder="例如：3 天" />
+                  <input
+                    value={goalForm.toleranceDaysAllowed}
+                    onChange={(event) =>
+                      updateGoalField("toleranceDaysAllowed", event.target.value)
+                    }
+                    min={0}
+                    placeholder="例如：3"
+                    type="number"
+                  />
                 </label>
               </div>
 
               <label>
-                <span>完成后的奖励</span>
-                <input placeholder="例如：买一把喜欢的键盘，或安排一次短途旅行" />
+                <span>当前基础</span>
+                <input
+                  value={goalForm.currentBaseline}
+                  onChange={(event) =>
+                    updateGoalField("currentBaseline", event.target.value)
+                  }
+                  placeholder="例如：会基础 HTML/CSS，React 只看过文档"
+                />
               </label>
 
-              <button className="primary-button" type="button">
-                生成 AI 目标计划
+              <label>
+                <span>主要限制</span>
+                <input
+                  value={goalForm.constraints}
+                  onChange={(event) =>
+                    updateGoalField("constraints", event.target.value)
+                  }
+                  placeholder="例如：工作日只有晚上 1 小时"
+                />
+              </label>
+
+              <label>
+                <span>完成后的奖励</span>
+                <input
+                  value={goalForm.finalReward}
+                  onChange={(event) =>
+                    updateGoalField("finalReward", event.target.value)
+                  }
+                  placeholder="例如：买一把喜欢的键盘，或安排一次短途旅行"
+                />
+              </label>
+
+              <button className="primary-button" disabled={isCreatingGoal}>
+                {isCreatingGoal ? "保存中..." : "保存目标草稿"}
                 <ChevronRight size={18} aria-hidden="true" />
               </button>
+              <p className="form-message">{goalMessage}</p>
             </form>
           </div>
 
@@ -155,6 +302,14 @@ export function App() {
                 </div>
               </div>
             </div>
+
+            {createdGoal ? (
+              <div className="saved-goal">
+                <p className="section-label">已保存草稿</p>
+                <h2>{createdGoal.title}</h2>
+                <p>{createdGoal.status} · 容错 {createdGoal.toleranceDaysAllowed} 天</p>
+              </div>
+            ) : null}
 
             <div className="heatmap-panel">
               <div className="panel-heading">

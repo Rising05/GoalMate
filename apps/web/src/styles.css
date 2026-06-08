@@ -30,6 +30,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -144,6 +145,7 @@ h1 {
 .vision-board,
 .heatmap-panel,
 .auth-panel,
+.saved-goal,
 .journey-item {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -169,6 +171,7 @@ label span {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid #d4ccbd;
@@ -184,6 +187,7 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus {
   border-color: var(--sage);
   box-shadow: 0 0 0 3px rgba(85, 120, 107, 0.16);
@@ -201,6 +205,17 @@ textarea:focus {
   color: #ffffff;
   background: var(--sage-dark);
   font-weight: 800;
+}
+
+.primary-button:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.form-message {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .status-column {
@@ -228,8 +243,19 @@ textarea:focus {
 
 .vision-board,
 .heatmap-panel,
-.auth-panel {
+.auth-panel,
+.saved-goal {
   padding: 18px;
+}
+
+.saved-goal h2 {
+  margin-bottom: 8px;
+  font-size: 1.08rem;
+}
+
+.saved-goal p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
 }
 
 .auth-tabs {
