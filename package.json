@@ -1,0 +1,21 @@
+{
+  "name": "goalmate",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GoalPilot AI monorepo",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev:web",
+    "dev:web": "npm run dev -w @goalmate/web",
+    "dev:api": "npm run start:dev -w @goalmate/api",
+    "build": "npm run build -w @goalmate/shared && npm run build -w @goalmate/api && npm run build -w @goalmate/web",
+    "typecheck": "npm run typecheck -w @goalmate/shared && npm run typecheck -w @goalmate/api && npm run typecheck -w @goalmate/web"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+
