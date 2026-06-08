@@ -4,6 +4,7 @@ import {
   Bell,
   CalendarCheck,
   ChevronRight,
+  ChevronLeft,
   Flame,
   Gift,
   HeartHandshake,
@@ -97,10 +98,57 @@ const journeySteps = [
   }
 ];
 
-const heatmapCells = [
-  0, 2, 1, 3, 4, 0, 1, 2, 4, 3, 2, 0, 1, 4, 4, 2, 3, 1, 0, 2, 3, 4, 2, 1,
-  3, 0, 4, 2
-];
+const weekdayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function getMonthHeatmapCells(monthDate: Date) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const leadingBlankDays = (firstDay.getDay() + 6) % 7;
+  const totalCells = Math.ceil((leadingBlankDays + lastDay.getDate()) / 7) * 7;
+
+  return Array.from({ length: totalCells }, (_, index) => {
+    const dayOfMonth = index - leadingBlankDays + 1;
+
+    if (dayOfMonth < 1 || dayOfMonth > lastDay.getDate()) {
+      return {
+        key: `blank-${index}`,
+        day: "",
+        level: 0,
+        isBlank: true
+      };
+    }
+
+    const date = new Date(year, month, dayOfMonth);
+    const level = getDemoHeatLevel(date);
+
+    return {
+      key: date.toISOString(),
+      day: String(dayOfMonth),
+      level,
+      isBlank: false
+    };
+  });
+}
+
+function getDemoHeatLevel(date: Date) {
+  const seed =
+    date.getFullYear() * 13 + (date.getMonth() + 1) * 17 + date.getDate() * 19;
+
+  if (date.getTime() > Date.now()) {
+    return 0;
+  }
+
+  return seed % 5;
+}
+
+function formatMonthTitle(monthDate: Date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "long"
+  }).format(monthDate);
+}
 
 const healthMetrics = [
   { label: "完成率", value: "0%", tone: "neutral" },
@@ -131,6 +179,9 @@ const rewardCards = [
 export function App() {
   const [activePage, setActivePage] = useState<PageId>("create");
   const [isLabelNavCollapsed, setIsLabelNavCollapsed] = useState(false);
+  const [heatmapMonth, setHeatmapMonth] = useState(
+    () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  );
   const [session, setSession] = useState<AuthResponse | null>(null);
   const [createdGoal, setCreatedGoal] = useState<Goal | null>(null);
   const [goalForm, setGoalForm] = useState({
@@ -150,6 +201,15 @@ export function App() {
 
   const activeNavItem =
     navItems.find((item) => item.id === activePage) ?? navItems[0];
+  const monthHeatmapCells = getMonthHeatmapCells(heatmapMonth);
+  const monthWeekCount = monthHeatmapCells.length / 7;
+  const heatmapMonthTitle = formatMonthTitle(heatmapMonth);
+
+  function shiftHeatmapMonth(offset: number) {
+    setHeatmapMonth((current) => {
+      return new Date(current.getFullYear(), current.getMonth() + offset, 1);
+    });
+  }
 
   function updateGoalField(field: keyof typeof goalForm, value: string) {
     setGoalForm((current) => ({
@@ -467,20 +527,66 @@ export function App() {
         return (
           <div className="content-grid">
             <section className="panel main-panel">
-              <div className="panel-heading">
+              <div className="panel-heading heatmap-heading">
                 <div>
                   <p className="eyebrow">Progress map</p>
                   <h1>成长热力图</h1>
                 </div>
-                <span>28 天</span>
+                <div className="month-switcher" aria-label="切换月份">
+                  <button
+                    aria-label="上个月"
+                    className="ghost-icon-button"
+                    type="button"
+                    onClick={() => shiftHeatmapMonth(-1)}
+                  >
+                    <ChevronLeft size={17} aria-hidden="true" />
+                  </button>
+                  <span>{heatmapMonthTitle}</span>
+                  <button
+                    aria-label="下个月"
+                    className="ghost-icon-button"
+                    type="button"
+                    onClick={() => shiftHeatmapMonth(1)}
+                  >
+                    <ChevronRight size={17} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
-              <div className="heatmap" aria-label="任务完成热力图预览">
-                {heatmapCells.map((level, index) => (
-                  <span
-                    key={`${level}-${index}`}
-                    className={`heat-cell level-${level}`}
-                  />
-                ))}
+              <div className="calendar-heatmap" aria-label={`${heatmapMonthTitle} 任务完成热力图`}>
+                <div className="month-axis">
+                  <span />
+                  <strong>{heatmapMonthTitle}</strong>
+                </div>
+                <div className="heatmap-body">
+                  <div className="weekday-axis" aria-label="星期">
+                    {weekdayLabels.map((label) => (
+                      <span key={label}>{label}</span>
+                    ))}
+                  </div>
+                  <div
+                    className="heatmap-grid"
+                    style={{
+                      gridTemplateColumns: `repeat(${monthWeekCount}, minmax(18px, 1fr))`
+                    }}
+                  >
+                    {monthHeatmapCells.map((cell) => (
+                      <span
+                        aria-label={
+                          cell.isBlank ? "空白日期" : `${heatmapMonthTitle} ${cell.day} 日，强度 ${cell.level}`
+                        }
+                        className={`heat-cell level-${cell.level} ${
+                          cell.isBlank ? "is-blank" : ""
+                        }`}
+                        key={cell.key}
+                        title={
+                          cell.isBlank
+                            ? ""
+                            : `${heatmapMonthTitle} ${cell.day} 日 · 强度 ${cell.level}`
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
               </div>
             </section>
             <aside className="stack">

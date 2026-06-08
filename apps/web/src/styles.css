@@ -731,12 +731,93 @@ textarea:focus {
   font-weight: 680;
 }
 
-.heatmap {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(18px, 1fr));
-  gap: 7px;
-  max-width: 520px;
+.heatmap-heading {
+  align-items: center;
+}
+
+.month-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.month-switcher > span {
+  min-width: 110px;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.ghost-icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.ghost-icon-button:hover {
+  color: var(--text);
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.calendar-heatmap {
   margin-top: 18px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.month-axis {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: end;
+  min-width: 360px;
+  margin-bottom: 8px;
+}
+
+.month-axis strong {
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.heatmap-body {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 360px;
+}
+
+.weekday-axis {
+  display: grid;
+  grid-template-rows: repeat(7, 18px);
+  gap: 7px;
+}
+
+.weekday-axis span {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 18px);
+  gap: 7px;
 }
 
 .heat-cell {
@@ -744,6 +825,10 @@ textarea:focus {
   aspect-ratio: 1;
   border-radius: 4px;
   border: 1px solid rgba(32, 33, 36, 0.08);
+}
+
+.heat-cell.is-blank {
+  visibility: hidden;
 }
 
 .level-0 {
