@@ -161,6 +161,26 @@ export class AiJobsService {
     };
   }
 
+  async getGoalPlan(userId: string, goalId: string) {
+    const plan = await this.prisma.plan.findFirst({
+      where: {
+        goalId,
+        goal: {
+          userId
+        }
+      },
+      include: this.planInclude()
+    });
+
+    if (!plan) {
+      throw new NotFoundException("计划不存在");
+    }
+
+    return {
+      plan: this.serializePlan(plan)
+    };
+  }
+
   private async persistGeneratedPlan(goal: Goal, generatedPlan: GeneratedGoalPlan) {
     return this.prisma.$transaction(async (tx) => {
       await tx.dailyTask.deleteMany({ where: { goalId: goal.id } });

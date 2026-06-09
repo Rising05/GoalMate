@@ -88,6 +88,7 @@ export interface DailyTask {
 export interface TodayDailyTask extends DailyTask {
   goalTitle: string;
   weeklyPlanId: string | null;
+  weeklyPlanTitle: string | null;
   date: string;
   latestCheckin: TaskCheckin | null;
 }
@@ -100,6 +101,8 @@ export interface TaskCheckin {
   submittedAt: string;
   aiScore: {
     totalScore: number;
+    dimensions?: Record<string, number>;
+    evidence?: Record<string, unknown>;
     summary: string;
     suggestion: string;
   } | null;
@@ -126,6 +129,35 @@ export interface ActivityTask {
   aiScore: number | null;
   reflection: string | null;
   completedAt: string | null;
+}
+
+export interface TimelineDay {
+  date: string;
+  investedMinutes: number;
+  averageScore: number | null;
+  items: TimelineItem[];
+}
+
+export interface TimelineItem {
+  id: string;
+  date: string;
+  submittedAt: string;
+  goalId: string;
+  goalTitle: string;
+  dailyTaskId: string | null;
+  taskTitle: string;
+  taskDescription: string | null;
+  weeklyPlanTitle: string | null;
+  plannedMinutes: number | null;
+  investedMinutes: number | null;
+  checkin: TaskCheckin;
+  aiScore: {
+    totalScore: number;
+    dimensions?: Record<string, number>;
+    evidence?: Record<string, unknown>;
+    summary: string;
+    suggestion: string;
+  } | null;
 }
 
 export interface GoalHealth {
@@ -258,6 +290,22 @@ export async function confirmGoalPlan(token: string, goalId: string) {
   return data as { goal: Goal; plan: GoalPlan };
 }
 
+export async function fetchGoalPlan(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/plan`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ plan: GoalPlan }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "计划加载失败"));
+  }
+
+  return data as { plan: GoalPlan };
+}
+
 export async function fetchGoalHealth(token: string, goalId: string) {
   const response = await fetch(`${API_BASE_URL}/goals/${goalId}/health`, {
     headers: {
@@ -313,15 +361,17 @@ export async function completeDailyTask(
     body: JSON.stringify(payload)
   });
 
-  const data = await parseJson<{ task: TodayDailyTask; checkin: TaskCheckin }>(
-    response
-  );
+  const data = await parseJson<{
+    task: TodayDailyTask;
+    checkin: TaskCheckin;
+    job: AiJob;
+  }>(response);
 
   if (!response.ok) {
     throw new Error(getErrorMessage(data, "任务完成提交失败"));
   }
 
-  return data as { task: TodayDailyTask; checkin: TaskCheckin };
+  return data as { task: TodayDailyTask; checkin: TaskCheckin; job: AiJob };
 }
 
 export async function fetchTaskActivity(
@@ -349,6 +399,30 @@ export async function fetchTaskActivity(
   }
 
   return data as { year: number; days: ActivityDay[] };
+}
+
+export async function fetchTaskTimeline(token: string, goalId?: string) {
+  const url = new URL(`${API_BASE_URL}/daily-tasks/timeline`);
+
+  if (goalId) {
+    url.searchParams.set("goalId", goalId);
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ items: TimelineItem[]; days: TimelineDay[] }>(
+    response
+  );
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "成长时间线加载失败"));
+  }
+
+  return data as { items: TimelineItem[]; days: TimelineDay[] };
 }
 
 async function parseJson<T>(response: Response) {

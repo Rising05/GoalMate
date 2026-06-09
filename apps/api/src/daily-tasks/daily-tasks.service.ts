@@ -4,12 +4,30 @@ import {
   Injectable,
   NotFoundException
 } from "@nestjs/common";
-import { AiScore, Checkin, DailyTask, Goal, GoalStatus } from "@prisma/client";
+import {
+  AiScore,
+  Checkin,
+  DailyTask,
+  Goal,
+  GoalStatus,
+  WeeklyPlan
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 
 type TaskWithGoalAndCheckins = DailyTask & {
   goal: Goal;
+  weeklyPlan: WeeklyPlan | null;
   checkins: Array<Checkin & { aiScore: AiScore | null }>;
+};
+
+type TimelineCheckin = Checkin & {
+  goal: Goal;
+  dailyTask:
+    | (DailyTask & {
+        weeklyPlan: WeeklyPlan | null;
+      })
+    | null;
+  aiScore: AiScore | null;
 };
 
 interface CompleteTaskPayload {
@@ -24,6 +42,7 @@ const EXECUTABLE_GOAL_STATUSES: GoalStatus[] = [
 ];
 const DONE_STATUS = "DONE";
 const TIMEZONE = "Asia/Shanghai";
+const CHECKIN_SCORING = "CHECKIN_SCORING";
 
 @Injectable()
 export class DailyTasksService {
@@ -129,6 +148,74 @@ export class DailyTasksService {
     };
   }
 
+  async getTimeline(userId: string, goalId?: string) {
+    const goalFilter = await this.getGoalFilter(userId, goalId);
+    const checkins = await this.prisma.checkin.findMany({
+      where: {
+        userId,
+        goal: goalFilter
+      },
+      orderBy: {
+        submittedAt: "desc"
+      },
+      take: 60,
+      include: {
+        goal: true,
+        dailyTask: {
+          include: {
+            weeklyPlan: true
+          }
+        },
+        aiScore: true
+      }
+    });
+    const days = new Map<
+      string,
+      {
+        date: string;
+        investedMinutes: number;
+        scoreTotal: number;
+        scoreCount: number;
+        items: ReturnType<DailyTasksService["serializeTimelineItem"]>[];
+      }
+    >();
+    const items = checkins.map((checkin) => this.serializeTimelineItem(checkin));
+
+    for (const item of items) {
+      const bucket =
+        days.get(item.date) ??
+        {
+          date: item.date,
+          investedMinutes: 0,
+          scoreTotal: 0,
+          scoreCount: 0,
+          items: []
+        };
+
+      bucket.investedMinutes += item.investedMinutes ?? 0;
+
+      if (item.aiScore) {
+        bucket.scoreTotal += item.aiScore.totalScore;
+        bucket.scoreCount += 1;
+      }
+
+      bucket.items.push(item);
+      days.set(item.date, bucket);
+    }
+
+    return {
+      items,
+      days: Array.from(days.values()).map((day) => ({
+        date: day.date,
+        investedMinutes: day.investedMinutes,
+        averageScore: day.scoreCount
+          ? Math.round(day.scoreTotal / day.scoreCount)
+          : null,
+        items: day.items
+      }))
+    };
+  }
+
   async completeTask(userId: string, taskId: string, input: unknown) {
     const payload = this.parseCompletePayload(input);
     const task = await this.prisma.dailyTask.findFirst({
@@ -153,55 +240,94 @@ export class DailyTasksService {
     }
 
     const investedMinutes = payload.investedMinutes ?? task.plannedMinutes ?? 0;
-    const totalScore = this.getMockScore(payload.content, investedMinutes);
-    const completedTask = await this.prisma.$transaction(async (tx) => {
+    const score = this.getMockScore(payload.content, investedMinutes, task);
+    const { completedTask, checkin, job } = await this.prisma.$transaction(async (tx) => {
       await tx.dailyTask.update({
         where: { id: task.id },
         data: { status: DONE_STATUS }
       });
 
-      await tx.checkin.create({
+      const createdCheckin = await tx.checkin.create({
         data: {
           userId,
           goalId: task.goalId,
           dailyTaskId: task.id,
           status: "SCORED",
           content: payload.content,
-          investedMinutes,
-          aiScore: {
-            create: {
-              totalScore,
-              dimensions: {
-                completion: totalScore,
-                focus: Math.max(60, totalScore - 4),
-                evidence: Math.max(60, totalScore - 8)
-              },
-              evidence: {
-                source: "mock",
-                dailyTaskId: task.id
-              },
-              summary: "已记录完成情况，并生成 mock 评分。",
-              suggestion: "继续保持当天节奏，明天优先推进下一项计划任务。"
-            }
+          investedMinutes
+        }
+      });
+
+      const createdJob = await tx.aiJob.create({
+        data: {
+          userId,
+          goalId: task.goalId,
+          type: CHECKIN_SCORING,
+          status: "QUEUED",
+          payload: {
+            checkinId: createdCheckin.id,
+            dailyTaskId: task.id,
+            provider: "mock"
           }
         }
       });
 
-      return tx.dailyTask.findUniqueOrThrow({
+      const runningJob = await tx.aiJob.update({
+        where: { id: createdJob.id },
+        data: {
+          status: "RUNNING",
+          attempts: {
+            increment: 1
+          }
+        }
+      });
+
+      const aiScore = await tx.aiScore.create({
+        data: {
+          checkinId: createdCheckin.id,
+          totalScore: score.totalScore,
+          dimensions: score.dimensions,
+          evidence: score.evidence,
+          summary: score.summary,
+          suggestion: score.suggestion
+        }
+      });
+
+      const succeededJob = await tx.aiJob.update({
+        where: { id: runningJob.id },
+        data: {
+          status: "SUCCEEDED",
+          result: {
+            checkinId: createdCheckin.id,
+            aiScoreId: aiScore.id,
+            totalScore: score.totalScore
+          }
+        }
+      });
+
+      const updatedTask = await tx.dailyTask.findUniqueOrThrow({
         where: { id: task.id },
         include: this.taskInclude()
       });
+
+      return {
+        completedTask: updatedTask,
+        checkin: updatedTask.checkins.find((item) => item.id === createdCheckin.id)!,
+        job: succeededJob
+      };
     });
 
     return {
       task: this.serializeTask(completedTask),
-      checkin: this.serializeCheckin(completedTask.checkins[0]!)
+      checkin: this.serializeCheckin(checkin),
+      job: this.serializeAiJob(job)
     };
   }
 
   private taskInclude() {
     return {
       goal: true,
+      weeklyPlan: true,
       checkins: {
         orderBy: {
           submittedAt: "desc" as const
@@ -301,11 +427,40 @@ export class DailyTasksService {
     return value.trim().slice(0, maxLength);
   }
 
-  private getMockScore(content: string, investedMinutes: number) {
+  private getMockScore(
+    content: string,
+    investedMinutes: number,
+    task: TaskWithGoalAndCheckins
+  ) {
     const contentScore = Math.min(20, Math.floor(content.length / 6));
     const timeScore = Math.min(20, Math.floor(investedMinutes / 5));
+    const plannedMinutes = task.plannedMinutes ?? investedMinutes;
+    const timeMatch = plannedMinutes
+      ? Math.max(60, 100 - Math.abs(plannedMinutes - investedMinutes))
+      : 82;
+    const totalScore = Math.max(60, Math.min(98, 62 + contentScore + timeScore));
 
-    return Math.max(60, Math.min(98, 62 + contentScore + timeScore));
+    return {
+      totalScore,
+      dimensions: {
+        completion: totalScore,
+        timeMatch,
+        evidence: Math.max(60, totalScore - 8),
+        reflection: Math.max(60, totalScore - 4)
+      },
+      evidence: {
+        source: "mock",
+        dailyTaskId: task.id,
+        plannedMinutes,
+        investedMinutes,
+        contentLength: content.length
+      },
+      summary: `已完成「${task.title}」，本次复盘内容和投入时间已记录。`,
+      suggestion:
+        totalScore >= 88
+          ? "今天执行质量较高，明天可以继续按原计划推进。"
+          : "明天优先补充更具体的完成证据，并尽量贴近计划投入时间。"
+    };
   }
 
   private getDateRange(dateKey: string) {
@@ -345,6 +500,7 @@ export class DailyTasksService {
       goalId: task.goalId,
       goalTitle: task.goal.title,
       weeklyPlanId: task.weeklyPlanId,
+      weeklyPlanTitle: task.weeklyPlan?.title ?? null,
       taskDate: task.taskDate.toISOString(),
       date: this.toDateKey(task.taskDate),
       title: task.title,
@@ -383,10 +539,62 @@ export class DailyTasksService {
       aiScore: checkin.aiScore
         ? {
             totalScore: checkin.aiScore.totalScore,
+            dimensions: checkin.aiScore.dimensions,
+            evidence: checkin.aiScore.evidence,
             summary: checkin.aiScore.summary,
             suggestion: checkin.aiScore.suggestion
           }
         : null
+    };
+  }
+
+  private serializeTimelineItem(checkin: TimelineCheckin) {
+    const task = checkin.dailyTask;
+
+    return {
+      id: checkin.id,
+      date: this.toDateKey(checkin.submittedAt),
+      submittedAt: checkin.submittedAt.toISOString(),
+      goalId: checkin.goalId,
+      goalTitle: checkin.goal.title,
+      dailyTaskId: checkin.dailyTaskId,
+      taskTitle: task?.title ?? "未关联任务复盘",
+      taskDescription: task?.description ?? null,
+      weeklyPlanTitle: task?.weeklyPlan?.title ?? null,
+      plannedMinutes: task?.plannedMinutes ?? null,
+      investedMinutes: checkin.investedMinutes,
+      checkin: this.serializeCheckin(checkin),
+      aiScore: checkin.aiScore
+        ? {
+            totalScore: checkin.aiScore.totalScore,
+            dimensions: checkin.aiScore.dimensions,
+            evidence: checkin.aiScore.evidence,
+            summary: checkin.aiScore.summary,
+            suggestion: checkin.aiScore.suggestion
+          }
+        : null
+    };
+  }
+
+  private serializeAiJob(job: {
+    id: string;
+    goalId: string | null;
+    type: string;
+    status: string;
+    attempts: number;
+    error: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: job.id,
+      goalId: job.goalId,
+      type: job.type,
+      status: job.status,
+      attempts: job.attempts,
+      error: job.error,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString()
     };
   }
 }

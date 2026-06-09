@@ -37,6 +37,14 @@ export class DailyTasksController {
     return this.dailyTasksService.getYearActivity(request.user!.id, year, goalId);
   }
 
+  @Get("timeline")
+  getTimeline(
+    @Req() request: AuthenticatedRequest,
+    @Query("goalId") goalId?: string
+  ) {
+    return this.dailyTasksService.getTimeline(request.user!.id, goalId);
+  }
+
   @Post(":id/complete")
   complete(
     @Req() request: AuthenticatedRequest,

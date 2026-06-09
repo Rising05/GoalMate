@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Flame,
   Gift,
+  History,
   LineChart,
   PanelLeftClose,
   PanelLeftOpen,
@@ -19,21 +20,35 @@ import { AuthPanel } from "./AuthPanel";
 import {
   AuthResponse,
   ActivityDay,
+  AiJob,
   Goal,
   GoalHealth,
   GoalPlan,
+  TaskCheckin,
+  TimelineDay,
+  TimelineItem,
   TodayDailyTask,
   confirmGoalPlan,
   completeDailyTask,
   createGoal,
+  fetchGoalPlan,
   fetchGoalHealth,
   fetchTaskActivity,
+  fetchTaskTimeline,
   fetchTodayTasks,
   generateGoalPlan,
   listGoals
 } from "./api";
 
-type PageId = "create" | "goals" | "today" | "heatmap" | "rewards" | "account";
+type PageId =
+  | "create"
+  | "goals"
+  | "plan"
+  | "today"
+  | "heatmap"
+  | "timeline"
+  | "rewards"
+  | "account";
 
 interface NavItem {
   id: PageId;
@@ -56,6 +71,12 @@ const navItems: NavItem[] = [
     icon: ShieldCheck
   },
   {
+    id: "plan",
+    label: "计划确认",
+    description: "Plan review",
+    icon: CheckCircle2
+  },
+  {
     id: "today",
     label: "今日任务",
     description: "Daily work",
@@ -66,6 +87,12 @@ const navItems: NavItem[] = [
     label: "成长热力图",
     description: "Progress map",
     icon: LineChart
+  },
+  {
+    id: "timeline",
+    label: "成长时间线",
+    description: "Growth story",
+    icon: History
   },
   {
     id: "rewards",
@@ -252,6 +279,7 @@ const plannedTasks = [
   {
     id: "preview-1",
     goalTitle: "计划待生成",
+    weeklyPlanTitle: null,
     title: "阅读核心资料",
     description: "AI 计划生成并确认后，这里会显示当天真实任务。",
     plannedMinutes: 45,
@@ -261,6 +289,7 @@ const plannedTasks = [
   {
     id: "preview-2",
     goalTitle: "计划待生成",
+    weeklyPlanTitle: null,
     title: "输出学习笔记",
     description: "完成按钮会在真实任务生成后启用。",
     plannedMinutes: 20,
@@ -270,6 +299,7 @@ const plannedTasks = [
   {
     id: "preview-3",
     goalTitle: "计划待生成",
+    weeklyPlanTitle: null,
     title: "提交今日复盘",
     description: "完成后会写入 checkin 并更新热力图。",
     plannedMinutes: 10,
@@ -373,11 +403,18 @@ export function App() {
   const [isCreatingGoal, setIsCreatingGoal] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [isConfirmingPlan, setIsConfirmingPlan] = useState(false);
+  const [isLoadingPlan, setIsLoadingPlan] = useState(false);
   const [todayTasks, setTodayTasks] = useState<TodayDailyTask[]>([]);
   const [activityDays, setActivityDays] = useState<ActivityDay[]>([]);
+  const [timelineDays, setTimelineDays] = useState<TimelineDay[]>([]);
   const [goalHealth, setGoalHealth] = useState<GoalHealth | null>(null);
   const [dailyTaskMessage, setDailyTaskMessage] = useState("登录后可查看今日任务。");
+  const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
   const [isLoadingDailyTasks, setIsLoadingDailyTasks] = useState(false);
+  const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
+    toDateKey(new Date())
+  );
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null);
   const [completionTask, setCompletionTask] = useState<TodayDailyTask | null>(null);
   const [completionForm, setCompletionForm] = useState({
@@ -386,6 +423,11 @@ export function App() {
     blockers: "",
     tomorrowAdjustment: ""
   });
+  const [completionResult, setCompletionResult] = useState<{
+    task: TodayDailyTask;
+    checkin: TaskCheckin;
+    job: AiJob;
+  } | null>(null);
 
   const activeNavItem =
     navItems.find((item) => item.id === activePage) ?? navItems[0];
@@ -399,9 +441,25 @@ export function App() {
   const selectedActivityDay = activityDays.find(
     (day) => day.date === selectedHeatmapDate
   );
+  const selectedHeatmapTimelineDay = timelineDays.find(
+    (day) => day.date === selectedHeatmapDate
+  );
+  const selectedTimelineDay = timelineDays.find(
+    (day) => day.date === selectedTimelineDate
+  );
+  const recentTimelineItems = timelineDays
+    .flatMap((day) => day.items)
+    .slice(0, 3);
   const selectedHeatmapTasks = selectedActivityDay?.tasks ?? [];
-  const selectedHeatmapMinutes = selectedActivityDay?.investedMinutes ?? 0;
-  const selectedHeatmapAverageScore = selectedActivityDay?.averageScore ?? null;
+  const selectedHeatmapTimelineItems = selectedHeatmapTimelineDay?.items ?? [];
+  const selectedHeatmapMinutes =
+    selectedHeatmapTimelineDay?.investedMinutes ??
+    selectedActivityDay?.investedMinutes ??
+    0;
+  const selectedHeatmapAverageScore =
+    selectedHeatmapTimelineDay?.averageScore ??
+    selectedActivityDay?.averageScore ??
+    null;
   const selectedHeatmapLevel = selectedActivityDay?.level ?? 0;
   const heatmapContributionCount = activityDays.reduce(
     (total, day) => total + day.completedTaskCount,
@@ -441,11 +499,17 @@ export function App() {
       ? todayTasks
       : selectedGeneratedPlan
         ? selectedGeneratedPlan.weeklyPlans
-            .flatMap((weeklyPlan) => weeklyPlan.dailyTasks)
+            .flatMap((weeklyPlan) =>
+              weeklyPlan.dailyTasks.map((task) => ({
+                task,
+                weeklyPlanTitle: weeklyPlan.title
+              }))
+            )
             .slice(0, 3)
-            .map((task) => ({
+            .map(({ task, weeklyPlanTitle }) => ({
               id: task.id,
               goalTitle: selectedGeneratedPlan.summary,
+              weeklyPlanTitle,
               title: task.title,
               description: task.description,
               plannedMinutes: task.plannedMinutes,
@@ -460,6 +524,26 @@ export function App() {
       (count, weeklyPlan) => count + weeklyPlan.dailyTasks.length,
       0
     ) ?? 0;
+  const planReviewStats = selectedGeneratedPlan
+    ? [
+        {
+          label: "阶段里程碑",
+          value: `${selectedGeneratedPlan.milestones.length} 个`
+        },
+        {
+          label: "每周计划",
+          value: `${selectedGeneratedPlan.weeklyPlans.length} 周`
+        },
+        {
+          label: "每日任务",
+          value: `${selectedPlanTaskCount} 个`
+        },
+        {
+          label: "计划状态",
+          value: selectedGeneratedPlan.isActive ? "已确认" : "待确认"
+        }
+      ]
+    : [];
   const selectedGoalStatus =
     selectedGoal ? goalStatusLabels[selectedGoal.status] ?? selectedGoal.status : "待选择";
   const dashboardAction = getDashboardAction();
@@ -472,8 +556,10 @@ export function App() {
       setSelectedGoalId(null);
       setTodayTasks([]);
       setActivityDays([]);
+      setTimelineDays([]);
       setGoalHealth(null);
       setDailyTaskMessage("登录后可查看今日任务。");
+      setTimelineMessage("登录后可查看成长时间线。");
       return;
     }
 
@@ -487,6 +573,24 @@ export function App() {
 
     void refreshDailyTaskData(session.token, heatmapYear, selectedGoalId ?? undefined);
   }, [session, heatmapYear, selectedGoalId]);
+
+  useEffect(() => {
+    if (!session || !selectedGoalId) {
+      return;
+    }
+
+    const shouldLoadPlan =
+      activePage === "plan" ||
+      selectedGoal?.status === "WAITING_CONFIRMATION" ||
+      selectedGoal?.status === "ACTIVE";
+
+    if (
+      shouldLoadPlan &&
+      (!selectedGeneratedPlan || selectedGeneratedPlan.goalId !== selectedGoalId)
+    ) {
+      void loadGoalPlan(session.token, selectedGoalId);
+    }
+  }, [activePage, session, selectedGoalId, selectedGoal?.status]);
 
   async function refreshGoals(token = session?.token, preferredGoalId?: string) {
     if (!token) {
@@ -519,6 +623,31 @@ export function App() {
     );
   }
 
+  async function loadGoalPlan(token = session?.token, goalId = selectedGoalId) {
+    if (!token || !goalId) {
+      return;
+    }
+
+    setIsLoadingPlan(true);
+
+    try {
+      const response = await fetchGoalPlan(token, goalId);
+
+      setGeneratedPlan(response.plan);
+      setPlanMessage(
+        response.plan.isActive
+          ? "计划已确认，可继续执行今日任务。"
+          : "计划已加载，请检查后确认。"
+      );
+    } catch (error) {
+      if (activePage === "plan") {
+        setPlanMessage(error instanceof Error ? error.message : "计划加载失败");
+      }
+    } finally {
+      setIsLoadingPlan(false);
+    }
+  }
+
   function getDashboardAction(): {
     label: string;
     description: string;
@@ -548,11 +677,11 @@ export function App() {
 
     if (selectedGoal.status === "WAITING_CONFIRMATION") {
       return {
-        label: isConfirmingPlan ? "确认中" : "确认计划",
-        description: "确认后目标进入执行状态，并生成今天可执行的任务。",
+        label: "查看计划",
+        description: "进入计划确认页，检查里程碑、每周节奏和每日任务后再确认。",
         icon: CheckCircle2,
-        disabled: isConfirmingPlan || !selectedGeneratedPlan,
-        run: handleConfirmPlan
+        disabled: false,
+        run: () => setActivePage("plan")
       };
     }
 
@@ -569,10 +698,15 @@ export function App() {
     return {
       label: "查看成长记录",
       description: "回看目标的完成记录、投入时间和成长轨迹。",
-      icon: LineChart,
+      icon: History,
       disabled: false,
-      run: () => setActivePage("heatmap")
+      run: () => setActivePage("timeline")
     };
+  }
+
+  function openTimelineDate(date: string) {
+    setSelectedTimelineDate(date);
+    setActivePage("timeline");
   }
 
   async function refreshDailyTaskData(
@@ -585,11 +719,13 @@ export function App() {
     }
 
     setIsLoadingDailyTasks(true);
+    setIsLoadingTimeline(true);
 
     try {
-      const [todayResponse, activityResponse] = await Promise.all([
+      const [todayResponse, activityResponse, timelineResponse] = await Promise.all([
         fetchTodayTasks(token, goalId),
-        fetchTaskActivity(token, year, goalId)
+        fetchTaskActivity(token, year, goalId),
+        fetchTaskTimeline(token, goalId)
       ]);
       const healthGoalId =
         goalId ??
@@ -598,6 +734,12 @@ export function App() {
 
       setTodayTasks(todayResponse.tasks);
       setActivityDays(activityResponse.days);
+      setTimelineDays(timelineResponse.days);
+      setTimelineMessage(
+        timelineResponse.items.length
+          ? `最近 ${timelineResponse.items.length} 条成长记录。`
+          : "暂无复盘记录，先完成今日任务生成第一条时间线。"
+      );
       if (healthGoalId) {
         setGoalHealth(await fetchGoalHealth(token, healthGoalId));
       } else {
@@ -612,13 +754,18 @@ export function App() {
       setDailyTaskMessage(
         error instanceof Error ? error.message : "任务数据加载失败"
       );
+      setTimelineMessage(
+        error instanceof Error ? error.message : "成长时间线加载失败"
+      );
     } finally {
       setIsLoadingDailyTasks(false);
+      setIsLoadingTimeline(false);
     }
   }
 
   function openCompletionDialog(task: TodayDailyTask) {
     setCompletionTask(task);
+    setCompletionResult(null);
     setCompletionForm({
       investedMinutes: task.plannedMinutes ? String(task.plannedMinutes) : "",
       completedContent: "",
@@ -633,6 +780,7 @@ export function App() {
     }
 
     setCompletionTask(null);
+    setCompletionResult(null);
   }
 
   function updateCompletionField(
@@ -684,14 +832,14 @@ export function App() {
     setDailyTaskMessage("正在提交今日完成记录...");
 
     try {
-      await completeDailyTask(session.token, completionTask.id, {
+      const response = await completeDailyTask(session.token, completionTask.id, {
         content,
         investedMinutes
       });
       setDailyTaskMessage("任务已完成，热力图已更新。");
+      setCompletionResult(response);
       await refreshDailyTaskData(session.token, heatmapYear);
       setSelectedHeatmapDate(completionTask.date);
-      setCompletionTask(null);
     } catch (error) {
       setDailyTaskMessage(
         error instanceof Error ? error.message : "任务完成提交失败"
@@ -779,6 +927,9 @@ export function App() {
           ? "AI 计划已生成，确认后目标会进入执行状态。"
           : response.job.error ?? "计划生成失败"
       );
+      if (response.plan) {
+        setActivePage("plan");
+      }
     } catch (error) {
       setPlanMessage(error instanceof Error ? error.message : "AI 计划生成失败");
     } finally {
@@ -1102,12 +1253,54 @@ export function App() {
                     <button
                       className="ghost-button"
                       type="button"
+                      onClick={() => setActivePage("timeline")}
+                    >
+                      成长时间线
+                      <History size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      className="ghost-button"
+                      type="button"
                       onClick={() => setActivePage("rewards")}
                     >
                       奖励愿景板
                       <Gift size={16} aria-hidden="true" />
                     </button>
                   </div>
+
+                  <section className="dashboard-progress">
+                    <div className="section-heading compact-heading">
+                      <p className="eyebrow">Recent progress</p>
+                      <h2>最近进展</h2>
+                    </div>
+                    {recentTimelineItems.length ? (
+                      <div className="mini-progress-list">
+                        {recentTimelineItems.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => openTimelineDate(item.date)}
+                          >
+                            <div>
+                              <strong>{item.taskTitle}</strong>
+                              <span>
+                                {formatActivityDate(item.date)} ·{" "}
+                                {item.investedMinutes ?? item.plannedMinutes ?? 0} 分钟
+                              </span>
+                            </div>
+                            <em>
+                              {item.aiScore ? `AI ${item.aiScore.totalScore}` : "待评分"}
+                            </em>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="empty-inline">
+                        <span>暂无复盘记录</span>
+                        <p>完成今日任务后，这里会显示最近 3 条执行反馈。</p>
+                      </div>
+                    )}
+                  </section>
 
                   <p className="form-message">{planMessage}</p>
 
@@ -1204,6 +1397,205 @@ export function App() {
             </aside>
           </div>
         );
+      case "plan":
+        return (
+          <div className="content-grid plan-review-grid">
+            <section className="panel main-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Plan review</p>
+                  <h1>AI 计划确认</h1>
+                </div>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setActivePage("goals")}
+                >
+                  当前目标
+                  <ShieldCheck size={16} aria-hidden="true" />
+                </button>
+              </div>
+
+              {!selectedGoal ? (
+                <div className="empty-state">
+                  <CheckCircle2 size={24} aria-hidden="true" />
+                  <h2>请选择目标</h2>
+                  <p>先创建或选择一个目标，再生成 AI 计划。</p>
+                </div>
+              ) : !selectedGeneratedPlan ? (
+                <div className="empty-state">
+                  <Sparkles size={24} aria-hidden="true" />
+                  <h2>{isLoadingPlan ? "正在加载计划" : "暂无待确认计划"}</h2>
+                  <p>{planMessage}</p>
+                  <div className="form-actions">
+                    <button
+                      className="primary-button"
+                      disabled={isGeneratingPlan || isLoadingPlan}
+                      type="button"
+                      onClick={handleGeneratePlan}
+                    >
+                      {isGeneratingPlan ? "生成中" : "生成 AI 计划"}
+                      <Sparkles size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="plan-review">
+                  <section className="plan-review-hero">
+                    <div>
+                      <p className="eyebrow">Plan summary</p>
+                      <h2>{selectedGoal.title}</h2>
+                      <p>{selectedGeneratedPlan.summary}</p>
+                    </div>
+                    <div className="dashboard-status">
+                      <span>
+                        {selectedGeneratedPlan.isActive ? "已确认" : "待确认"}
+                      </span>
+                      <strong>v{selectedGeneratedPlan.version}</strong>
+                    </div>
+                  </section>
+
+                  <div className="dashboard-metrics">
+                    {planReviewStats.map((stat) => (
+                      <div key={stat.label}>
+                        <span>{stat.label}</span>
+                        <strong>{stat.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+
+                  <section className="plan-review-section">
+                    <div className="section-heading">
+                      <p className="eyebrow">Milestones</p>
+                      <h2>阶段里程碑</h2>
+                    </div>
+                    <div className="milestone-grid">
+                      {selectedGeneratedPlan.milestones.map((milestone, index) => (
+                        <article key={milestone.id}>
+                          <span>{index + 1}</span>
+                          <div>
+                            <h3>{milestone.title}</h3>
+                            <p>{milestone.description}</p>
+                            <strong>{formatDate(milestone.targetDate)}</strong>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="plan-review-section">
+                    <div className="section-heading">
+                      <p className="eyebrow">Weekly plan</p>
+                      <h2>每周计划与每日任务</h2>
+                    </div>
+                    <div className="plan-week-accordion">
+                      {selectedGeneratedPlan.weeklyPlans.map((weeklyPlan) => (
+                        <article key={weeklyPlan.id}>
+                          <div className="plan-week-heading">
+                            <div>
+                              <span>Week {weeklyPlan.weekIndex}</span>
+                              <h3>{weeklyPlan.title}</h3>
+                              <p>{weeklyPlan.summary}</p>
+                            </div>
+                            <strong>
+                              {formatDate(weeklyPlan.startsOn)} -{" "}
+                              {formatDate(weeklyPlan.endsOn)}
+                            </strong>
+                          </div>
+                          <div className="plan-task-grid">
+                            {weeklyPlan.dailyTasks.map((task) => (
+                              <div key={task.id}>
+                                <span>{formatDate(task.taskDate)}</span>
+                                <strong>{task.title}</strong>
+                                <p>{task.description}</p>
+                                <em>
+                                  {task.plannedMinutes
+                                    ? `${task.plannedMinutes} 分钟`
+                                    : "待估时"}
+                                </em>
+                              </div>
+                            ))}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+
+                  <div className="form-actions">
+                    <button
+                      className="primary-button"
+                      disabled={
+                        isConfirmingPlan ||
+                        selectedGeneratedPlan.isActive ||
+                        selectedGoal.status !== "WAITING_CONFIRMATION"
+                      }
+                      type="button"
+                      onClick={handleConfirmPlan}
+                    >
+                      {isConfirmingPlan ? "确认中" : "确认计划并开始执行"}
+                      <CheckCircle2 size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      className="ghost-button"
+                      disabled={isGeneratingPlan || selectedGeneratedPlan.isActive}
+                      type="button"
+                      onClick={handleGeneratePlan}
+                    >
+                      重新生成
+                      <Sparkles size={16} aria-hidden="true" />
+                    </button>
+                    <p className="form-message">{planMessage}</p>
+                  </div>
+                </div>
+              )}
+            </section>
+            <aside className="stack">
+              <section className="panel">
+                <p className="eyebrow">Current goal</p>
+                <div className="timeline-list">
+                  <div>
+                    <strong>目标状态</strong>
+                    <span>{selectedGoalStatus}</span>
+                  </div>
+                  <div>
+                    <strong>开始 / 结束</strong>
+                    <span>
+                      {selectedGoal
+                        ? `${formatDate(selectedGoal.startDate)} - ${formatDate(
+                            selectedGoal.endDate
+                          )}`
+                        : "待选择"}
+                    </span>
+                  </div>
+                  <div>
+                    <strong>每日投入</strong>
+                    <span>
+                      {selectedGoal?.dailyTimeBudgetMinutes
+                        ? `${selectedGoal.dailyTimeBudgetMinutes} 分钟`
+                        : "待估时"}
+                    </span>
+                  </div>
+                </div>
+              </section>
+              <section className="panel">
+                <p className="eyebrow">Checklist</p>
+                <div className="review-checklist">
+                  <span>阶段目标是否清晰</span>
+                  <span>每周节奏是否可执行</span>
+                  <span>每日任务是否足够具体</span>
+                  <span>投入时间是否符合现实约束</span>
+                </div>
+              </section>
+              <section className="panel">
+                <p className="eyebrow">After confirm</p>
+                <h2>进入执行状态</h2>
+                <p className="muted-text">
+                  确认后系统会把目标切换为执行中，今日任务、热力图和健康报告都会围绕该目标更新。
+                </p>
+              </section>
+            </aside>
+          </div>
+        );
       case "today":
         return (
           <div className="content-grid">
@@ -1218,17 +1610,22 @@ export function App() {
                     <div>
                       <h2>{task.title}</h2>
                       <p>
-                        {task.goalTitle} ·{" "}
+                        {task.goalTitle}
+                        {task.weeklyPlanTitle ? ` · ${task.weeklyPlanTitle}` : ""} ·{" "}
                         {task.plannedMinutes ? `${task.plannedMinutes} 分钟` : "待估时"} ·{" "}
                         {task.status === "DONE" ? "已完成" : "待完成"}
                       </p>
+                      <p className="task-description">{task.description}</p>
                       {task.latestCheckin ? (
-                        <p className="task-checkin-summary">
-                          {task.latestCheckin.aiScore
-                            ? `AI 评分 ${task.latestCheckin.aiScore.totalScore}`
-                            : "已提交复盘"}{" "}
-                          · {formatDateTime(task.latestCheckin.submittedAt)}
-                        </p>
+                        <div className="task-result-inline">
+                          <strong>
+                            {task.latestCheckin.aiScore
+                              ? `AI 评分 ${task.latestCheckin.aiScore.totalScore}`
+                              : "已提交复盘"}
+                          </strong>
+                          <span>{formatDateTime(task.latestCheckin.submittedAt)}</span>
+                          <p>{task.latestCheckin.aiScore?.suggestion ?? task.latestCheckin.content}</p>
+                        </div>
                       ) : null}
                     </div>
                     <button
@@ -1381,7 +1778,7 @@ export function App() {
                     </div>
 
                     <div className="heatmap-footer">
-                      <span>点击方块查看当天任务</span>
+                      <span>点击方块查看当天复盘</span>
                       <div className="heatmap-legend" aria-label="强度图例">
                         <span>Less</span>
                         {[0, 1, 2, 3, 4].map((level) => (
@@ -1402,7 +1799,9 @@ export function App() {
                     </div>
                     <div className="activity-summary">
                       <span>{formatActivityDate(selectedHeatmapDate)}</span>
-                      <strong>{selectedHeatmapTasks.length} 个已完成任务</strong>
+                      <strong>
+                        {selectedHeatmapTimelineItems.length || selectedHeatmapTasks.length} 条复盘记录
+                      </strong>
                     </div>
                     <div className="activity-stats">
                       <span>{selectedHeatmapMinutes} 分钟投入</span>
@@ -1413,26 +1812,44 @@ export function App() {
                       </span>
                       <span>强度 {selectedHeatmapLevel}</span>
                     </div>
+                    <div className="activity-actions">
+                      <button
+                        className="ghost-button"
+                        disabled={!selectedHeatmapTimelineItems.length}
+                        type="button"
+                        onClick={() => openTimelineDate(selectedHeatmapDate)}
+                      >
+                        查看当天时间线
+                        <History size={16} aria-hidden="true" />
+                      </button>
+                    </div>
                     <div className="activity-list">
-                      {selectedHeatmapTasks.length ? (
-                        selectedHeatmapTasks.map((task) => (
-                          <article key={task.id}>
+                      {selectedHeatmapTimelineItems.length ? (
+                        selectedHeatmapTimelineItems.map((item) => (
+                          <article key={item.id}>
                             <CheckCircle2 size={18} aria-hidden="true" />
                             <div>
-                              <h2>{task.title}</h2>
+                              <h2>{item.taskTitle}</h2>
                               <p>
-                                {task.goalTitle} ·{" "}
-                                {task.investedMinutes ?? task.plannedMinutes ?? 0} 分钟 ·{" "}
-                                {task.aiScore ? `AI 评分 ${task.aiScore}` : "暂无评分"}
+                                {item.goalTitle}
+                                {item.weeklyPlanTitle ? ` · ${item.weeklyPlanTitle}` : ""} ·{" "}
+                                {item.investedMinutes ?? item.plannedMinutes ?? 0} 分钟 ·{" "}
+                                {item.aiScore
+                                  ? `AI 评分 ${item.aiScore.totalScore}`
+                                  : "暂无评分"}
                               </p>
-                              {task.completedAt ? (
-                                <p>完成时间 · {formatDateTime(task.completedAt)}</p>
+                              {item.submittedAt ? (
+                                <p>完成时间 · {formatDateTime(item.submittedAt)}</p>
                               ) : null}
-                              {task.reflection ? (
-                                <div className="reflection-note">
-                                  {task.reflection.split("\n").map((line, index) => (
-                                    <span key={`${line}-${index}`}>{line}</span>
-                                  ))}
+                              <div className="reflection-note">
+                                {item.checkin.content.split("\n").map((line, index) => (
+                                  <span key={`${item.id}-reflection-${index}`}>{line}</span>
+                                ))}
+                              </div>
+                              {item.aiScore ? (
+                                <div className="ai-advice-note">
+                                  <strong>{item.aiScore.summary}</strong>
+                                  <span>{item.aiScore.suggestion}</span>
                                 </div>
                               ) : null}
                             </div>
@@ -1465,6 +1882,163 @@ export function App() {
                 </aside>
               </div>
             </section>
+          </div>
+        );
+      case "timeline":
+        return (
+          <div className="content-grid timeline-view">
+            <section className="panel main-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Growth story</p>
+                  <h1>成长时间线</h1>
+                </div>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setActivePage("today")}
+                >
+                  今日任务
+                  <CalendarCheck size={16} aria-hidden="true" />
+                </button>
+              </div>
+              <p className="form-message">{timelineMessage}</p>
+
+              {timelineDays.length ? (
+                <div className="growth-timeline">
+                  {timelineDays.map((day) => (
+                    <section
+                      className={`timeline-day ${
+                        day.date === selectedTimelineDate ? "is-focused" : ""
+                      }`}
+                      key={day.date}
+                    >
+                      <div className="timeline-date">
+                        <strong>{formatActivityDate(day.date)}</strong>
+                        <span>
+                          {day.items.length} 条记录 · {day.investedMinutes} 分钟 ·{" "}
+                          {day.averageScore !== null
+                            ? `AI 均分 ${day.averageScore}`
+                            : "暂无评分"}
+                        </span>
+                      </div>
+                      <div className="timeline-records">
+                        {day.items.map((item) => (
+                          <article className="timeline-record" key={item.id}>
+                            <div className="timeline-record-head">
+                              <div>
+                                <h2>{item.taskTitle}</h2>
+                                <p>
+                                  {item.goalTitle}
+                                  {item.weeklyPlanTitle
+                                    ? ` · ${item.weeklyPlanTitle}`
+                                    : ""}{" "}
+                                  · {formatDateTime(item.submittedAt)}
+                                </p>
+                              </div>
+                              <strong>
+                                {item.aiScore
+                                  ? `AI ${item.aiScore.totalScore}`
+                                  : "待评分"}
+                              </strong>
+                            </div>
+                            <div className="timeline-meta">
+                              <span>
+                                投入 {item.investedMinutes ?? 0} 分钟
+                              </span>
+                              <span>
+                                {item.plannedMinutes
+                                  ? `计划 ${item.plannedMinutes} 分钟`
+                                  : "计划待估时"}
+                              </span>
+                            </div>
+                            <div className="reflection-note">
+                              {item.checkin.content.split("\n").map((line, index) => (
+                                <span key={`${item.id}-line-${index}`}>{line}</span>
+                              ))}
+                            </div>
+                            {item.aiScore ? (
+                              <div className="ai-advice-note">
+                                <strong>{item.aiScore.summary}</strong>
+                                <span>{item.aiScore.suggestion}</span>
+                              </div>
+                            ) : null}
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <History size={24} aria-hidden="true" />
+                  <h2>{isLoadingTimeline ? "正在加载时间线" : "暂无成长记录"}</h2>
+                  <p>完成今日任务并提交复盘后，这里会按日期沉淀记录、评分和建议。</p>
+                  <div className="form-actions">
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => setActivePage("today")}
+                    >
+                      去完成今日任务
+                      <CalendarCheck size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+            <aside className="stack">
+              <section className="panel">
+                <p className="eyebrow">Selected day</p>
+                {selectedTimelineDay ? (
+                  <div className="timeline-day-summary">
+                    <h2>{formatActivityDate(selectedTimelineDay.date)}</h2>
+                    <div className="metric-grid">
+                      <div className="metric-card">
+                        <span>复盘</span>
+                        <strong>{selectedTimelineDay.items.length}</strong>
+                      </div>
+                      <div className="metric-card">
+                        <span>投入</span>
+                        <strong>{selectedTimelineDay.investedMinutes}</strong>
+                      </div>
+                    </div>
+                    <span>
+                      {selectedTimelineDay.averageScore !== null
+                        ? `AI 平均评分 ${selectedTimelineDay.averageScore}`
+                        : "暂无 AI 评分"}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="empty-inline">
+                    <span>未选中日期</span>
+                    <p>从热力图点击日期或在时间线中查看最近记录。</p>
+                  </div>
+                )}
+              </section>
+              <section className="panel">
+                <p className="eyebrow">Recent</p>
+                {recentTimelineItems.length ? (
+                  <div className="timeline-shortcuts">
+                    {recentTimelineItems.map((item) => (
+                      <button
+                        className={
+                          item.date === selectedTimelineDate ? "active" : ""
+                        }
+                        key={item.id}
+                        type="button"
+                        onClick={() => setSelectedTimelineDate(item.date)}
+                      >
+                        <strong>{item.taskTitle}</strong>
+                        <span>{formatActivityDate(item.date)}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-text">暂无最近记录。</p>
+                )}
+              </section>
+            </aside>
           </div>
         );
       case "rewards":
@@ -1646,77 +2220,145 @@ export function App() {
             <div className="dialog-task-summary">
               <strong>{completionTask.title}</strong>
               <span>
-                {completionTask.goalTitle} ·{" "}
+                {completionTask.goalTitle}
+                {completionTask.weeklyPlanTitle
+                  ? ` · ${completionTask.weeklyPlanTitle}`
+                  : ""}{" "}
+                ·{" "}
                 {completionTask.plannedMinutes
                   ? `计划 ${completionTask.plannedMinutes} 分钟`
                   : "待估时"}
               </span>
             </div>
-            <form className="completion-form" onSubmit={handleCompleteDailyTask}>
-              <label>
-                <span>实际投入分钟</span>
-                <input
-                  min={0}
-                  type="number"
-                  value={completionForm.investedMinutes}
-                  onChange={(event) =>
-                    updateCompletionField("investedMinutes", event.target.value)
-                  }
-                />
-              </label>
-              <label>
-                <span>今天完成了什么</span>
-                <textarea
-                  required
-                  rows={3}
-                  value={completionForm.completedContent}
-                  onChange={(event) =>
-                    updateCompletionField("completedContent", event.target.value)
-                  }
-                  placeholder="例如：完成第 1 章练习，整理了 3 条关键笔记。"
-                />
-              </label>
-              <label>
-                <span>遇到的问题</span>
-                <textarea
-                  rows={2}
-                  value={completionForm.blockers}
-                  onChange={(event) =>
-                    updateCompletionField("blockers", event.target.value)
-                  }
-                  placeholder="例如：概念理解慢，环境配置耗时。"
-                />
-              </label>
-              <label>
-                <span>明日调整</span>
-                <textarea
-                  rows={2}
-                  value={completionForm.tomorrowAdjustment}
-                  onChange={(event) =>
-                    updateCompletionField("tomorrowAdjustment", event.target.value)
-                  }
-                  placeholder="例如：先复习昨天卡点，再进入下一项任务。"
-                />
-              </label>
-              <div className="form-actions">
-                <button
-                  className="primary-button"
-                  disabled={Boolean(completingTaskId)}
-                  type="submit"
-                >
-                  {completingTaskId ? "提交中" : "提交复盘"}
-                  <CheckCircle2 size={16} aria-hidden="true" />
-                </button>
-                <button
-                  className="ghost-button"
-                  disabled={Boolean(completingTaskId)}
-                  type="button"
-                  onClick={closeCompletionDialog}
-                >
-                  取消
-                </button>
+            {completionResult ? (
+              <div className="completion-result">
+                <section className="score-result-card">
+                  <div>
+                    <p className="eyebrow">Mock AI score</p>
+                    <h2>{completionResult.checkin.aiScore?.totalScore ?? "-"}</h2>
+                    <span>评分任务 {completionResult.job.status}</span>
+                  </div>
+                  <CheckCircle2 size={28} aria-hidden="true" />
+                </section>
+                <div className="reflection-note">
+                  <strong>完成内容</strong>
+                  <span>{completionResult.checkin.content}</span>
+                </div>
+                {completionResult.checkin.aiScore ? (
+                  <>
+                    <div className="score-dimensions">
+                      {Object.entries(
+                        completionResult.checkin.aiScore.dimensions ?? {}
+                      ).map(([label, value]) => (
+                        <span key={label}>
+                          {label} <strong>{value}</strong>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="reflection-note">
+                      <strong>AI 总结</strong>
+                      <span>{completionResult.checkin.aiScore.summary}</span>
+                      <strong>明日建议</strong>
+                      <span>{completionResult.checkin.aiScore.suggestion}</span>
+                    </div>
+                  </>
+                ) : null}
+                <div className="result-impact-grid">
+                  <span>热力图已记录今日完成</span>
+                  <span>健康度会随复盘和评分刷新</span>
+                  <span>
+                    投入 {completionResult.checkin.investedMinutes ?? 0} 分钟
+                  </span>
+                </div>
+                <div className="form-actions">
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={closeCompletionDialog}
+                  >
+                    返回今日任务
+                    <CalendarCheck size={16} aria-hidden="true" />
+                  </button>
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    onClick={() => {
+                      setActivePage("heatmap");
+                      closeCompletionDialog();
+                    }}
+                  >
+                    查看热力图
+                    <LineChart size={16} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
-            </form>
+            ) : (
+              <form className="completion-form" onSubmit={handleCompleteDailyTask}>
+                <label>
+                  <span>实际投入分钟</span>
+                  <input
+                    min={0}
+                    type="number"
+                    value={completionForm.investedMinutes}
+                    onChange={(event) =>
+                      updateCompletionField("investedMinutes", event.target.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>今天完成了什么</span>
+                  <textarea
+                    required
+                    rows={3}
+                    value={completionForm.completedContent}
+                    onChange={(event) =>
+                      updateCompletionField("completedContent", event.target.value)
+                    }
+                    placeholder="例如：完成第 1 章练习，整理了 3 条关键笔记。"
+                  />
+                </label>
+                <label>
+                  <span>遇到的问题</span>
+                  <textarea
+                    rows={2}
+                    value={completionForm.blockers}
+                    onChange={(event) =>
+                      updateCompletionField("blockers", event.target.value)
+                    }
+                    placeholder="例如：概念理解慢，环境配置耗时。"
+                  />
+                </label>
+                <label>
+                  <span>明日调整</span>
+                  <textarea
+                    rows={2}
+                    value={completionForm.tomorrowAdjustment}
+                    onChange={(event) =>
+                      updateCompletionField("tomorrowAdjustment", event.target.value)
+                    }
+                    placeholder="例如：先复习昨天卡点，再进入下一项任务。"
+                  />
+                </label>
+                <div className="form-actions">
+                  <button
+                    className="primary-button"
+                    disabled={Boolean(completingTaskId)}
+                    type="submit"
+                  >
+                    {completingTaskId ? "提交中" : "提交复盘"}
+                    <CheckCircle2 size={16} aria-hidden="true" />
+                  </button>
+                  <button
+                    className="ghost-button"
+                    disabled={Boolean(completingTaskId)}
+                    type="button"
+                    onClick={closeCompletionDialog}
+                  >
+                    取消
+                  </button>
+                </div>
+              </form>
+            )}
           </section>
         </div>
       ) : null}
