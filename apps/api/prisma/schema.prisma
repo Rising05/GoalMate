@@ -120,9 +120,31 @@ model Goal {
   checkins        Checkin[]
   aiJobs          AiJob[]
   deviationEvents DeviationEvent[]
+  rewardCards     RewardCard[]
 
   @@index([userId, status])
   @@map("goals")
+}
+
+model RewardCard {
+  id          String   @id @default(cuid())
+  goalId      String
+  title       String
+  description String?  @db.Text
+  cardType    String   @default("TEXT")
+  sourceType  String   @default("CUSTOM")
+  sourceRefId String?
+  imageUrl    String?  @db.Text
+  linkUrl     String?  @db.Text
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId, sortOrder])
+  @@index([goalId, sourceType])
+  @@map("reward_cards")
 }
 
 model Plan {

@@ -397,7 +397,8 @@ p {
 }
 
 .goal-form,
-.auth-form {
+.auth-form,
+.form-stack {
   display: grid;
   gap: 12px;
 }
@@ -1320,6 +1321,13 @@ textarea:focus {
   margin-top: 14px;
 }
 
+.reward-board-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
 .reward-card {
   display: grid;
   align-content: start;
@@ -1334,6 +1342,58 @@ textarea:focus {
 
 .reward-card p {
   margin-bottom: 0;
+}
+
+.reward-board-card {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.reward-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.reward-card-head svg {
+  color: var(--warning);
+}
+
+.reward-card-head h2,
+.reward-card-head p {
+  margin-bottom: 0;
+}
+
+.reward-card-head p,
+.reward-card-link {
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.reward-card-image {
+  width: 100%;
+  max-height: 190px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.reward-card-link {
+  color: var(--accent);
+}
+
+.reward-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reward-card-actions .ghost-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 0.78rem;
 }
 
 .task-preview {
@@ -2226,7 +2286,8 @@ button.heat-cell:disabled {
 
   .form-row,
   .task-preview,
-  .reward-grid {
+  .reward-grid,
+  .reward-board-grid {
     grid-template-columns: 1fr;
   }
 

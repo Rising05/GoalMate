@@ -288,6 +288,41 @@ export interface RescueTask {
   createdAt: string;
 }
 
+export interface RewardBoard {
+  goalId: string;
+  goalTitle: string;
+  finalReward: string | null;
+  cards: RewardCard[];
+  limits: {
+    freeCustomCards: number;
+    proCustomCards: number;
+  };
+}
+
+export interface RewardCard {
+  id: string;
+  goalId: string;
+  title: string;
+  description: string | null;
+  cardType: "TEXT" | "IMAGE" | "LINK";
+  sourceType: "FINAL_REWARD" | "MILESTONE_REWARD" | "CUSTOM";
+  sourceRefId: string | null;
+  imageUrl: string | null;
+  linkUrl: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RewardCardInput {
+  title?: string;
+  description?: string | null;
+  cardType?: "TEXT" | "IMAGE" | "LINK";
+  imageUrl?: string | null;
+  linkUrl?: string | null;
+  sortOrder?: number;
+}
+
 export interface CreateGoalInput {
   title?: string;
   description: string;
@@ -454,6 +489,96 @@ export async function generateRescueTask(token: string, goalId: string) {
     deviation: DeviationSignal;
     rescueTask: RescueTask;
   };
+}
+
+export async function fetchRewardBoard(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/rewards`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<RewardBoard>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "奖励愿景板加载失败"));
+  }
+
+  return data as RewardBoard;
+}
+
+export async function createRewardCard(
+  token: string,
+  goalId: string,
+  payload: RewardCardInput
+) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/rewards`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ card: RewardCard }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "奖励卡片保存失败"));
+  }
+
+  return data as { card: RewardCard };
+}
+
+export async function updateRewardCard(
+  token: string,
+  goalId: string,
+  cardId: string,
+  payload: RewardCardInput
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/goals/${goalId}/rewards/${cardId}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  const data = await parseJson<{ card: RewardCard }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "奖励卡片更新失败"));
+  }
+
+  return data as { card: RewardCard };
+}
+
+export async function deleteRewardCard(
+  token: string,
+  goalId: string,
+  cardId: string
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/goals/${goalId}/rewards/${cardId}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+
+  const data = await parseJson<{ deletedId: string }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "奖励卡片删除失败"));
+  }
+
+  return data as { deletedId: string };
 }
 
 export async function fetchTodayTasks(token: string, goalId?: string) {

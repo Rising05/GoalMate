@@ -4,9 +4,10 @@ import { DailyTasksModule } from "./daily-tasks/daily-tasks.module";
 import { GoalsModule } from "./goals/goals.module";
 import { HealthController } from "./health.controller";
 import { PrismaModule } from "./prisma/prisma.module";
+import { RewardsModule } from "./rewards/rewards.module";
 
 @Module({
-  imports: [PrismaModule, AuthModule, GoalsModule, DailyTasksModule],
+  imports: [PrismaModule, AuthModule, GoalsModule, DailyTasksModule, RewardsModule],
   controllers: [HealthController],
   providers: []
 })

@@ -5,7 +5,6 @@ import {
   CalendarCheck,
   CheckCircle2,
   ChevronRight,
-  Flame,
   Gift,
   History,
   LineChart,
@@ -24,6 +23,8 @@ import {
   Goal,
   GoalHealth,
   GoalPlan,
+  RewardBoard,
+  RewardCard,
   RescueTask,
   TaskCheckin,
   TimelineDay,
@@ -31,15 +32,19 @@ import {
   TodayDailyTask,
   confirmGoalPlan,
   completeDailyTask,
+  createRewardCard,
   createGoal,
+  deleteRewardCard,
   fetchGoalPlan,
   fetchGoalHealth,
+  fetchRewardBoard,
   fetchTaskActivity,
   fetchTaskTimeline,
   fetchTodayTasks,
   generateGoalPlan,
   generateRescueTask,
-  listGoals
+  listGoals,
+  updateRewardCard
 } from "./api";
 
 type PageId =
@@ -141,6 +146,18 @@ const taskStatusLabels: Record<string, string> = {
   PENDING: "待完成",
   DONE: "已完成",
   PREVIEW: "预览"
+};
+
+const rewardCardTypeLabels: Record<string, string> = {
+  TEXT: "文字",
+  IMAGE: "图片",
+  LINK: "外链"
+};
+
+const rewardSourceLabels: Record<string, string> = {
+  FINAL_REWARD: "最终奖励",
+  MILESTONE_REWARD: "阶段奖励",
+  CUSTOM: "自定义"
 };
 
 const journeySteps = [
@@ -343,12 +360,6 @@ const timelineItems = [
   { title: "健康报告", detail: "暂无评分数据" }
 ];
 
-const rewardCards = [
-  { title: "阶段奖励", detail: "第 30 天：一次认真休息", icon: Trophy },
-  { title: "最终奖励", detail: "目标完成：兑现愿望卡片", icon: Flame },
-  { title: "愿景素材", detail: "图片和外链待接入", icon: Gift }
-];
-
 const categoryExamples: Record<
   string,
   {
@@ -437,10 +448,13 @@ export function App() {
   const [timelineDays, setTimelineDays] = useState<TimelineDay[]>([]);
   const [goalHealth, setGoalHealth] = useState<GoalHealth | null>(null);
   const [rescueTask, setRescueTask] = useState<RescueTask | null>(null);
+  const [rewardBoard, setRewardBoard] = useState<RewardBoard | null>(null);
   const [dailyTaskMessage, setDailyTaskMessage] = useState("登录后可查看今日任务。");
   const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
+  const [rewardMessage, setRewardMessage] = useState("选择目标后可维护奖励愿景板。");
   const [isLoadingDailyTasks, setIsLoadingDailyTasks] = useState(false);
   const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
+  const [isLoadingRewards, setIsLoadingRewards] = useState(false);
   const [isGeneratingRescueTask, setIsGeneratingRescueTask] = useState(false);
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
     toDateKey(new Date())
@@ -452,6 +466,13 @@ export function App() {
     completedContent: "",
     blockers: "",
     tomorrowAdjustment: ""
+  });
+  const [rewardForm, setRewardForm] = useState({
+    title: "",
+    description: "",
+    cardType: "TEXT" as RewardCard["cardType"],
+    imageUrl: "",
+    linkUrl: ""
   });
   const [completionResult, setCompletionResult] = useState<{
     task: TodayDailyTask;
@@ -480,6 +501,14 @@ export function App() {
   const recentTimelineItems = timelineDays
     .flatMap((day) => day.items)
     .slice(0, 3);
+  const rewardCardsForGoal = rewardBoard?.cards ?? [];
+  const customRewardCount = rewardCardsForGoal.filter(
+    (card) => card.sourceType === "CUSTOM"
+  ).length;
+  const customRewardLimit =
+    session?.user.membership?.plan === "PRO"
+      ? rewardBoard?.limits.proCustomCards
+      : rewardBoard?.limits.freeCustomCards;
   const selectedHeatmapTasks = selectedActivityDay?.tasks ?? [];
   const selectedHeatmapTimelineItems = selectedHeatmapTimelineDay?.items ?? [];
   const selectedHeatmapMinutes =
@@ -594,8 +623,10 @@ export function App() {
       setTimelineDays([]);
       setGoalHealth(null);
       setRescueTask(null);
+      setRewardBoard(null);
       setDailyTaskMessage("登录后可查看今日任务。");
       setTimelineMessage("登录后可查看成长时间线。");
+      setRewardMessage("登录后可维护奖励愿景板。");
       return;
     }
 
@@ -604,7 +635,18 @@ export function App() {
 
   useEffect(() => {
     setRescueTask(null);
+    setRewardBoard(null);
   }, [selectedGoalId]);
+
+  useEffect(() => {
+    if (!session || !selectedGoalId) {
+      return;
+    }
+
+    if (activePage === "rewards") {
+      void loadRewardBoard(session.token, selectedGoalId);
+    }
+  }, [activePage, session, selectedGoalId]);
 
   useEffect(() => {
     if (!session) {
@@ -801,6 +843,118 @@ export function App() {
       setIsLoadingDailyTasks(false);
       setIsLoadingTimeline(false);
     }
+  }
+
+  async function loadRewardBoard(token = session?.token, goalId = selectedGoalId) {
+    if (!token || !goalId) {
+      setRewardBoard(null);
+      setRewardMessage("选择目标后可维护奖励愿景板。");
+      return;
+    }
+
+    setIsLoadingRewards(true);
+
+    try {
+      const board = await fetchRewardBoard(token, goalId);
+      setRewardBoard(board);
+      setRewardMessage(
+        board.cards.length
+          ? `${board.cards.length} 张奖励卡片已同步。`
+          : "暂无奖励卡片，可先添加一个文字奖励。"
+      );
+    } catch (error) {
+      setRewardMessage(error instanceof Error ? error.message : "奖励愿景板加载失败");
+    } finally {
+      setIsLoadingRewards(false);
+    }
+  }
+
+  function updateRewardField(
+    field: keyof typeof rewardForm,
+    value: string
+  ) {
+    setRewardForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  async function handleCreateRewardCard(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session || !selectedGoalId) {
+      setRewardMessage("请先登录并选择目标。");
+      return;
+    }
+
+    try {
+      await createRewardCard(session.token, selectedGoalId, {
+        title: rewardForm.title,
+        description: rewardForm.description || null,
+        cardType: rewardForm.cardType,
+        imageUrl: rewardForm.imageUrl || null,
+        linkUrl: rewardForm.linkUrl || null,
+        sortOrder: rewardCardsForGoal.length
+      });
+      setRewardForm({
+        title: "",
+        description: "",
+        cardType: "TEXT",
+        imageUrl: "",
+        linkUrl: ""
+      });
+      await loadRewardBoard(session.token, selectedGoalId);
+      setRewardMessage("奖励卡片已保存。");
+    } catch (error) {
+      setRewardMessage(error instanceof Error ? error.message : "奖励卡片保存失败");
+    }
+  }
+
+  async function handleMoveRewardCard(card: RewardCard, direction: -1 | 1) {
+    if (!session || !selectedGoalId || card.sourceType !== "CUSTOM") {
+      return;
+    }
+
+    const nextSortOrder = Math.max(0, card.sortOrder + direction);
+
+    try {
+      await updateRewardCard(session.token, selectedGoalId, card.id, {
+        sortOrder: nextSortOrder
+      });
+      await loadRewardBoard(session.token, selectedGoalId);
+      setRewardMessage("奖励卡片排序已更新。");
+    } catch (error) {
+      setRewardMessage(error instanceof Error ? error.message : "奖励卡片排序失败");
+    }
+  }
+
+  async function handleDeleteRewardCard(card: RewardCard) {
+    if (!session || !selectedGoalId) {
+      return;
+    }
+
+    try {
+      await deleteRewardCard(session.token, selectedGoalId, card.id);
+      await loadRewardBoard(session.token, selectedGoalId);
+      setRewardMessage("奖励卡片已删除。");
+    } catch (error) {
+      setRewardMessage(error instanceof Error ? error.message : "奖励卡片删除失败");
+    }
+  }
+
+  function handleRewardImageUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        updateRewardField("imageUrl", reader.result);
+        updateRewardField("cardType", "IMAGE");
+      }
+    };
+    reader.readAsDataURL(file);
   }
 
   function openCompletionDialog(task: TodayDailyTask) {
@@ -2304,36 +2458,191 @@ export function App() {
         return (
           <div className="content-grid">
             <section className="panel main-panel">
-              <p className="eyebrow">Reward board</p>
-              <h1>奖励愿景板</h1>
-              <div className="reward-grid">
-                {rewardCards.map((card) => {
-                  const Icon = card.icon;
-                  return (
-                    <article className="reward-card" key={card.title}>
-                      <Icon size={18} aria-hidden="true" />
-                      <div>
-                        <h2>{card.title}</h2>
-                        <p>{card.detail}</p>
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Reward board</p>
+                  <h1>奖励愿景板</h1>
+                </div>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={!session || !selectedGoalId || isLoadingRewards}
+                  onClick={() => void loadRewardBoard()}
+                >
+                  刷新
+                  <Gift size={16} aria-hidden="true" />
+                </button>
+              </div>
+              <p className="form-message">{rewardMessage}</p>
+
+              {rewardCardsForGoal.length ? (
+                <div className="reward-board-grid">
+                  {rewardCardsForGoal.map((card) => (
+                    <article className="reward-card reward-board-card" key={card.id}>
+                      <div className="reward-card-head">
+                        {card.cardType === "IMAGE" ? (
+                          <Gift size={18} aria-hidden="true" />
+                        ) : card.cardType === "LINK" ? (
+                          <ChevronRight size={18} aria-hidden="true" />
+                        ) : (
+                          <Trophy size={18} aria-hidden="true" />
+                        )}
+                        <div>
+                          <h2>{card.title}</h2>
+                          <p>
+                            {rewardSourceLabels[card.sourceType] ?? card.sourceType} ·{" "}
+                            {rewardCardTypeLabels[card.cardType] ?? card.cardType}
+                          </p>
+                        </div>
+                      </div>
+                      {card.imageUrl ? (
+                        <img
+                          alt={card.title}
+                          className="reward-card-image"
+                          src={card.imageUrl}
+                        />
+                      ) : null}
+                      {card.description ? <p>{card.description}</p> : null}
+                      {card.linkUrl ? (
+                        <a
+                          className="reward-card-link"
+                          href={card.linkUrl}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          打开奖励链接
+                        </a>
+                      ) : null}
+                      <div className="reward-card-actions">
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={card.sourceType !== "CUSTOM"}
+                          onClick={() => void handleMoveRewardCard(card, -1)}
+                        >
+                          上移
+                        </button>
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={card.sourceType !== "CUSTOM"}
+                          onClick={() => void handleMoveRewardCard(card, 1)}
+                        >
+                          下移
+                        </button>
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={card.sourceType !== "CUSTOM"}
+                          onClick={() => void handleDeleteRewardCard(card)}
+                        >
+                          删除
+                        </button>
                       </div>
                     </article>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <Gift size={24} aria-hidden="true" />
+                  <h2>{isLoadingRewards ? "正在加载奖励板" : "暂无奖励卡片"}</h2>
+                  <p>填写最终奖励、阶段奖励，或添加自定义卡片来建立目标锚点。</p>
+                </div>
+              )}
             </section>
             <aside className="stack">
               <section className="panel">
                 <p className="eyebrow">Anchor</p>
-                <h2>{goalForm.finalReward || "尚未填写奖励"}</h2>
-                <p className="muted-text">保存目标后会和目标草稿关联。</p>
+                <h2>
+                  {rewardBoard?.finalReward ||
+                    selectedGoal?.finalReward ||
+                    goalForm.finalReward ||
+                    "尚未填写奖励"}
+                </h2>
+                <p className="muted-text">
+                  最终奖励和阶段奖励会自动同步为不可删除的锚点卡片。
+                </p>
               </section>
               <section className="panel">
-                <p className="eyebrow">Board</p>
-                <div className="board-slots">
-                  <span>文字卡片</span>
-                  <span>图片卡片</span>
-                  <span>外链卡片</span>
-                </div>
+                <p className="eyebrow">New card</p>
+                <form className="form-stack" onSubmit={handleCreateRewardCard}>
+                  <label className="form-field">
+                    <span>卡片标题</span>
+                    <input
+                      value={rewardForm.title}
+                      onChange={(event) =>
+                        updateRewardField("title", event.target.value)
+                      }
+                      placeholder="例如：买一本期待很久的书"
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>卡片类型</span>
+                    <select
+                      value={rewardForm.cardType}
+                      onChange={(event) =>
+                        updateRewardField("cardType", event.target.value)
+                      }
+                    >
+                      <option value="TEXT">文字</option>
+                      <option value="IMAGE">图片</option>
+                      <option value="LINK">外链</option>
+                    </select>
+                  </label>
+                  <label className="form-field">
+                    <span>描述</span>
+                    <textarea
+                      rows={3}
+                      value={rewardForm.description}
+                      onChange={(event) =>
+                        updateRewardField("description", event.target.value)
+                      }
+                      placeholder="写下奖励的画面感或兑现条件"
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>图片地址</span>
+                    <input
+                      value={rewardForm.imageUrl}
+                      onChange={(event) =>
+                        updateRewardField("imageUrl", event.target.value)
+                      }
+                      placeholder="图片 URL，或选择本地图片"
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>上传图片</span>
+                    <input
+                      accept="image/*"
+                      type="file"
+                      onChange={(event) =>
+                        handleRewardImageUpload(event.target.files?.[0] ?? null)
+                      }
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>外链</span>
+                    <input
+                      value={rewardForm.linkUrl}
+                      onChange={(event) =>
+                        updateRewardField("linkUrl", event.target.value)
+                      }
+                      placeholder="奖励商品、相册或灵感链接"
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="submit"
+                    disabled={!session || !selectedGoalId}
+                  >
+                    添加奖励卡片
+                    <Gift size={16} aria-hidden="true" />
+                  </button>
+                </form>
+                <p className="muted-text">
+                  自定义卡片 {customRewardCount}
+                  {customRewardLimit ? ` / ${customRewardLimit}` : ""}。
+                </p>
               </section>
             </aside>
           </div>
