@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   UnauthorizedException
 } from "@nestjs/common";
@@ -16,8 +17,11 @@ interface AuthPayload {
 @Injectable()
 export class AuthService {
   constructor(
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(PasswordService)
     private readonly passwordService: PasswordService,
+    @Inject(SessionTokenService)
     private readonly sessionTokenService: SessionTokenService
   ) {}
 
@@ -190,4 +194,3 @@ export class AuthService {
     return token;
   }
 }
-

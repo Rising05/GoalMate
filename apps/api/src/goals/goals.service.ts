@@ -1,5 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { Goal, GoalCategory } from "@prisma/client";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException
+} from "@nestjs/common";
+import { AiScore, Checkin, DailyTask, Goal, GoalCategory } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 
 interface CreateGoalPayload {
@@ -23,9 +28,15 @@ const CATEGORY_MAP: Record<string, GoalCategory> = {
   custom: "CUSTOM"
 };
 
+const DONE_STATUS = "DONE";
+
+type HealthTask = DailyTask & {
+  checkins: Array<Checkin & { aiScore: AiScore | null }>;
+};
+
 @Injectable()
 export class GoalsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async createGoal(userId: string, input: unknown) {
     const payload = this.parseCreateGoalPayload(input);
@@ -76,6 +87,111 @@ export class GoalsService {
 
     return {
       goal: this.serializeGoal(goal)
+    };
+  }
+
+  async getGoalHealth(userId: string, id: string) {
+    const goal = await this.prisma.goal.findFirst({
+      where: {
+        id,
+        userId
+      }
+    });
+
+    if (!goal) {
+      throw new NotFoundException("目标不存在");
+    }
+
+    const todayKey = this.toDateKey(new Date());
+    const { start: todayStart, end: todayEnd } = this.getDateRange(todayKey);
+    const { start: weekStart, end: weekEnd } = this.getWeekRange(todayStart);
+    const { start: recentStart, end: recentEnd } = this.getRecentRange(todayStart, 7);
+    const [todayTasks, weekTasks, allTasks, recentCheckins] = await Promise.all([
+      this.prisma.dailyTask.findMany({
+        where: {
+          goalId: goal.id,
+          taskDate: {
+            gte: todayStart,
+            lt: todayEnd
+          }
+        },
+        include: this.healthTaskInclude()
+      }),
+      this.prisma.dailyTask.findMany({
+        where: {
+          goalId: goal.id,
+          taskDate: {
+            gte: weekStart,
+            lt: weekEnd
+          }
+        },
+        include: this.healthTaskInclude()
+      }),
+      this.prisma.dailyTask.findMany({
+        where: {
+          goalId: goal.id,
+          taskDate: {
+            lte: todayEnd
+          }
+        },
+        orderBy: {
+          taskDate: "asc"
+        },
+        include: this.healthTaskInclude()
+      }),
+      this.prisma.checkin.findMany({
+        where: {
+          goalId: goal.id,
+          submittedAt: {
+            gte: recentStart,
+            lt: recentEnd
+          }
+        },
+        orderBy: {
+          submittedAt: "asc"
+        },
+        include: {
+          aiScore: true
+        }
+      })
+    ]);
+    const todayCompletionRate = this.getCompletionRate(todayTasks);
+    const weekCompletionRate = this.getCompletionRate(weekTasks);
+    const streakDays = this.getStreakDays(allTasks, todayStart);
+    const averageScore = this.getAverageScore(recentCheckins);
+    const recentInvestedMinutes = this.getRecentInvestedMinutes(recentCheckins);
+    const toleranceRemaining = Math.max(
+      0,
+      goal.toleranceDaysAllowed - goal.toleranceDaysUsed
+    );
+    const risks = this.buildHealthRisks({
+      todayCompletionRate,
+      weekCompletionRate,
+      streakDays,
+      averageScore,
+      toleranceRemaining
+    });
+    const healthScore = this.getHealthScore({
+      todayCompletionRate,
+      weekCompletionRate,
+      streakDays,
+      averageScore,
+      toleranceRemaining,
+      riskCount: risks.length
+    });
+
+    return {
+      goalId: goal.id,
+      goalTitle: goal.title,
+      status: goal.status,
+      healthScore,
+      todayCompletionRate,
+      weekCompletionRate,
+      streakDays,
+      toleranceRemaining,
+      averageScore,
+      recentInvestedMinutes,
+      risks
     };
   }
 
@@ -180,6 +296,193 @@ export class GoalsService {
     return numberValue;
   }
 
+  private healthTaskInclude() {
+    return {
+      checkins: {
+        include: {
+          aiScore: true
+        }
+      }
+    } as const;
+  }
+
+  private getCompletionRate(tasks: HealthTask[]) {
+    if (!tasks.length) {
+      return 0;
+    }
+
+    const completedCount = tasks.filter((task) => this.isTaskCompleted(task)).length;
+
+    return Math.round((completedCount / tasks.length) * 100);
+  }
+
+  private getStreakDays(tasks: HealthTask[], todayStart: Date) {
+    const tasksByDate = new Map<string, HealthTask[]>();
+
+    for (const task of tasks) {
+      const dateKey = this.toDateKey(task.taskDate);
+      const dateTasks = tasksByDate.get(dateKey) ?? [];
+      dateTasks.push(task);
+      tasksByDate.set(dateKey, dateTasks);
+    }
+
+    let streak = 0;
+
+    for (let offset = 0; offset < 366; offset += 1) {
+      const date = new Date(todayStart);
+      date.setUTCDate(todayStart.getUTCDate() - offset);
+      const dateTasks = tasksByDate.get(this.toDateKey(date));
+
+      if (!dateTasks?.some((task) => this.isTaskCompleted(task))) {
+        break;
+      }
+
+      streak += 1;
+    }
+
+    return streak;
+  }
+
+  private isTaskCompleted(task: HealthTask) {
+    return task.status === DONE_STATUS || task.checkins.some((checkin) => checkin.aiScore);
+  }
+
+  private getAverageScore(checkins: Array<Checkin & { aiScore: AiScore | null }>) {
+    const scores = checkins
+      .map((checkin) => checkin.aiScore?.totalScore)
+      .filter((score): score is number => typeof score === "number");
+
+    if (!scores.length) {
+      return null;
+    }
+
+    return Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length);
+  }
+
+  private getRecentInvestedMinutes(
+    checkins: Array<Checkin & { aiScore: AiScore | null }>
+  ) {
+    return checkins.reduce(
+      (sum, checkin) => sum + (checkin.investedMinutes ?? 0),
+      0
+    );
+  }
+
+  private buildHealthRisks(input: {
+    todayCompletionRate: number;
+    weekCompletionRate: number;
+    streakDays: number;
+    averageScore: number | null;
+    toleranceRemaining: number;
+  }) {
+    const risks: Array<{
+      level: "warning" | "danger";
+      title: string;
+      detail: string;
+      suggestion: string;
+    }> = [];
+
+    if (input.weekCompletionRate < 60) {
+      risks.push({
+        level: "danger",
+        title: "本周完成率偏低",
+        detail: `当前本周完成率 ${input.weekCompletionRate}%。`,
+        suggestion: "今晚只完成最小任务，先恢复执行节奏。"
+      });
+    }
+
+    if (input.streakDays === 0) {
+      risks.push({
+        level: "warning",
+        title: "连续完成中断",
+        detail: "最近连续完成天数为 0。",
+        suggestion: "今天优先完成一个低压力任务，避免继续断档。"
+      });
+    }
+
+    if (input.averageScore !== null && input.averageScore < 70) {
+      risks.push({
+        level: "warning",
+        title: "任务质量偏低",
+        detail: `最近平均 AI 评分 ${input.averageScore}。`,
+        suggestion: "复盘时补充可验证成果，减少只写过程描述。"
+      });
+    }
+
+    if (input.toleranceRemaining <= 1) {
+      risks.push({
+        level: "danger",
+        title: "容错余额不足",
+        detail: `剩余容错 ${input.toleranceRemaining} 次。`,
+        suggestion: "未来 3 天降低任务规模，优先保证不断签。"
+      });
+    }
+
+    return risks;
+  }
+
+  private getHealthScore(input: {
+    todayCompletionRate: number;
+    weekCompletionRate: number;
+    streakDays: number;
+    averageScore: number | null;
+    toleranceRemaining: number;
+    riskCount: number;
+  }) {
+    const score =
+      20 +
+      input.todayCompletionRate * 0.22 +
+      input.weekCompletionRate * 0.28 +
+      Math.min(15, input.streakDays * 3) +
+      (input.averageScore ?? 70) * 0.25 +
+      Math.min(10, input.toleranceRemaining * 2) -
+      input.riskCount * 6;
+
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+
+  private getDateRange(dateKey: string) {
+    const start = new Date(`${dateKey}T00:00:00.000+08:00`);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 1);
+
+    return { start, end };
+  }
+
+  private getWeekRange(todayStart: Date) {
+    const weekStart = new Date(todayStart);
+    const day = weekStart.getUTCDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day;
+    weekStart.setUTCDate(weekStart.getUTCDate() + mondayOffset);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setUTCDate(weekStart.getUTCDate() + 7);
+
+    return { start: weekStart, end: weekEnd };
+  }
+
+  private getRecentRange(todayStart: Date, days: number) {
+    const start = new Date(todayStart);
+    start.setUTCDate(todayStart.getUTCDate() - (days - 1));
+    const end = new Date(todayStart);
+    end.setUTCDate(todayStart.getUTCDate() + 1);
+
+    return { start, end };
+  }
+
+  private toDateKey(date: Date) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+
+    return `${year}-${month}-${day}`;
+  }
+
   private serializeGoal(goal: Goal) {
     return {
       id: goal.id,
@@ -201,4 +504,3 @@ export class GoalsService {
     };
   }
 }
-

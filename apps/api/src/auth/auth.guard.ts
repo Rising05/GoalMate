@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  Inject,
   Injectable,
   UnauthorizedException
 } from "@nestjs/common";
@@ -20,7 +21,9 @@ export interface AuthenticatedRequest {
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(SessionTokenService)
     private readonly sessionTokenService: SessionTokenService
   ) {}
 
@@ -62,4 +65,3 @@ export class AuthGuard implements CanActivate {
     return token;
   }
 }
-

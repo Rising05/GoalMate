@@ -34,6 +34,121 @@ export interface Goal {
   finalReward: string | null;
 }
 
+export interface AiJob {
+  id: string;
+  goalId: string | null;
+  type: string;
+  status: string;
+  attempts: number;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoalPlan {
+  id: string;
+  goalId: string;
+  version: number;
+  summary: string;
+  isActive: boolean;
+  confirmedAt: string | null;
+  milestones: Milestone[];
+  weeklyPlans: WeeklyPlan[];
+}
+
+export interface Milestone {
+  id: string;
+  title: string;
+  description: string | null;
+  targetDate: string;
+  rewardText: string | null;
+  isCompleted: boolean;
+}
+
+export interface WeeklyPlan {
+  id: string;
+  weekIndex: number;
+  title: string;
+  summary: string;
+  startsOn: string;
+  endsOn: string;
+  dailyTasks: DailyTask[];
+}
+
+export interface DailyTask {
+  id: string;
+  goalId: string;
+  taskDate: string;
+  title: string;
+  description: string;
+  plannedMinutes: number | null;
+  status: string;
+}
+
+export interface TodayDailyTask extends DailyTask {
+  goalTitle: string;
+  weeklyPlanId: string | null;
+  date: string;
+  latestCheckin: TaskCheckin | null;
+}
+
+export interface TaskCheckin {
+  id: string;
+  dailyTaskId: string | null;
+  content: string;
+  investedMinutes: number | null;
+  submittedAt: string;
+  aiScore: {
+    totalScore: number;
+    summary: string;
+    suggestion: string;
+  } | null;
+}
+
+export interface ActivityDay {
+  date: string;
+  level: number;
+  completedTaskCount: number;
+  investedMinutes: number;
+  averageScore: number | null;
+  tasks: ActivityTask[];
+}
+
+export interface ActivityTask {
+  id: string;
+  goalId: string;
+  goalTitle: string;
+  title: string;
+  description: string;
+  plannedMinutes: number | null;
+  status: string;
+  investedMinutes: number | null;
+  aiScore: number | null;
+  reflection: string | null;
+  completedAt: string | null;
+}
+
+export interface GoalHealth {
+  goalId: string;
+  goalTitle: string;
+  status: string;
+  healthScore: number;
+  todayCompletionRate: number;
+  weekCompletionRate: number;
+  streakDays: number;
+  toleranceRemaining: number;
+  averageScore: number | null;
+  recentInvestedMinutes: number;
+  risks: GoalHealthRisk[];
+}
+
+export interface GoalHealthRisk {
+  level: "warning" | "danger";
+  title: string;
+  detail: string;
+  suggestion: string;
+}
+
 export interface CreateGoalInput {
   title?: string;
   description: string;
@@ -89,6 +204,151 @@ export async function createGoal(token: string, payload: CreateGoalInput) {
   }
 
   return data as { goal: Goal };
+}
+
+export async function listGoals(token: string) {
+  const response = await fetch(`${API_BASE_URL}/goals`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ goals: Goal[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标列表加载失败"));
+  }
+
+  return data as { goals: Goal[] };
+}
+
+export async function generateGoalPlan(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/generate-plan`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ job: AiJob; goal: Goal; plan: GoalPlan | null }>(
+    response
+  );
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "AI 计划生成失败"));
+  }
+
+  return data as { job: AiJob; goal: Goal; plan: GoalPlan | null };
+}
+
+export async function confirmGoalPlan(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/confirm-plan`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ goal: Goal; plan: GoalPlan }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "计划确认失败"));
+  }
+
+  return data as { goal: Goal; plan: GoalPlan };
+}
+
+export async function fetchGoalHealth(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/health`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<GoalHealth>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标健康度加载失败"));
+  }
+
+  return data as GoalHealth;
+}
+
+export async function fetchTodayTasks(token: string, goalId?: string) {
+  const url = new URL(`${API_BASE_URL}/daily-tasks/today`);
+
+  if (goalId) {
+    url.searchParams.set("goalId", goalId);
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ date: string; tasks: TodayDailyTask[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "今日任务加载失败"));
+  }
+
+  return data as { date: string; tasks: TodayDailyTask[] };
+}
+
+export async function completeDailyTask(
+  token: string,
+  taskId: string,
+  payload: {
+    content: string;
+    investedMinutes?: number;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/daily-tasks/${taskId}/complete`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ task: TodayDailyTask; checkin: TaskCheckin }>(
+    response
+  );
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "任务完成提交失败"));
+  }
+
+  return data as { task: TodayDailyTask; checkin: TaskCheckin };
+}
+
+export async function fetchTaskActivity(
+  token: string,
+  year: number,
+  goalId?: string
+) {
+  const url = new URL(`${API_BASE_URL}/daily-tasks/activity`);
+  url.searchParams.set("year", String(year));
+
+  if (goalId) {
+    url.searchParams.set("goalId", goalId);
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ year: number; days: ActivityDay[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "成长热力图加载失败"));
+  }
+
+  return data as { year: number; days: ActivityDay[] };
 }
 
 async function parseJson<T>(response: Response) {
