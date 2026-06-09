@@ -131,6 +131,18 @@ const goalStatusLabels: Record<string, string> = {
   FAILED: "已失败"
 };
 
+const riskLevelLabels: Record<string, string> = {
+  stable: "稳定",
+  warning: "预警",
+  danger: "高风险"
+};
+
+const taskStatusLabels: Record<string, string> = {
+  PENDING: "待完成",
+  DONE: "已完成",
+  PREVIEW: "预览"
+};
+
 const journeySteps = [
   {
     title: "AI 计划",
@@ -268,6 +280,14 @@ function formatActivityMonth(dateKey: string) {
     month: "long",
     year: "numeric"
   }).format(parseDateKey(dateKey));
+}
+
+function getTimelineBadge(item: TimelineItem) {
+  if (item.kind === "DEVIATION") {
+    return riskLevelLabels[item.rescueRiskLevel ?? "stable"] ?? "偏差";
+  }
+
+  return item.aiScore ? `AI ${item.aiScore.totalScore}` : "待评分";
 }
 
 const healthMetrics = [
@@ -1962,25 +1982,42 @@ export function App() {
                       {selectedHeatmapTimelineItems.length ? (
                         selectedHeatmapTimelineItems.map((item) => (
                           <article key={item.id}>
-                            <CheckCircle2 size={18} aria-hidden="true" />
+                            {item.kind === "DEVIATION" ? (
+                              <ShieldCheck size={18} aria-hidden="true" />
+                            ) : (
+                              <CheckCircle2 size={18} aria-hidden="true" />
+                            )}
                             <div>
                               <h2>{item.taskTitle}</h2>
                               <p>
                                 {item.goalTitle}
                                 {item.weeklyPlanTitle ? ` · ${item.weeklyPlanTitle}` : ""} ·{" "}
-                                {item.investedMinutes ?? item.plannedMinutes ?? 0} 分钟 ·{" "}
-                                {item.aiScore
-                                  ? `AI 评分 ${item.aiScore.totalScore}`
-                                  : "暂无评分"}
+                                {item.kind === "DEVIATION"
+                                  ? `风险 ${riskLevelLabels[item.rescueRiskLevel ?? "stable"]}`
+                                  : `${item.investedMinutes ?? item.plannedMinutes ?? 0} 分钟`}{" "}
+                                · {getTimelineBadge(item)}
                               </p>
-                              {item.submittedAt ? (
-                                <p>完成时间 · {formatDateTime(item.submittedAt)}</p>
+                              <p>
+                                {item.kind === "DEVIATION" ? "触发时间" : "完成时间"} ·{" "}
+                                {formatDateTime(item.timelineAt)}
+                              </p>
+                              {item.checkin ? (
+                                <div className="reflection-note">
+                                  {item.checkin.content.split("\n").map((line, index) => (
+                                    <span key={`${item.id}-reflection-${index}`}>{line}</span>
+                                  ))}
+                                </div>
                               ) : null}
-                              <div className="reflection-note">
-                                {item.checkin.content.split("\n").map((line, index) => (
-                                  <span key={`${item.id}-reflection-${index}`}>{line}</span>
-                                ))}
-                              </div>
+                              {item.kind === "DEVIATION" && item.rescueTasks.length ? (
+                                <div className="timeline-rescue-note">
+                                  <strong>救援任务</strong>
+                                  <span>
+                                    {item.rescueTasks
+                                      .map((task) => `${task.title}（${taskStatusLabels[task.status] ?? task.status}）`)
+                                      .join("、")}
+                                  </span>
+                                </div>
+                              ) : null}
                               {item.aiScore ? (
                                 <div className="ai-advice-note">
                                   <strong>{item.aiScore.summary}</strong>
@@ -2068,15 +2105,82 @@ export function App() {
                                   {item.weeklyPlanTitle
                                     ? ` · ${item.weeklyPlanTitle}`
                                     : ""}{" "}
-                                  · {formatDateTime(item.submittedAt)}
+                                  · {formatDateTime(item.timelineAt)}
                                 </p>
                               </div>
-                              <strong>
-                                {item.aiScore
-                                  ? `AI ${item.aiScore.totalScore}`
-                                  : "待评分"}
-                              </strong>
+                              <strong>{getTimelineBadge(item)}</strong>
                             </div>
+                            {item.kind === "DEVIATION" ? (
+                              <div className="timeline-chain">
+                                <div className="timeline-chain-step">
+                                  <strong>触发偏差</strong>
+                                  <span>
+                                    {item.deviationReasons[0]?.detail ??
+                                      item.rescueReason ??
+                                      "系统检测到目标执行节奏偏离计划。"}
+                                  </span>
+                                  <div className="timeline-meta">
+                                    <span>
+                                      风险{" "}
+                                      {riskLevelLabels[item.rescueRiskLevel ?? "stable"]}
+                                    </span>
+                                    {item.deviationReasons[0]?.label ? (
+                                      <span>{item.deviationReasons[0].label}</span>
+                                    ) : null}
+                                    {item.sourceTask ? (
+                                      <span>来源任务：{item.sourceTask.title}</span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <div className="timeline-chain-step">
+                                  <strong>系统介入</strong>
+                                  {item.rescueTasks.length ? (
+                                    <div className="timeline-rescue-stack">
+                                      {item.rescueTasks.map((task) => (
+                                        <div key={task.id}>
+                                          <span>
+                                            {task.title} ·{" "}
+                                            {taskStatusLabels[task.status] ?? task.status}
+                                          </span>
+                                          <p>
+                                            {task.rescueReason ?? task.description}
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span>偏差事件已记录，等待生成救援任务。</span>
+                                  )}
+                                </div>
+                                <div className="timeline-chain-step">
+                                  <strong>救援任务完成</strong>
+                                  {item.rescueTasks.some((task) => task.latestCheckin) ? (
+                                    item.rescueTasks
+                                      .filter((task) => task.latestCheckin)
+                                      .map((task) => (
+                                        <div className="timeline-rescue-complete" key={task.id}>
+                                          <span>
+                                            {task.completedAt
+                                              ? formatDateTime(task.completedAt)
+                                              : "已完成"}
+                                            {task.latestCheckin?.investedMinutes
+                                              ? ` · ${task.latestCheckin.investedMinutes} 分钟`
+                                              : ""}
+                                            {task.latestCheckin?.aiScore
+                                              ? ` · AI ${task.latestCheckin.aiScore.totalScore}`
+                                              : ""}
+                                          </span>
+                                          {task.latestCheckin?.aiScore ? (
+                                            <p>{task.latestCheckin.aiScore.suggestion}</p>
+                                          ) : null}
+                                        </div>
+                                      ))
+                                  ) : (
+                                    <span>救援任务尚未完成，完成后会在这里沉淀复盘和建议。</span>
+                                  )}
+                                </div>
+                              </div>
+                            ) : null}
                             {item.isRescueTask ? (
                               <div className="timeline-rescue-note">
                                 <strong>救援任务复盘</strong>
@@ -2086,23 +2190,32 @@ export function App() {
                               </div>
                             ) : null}
                             <div className="timeline-meta">
-                              <span>
-                                投入 {item.investedMinutes ?? 0} 分钟
-                              </span>
-                              <span>
-                                {item.plannedMinutes
-                                  ? `计划 ${item.plannedMinutes} 分钟`
-                                  : "计划待估时"}
-                              </span>
-                              {item.isRescueTask ? (
-                                <span>补救效果已计入健康度和热力图</span>
-                              ) : null}
+                              {item.kind === "CHECKIN" ? (
+                                <>
+                                  <span>投入 {item.investedMinutes ?? 0} 分钟</span>
+                                  <span>
+                                    {item.plannedMinutes
+                                      ? `计划 ${item.plannedMinutes} 分钟`
+                                      : "计划待估时"}
+                                  </span>
+                                  {item.isRescueTask ? (
+                                    <span>补救效果已计入健康度和热力图</span>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <>
+                                  <span>事件 {item.deviationEventId}</span>
+                                  <span>{item.rescueTasks.length} 个关联救援任务</span>
+                                </>
+                              )}
                             </div>
-                            <div className="reflection-note">
-                              {item.checkin.content.split("\n").map((line, index) => (
-                                <span key={`${item.id}-line-${index}`}>{line}</span>
-                              ))}
-                            </div>
+                            {item.checkin ? (
+                              <div className="reflection-note">
+                                {item.checkin.content.split("\n").map((line, index) => (
+                                  <span key={`${item.id}-line-${index}`}>{line}</span>
+                                ))}
+                              </div>
+                            ) : null}
                             {item.aiScore ? (
                               <div className="ai-advice-note">
                                 <strong>{item.aiScore.summary}</strong>

@@ -151,10 +151,44 @@ export interface TimelineDay {
   items: TimelineItem[];
 }
 
+export type TimelineRiskLevel = "stable" | "warning" | "danger";
+
+export interface TimelineSourceTask {
+  id: string;
+  title: string;
+  description: string;
+  weeklyPlanTitle: string | null;
+  plannedMinutes: number | null;
+  status: string;
+}
+
+export interface TimelineRescueTask {
+  id: string;
+  dailyTaskId: string;
+  deviationEventId: string | null;
+  sourceDailyTaskId: string | null;
+  title: string;
+  description: string;
+  weeklyPlanTitle: string | null;
+  plannedMinutes: number | null;
+  status: string;
+  taskType: string;
+  rescueReason: string | null;
+  rescueTriggerCode: DeviationReason["code"] | null;
+  rescueRiskLevel: TimelineRiskLevel | null;
+  createdAt: string;
+  completedAt: string | null;
+  latestCheckin: TaskCheckin | null;
+}
+
 export interface TimelineItem {
   id: string;
+  kind: "CHECKIN" | "DEVIATION";
+  chainStage: "CHECKIN" | "RESCUE_COMPLETED" | "DEVIATION_CHAIN";
+  timelineAt: string;
   date: string;
   submittedAt: string;
+  detectedAt: string | null;
   goalId: string;
   goalTitle: string;
   dailyTaskId: string | null;
@@ -168,9 +202,13 @@ export interface TimelineItem {
   isRescueTask: boolean;
   rescueReason: string | null;
   rescueTriggerCode: DeviationReason["code"] | null;
-  rescueRiskLevel: "stable" | "warning" | "danger" | null;
+  rescueRiskLevel: TimelineRiskLevel | null;
+  deviationReasons: DeviationReason[];
+  deviationMetrics: DeviationSignal["metrics"] | null;
+  sourceTask: TimelineSourceTask | null;
+  rescueTasks: TimelineRescueTask[];
   investedMinutes: number | null;
-  checkin: TaskCheckin;
+  checkin: TaskCheckin | null;
   aiScore: {
     totalScore: number;
     dimensions?: Record<string, number>;

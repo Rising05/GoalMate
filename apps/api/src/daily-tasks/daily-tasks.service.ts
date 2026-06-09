@@ -8,6 +8,7 @@ import {
   AiScore,
   Checkin,
   DailyTask,
+  DeviationEvent,
   Goal,
   GoalStatus,
   WeeklyPlan
@@ -29,6 +30,36 @@ type TimelineCheckin = Checkin & {
     | null;
   aiScore: AiScore | null;
 };
+
+type TimelineSourceTask = DailyTask & {
+  weeklyPlan: WeeklyPlan | null;
+};
+
+type TimelineRescueTask = DailyTask & {
+  weeklyPlan: WeeklyPlan | null;
+  checkins: Array<Checkin & { aiScore: AiScore | null }>;
+};
+
+type TimelineDeviationEvent = DeviationEvent & {
+  goal: Goal;
+  rescueTasks: TimelineRescueTask[];
+};
+
+interface TimelineDeviationReason {
+  code: string;
+  level: string;
+  label: string;
+  detail: string;
+}
+
+interface TimelineDeviationMetrics {
+  averageScore: number | null;
+  recentInvestedMinutes: number;
+  expectedRecentMinutes: number;
+  streakDays: number;
+  overdueTaskCount: number;
+  incompleteTodayTaskCount: number;
+}
 
 interface CompleteTaskPayload {
   content: string;
@@ -151,25 +182,68 @@ export class DailyTasksService {
 
   async getTimeline(userId: string, goalId?: string) {
     const goalFilter = await this.getGoalFilter(userId, goalId);
-    const checkins = await this.prisma.checkin.findMany({
-      where: {
-        userId,
-        goal: goalFilter
-      },
-      orderBy: {
-        submittedAt: "desc"
-      },
-      take: 60,
-      include: {
-        goal: true,
-        dailyTask: {
-          include: {
-            weeklyPlan: true
-          }
+    const [checkins, deviationEvents] = await Promise.all([
+      this.prisma.checkin.findMany({
+        where: {
+          userId,
+          goal: goalFilter
         },
-        aiScore: true
-      }
-    });
+        orderBy: {
+          submittedAt: "desc"
+        },
+        take: 60,
+        include: {
+          goal: true,
+          dailyTask: {
+            include: {
+              weeklyPlan: true
+            }
+          },
+          aiScore: true
+        }
+      }),
+      this.prisma.deviationEvent.findMany({
+        where: {
+          goal: goalFilter
+        },
+        orderBy: {
+          detectedAt: "desc"
+        },
+        take: 30,
+        include: {
+          goal: true,
+          rescueTasks: {
+            orderBy: {
+              createdAt: "asc"
+            },
+            include: {
+              weeklyPlan: true,
+              checkins: {
+                orderBy: {
+                  submittedAt: "desc"
+                },
+                include: {
+                  aiScore: true
+                }
+              }
+            }
+          }
+        }
+      })
+    ]);
+    const sourceTasks = await this.getTimelineSourceTasks(
+      deviationEvents.map((event) => event.sourceDailyTaskId)
+    );
+    const checkinItems = checkins.map((checkin) =>
+      this.serializeTimelineCheckinItem(checkin)
+    );
+    const deviationItems = deviationEvents.map((event) =>
+      this.serializeTimelineDeviationItem(event, sourceTasks.get(event.sourceDailyTaskId ?? ""))
+    );
+    const items = [...checkinItems, ...deviationItems].sort(
+      (left, right) =>
+        new Date(right.timelineAt).getTime() - new Date(left.timelineAt).getTime()
+    );
     const days = new Map<
       string,
       {
@@ -177,10 +251,9 @@ export class DailyTasksService {
         investedMinutes: number;
         scoreTotal: number;
         scoreCount: number;
-        items: ReturnType<DailyTasksService["serializeTimelineItem"]>[];
+        items: typeof items;
       }
     >();
-    const items = checkins.map((checkin) => this.serializeTimelineItem(checkin));
 
     for (const item of items) {
       const bucket =
@@ -193,11 +266,13 @@ export class DailyTasksService {
           items: []
         };
 
-      bucket.investedMinutes += item.investedMinutes ?? 0;
+      if (item.kind === "CHECKIN") {
+        bucket.investedMinutes += item.investedMinutes ?? 0;
 
-      if (item.aiScore) {
-        bucket.scoreTotal += item.aiScore.totalScore;
-        bucket.scoreCount += 1;
+        if (item.aiScore) {
+          bucket.scoreTotal += item.aiScore.totalScore;
+          bucket.scoreCount += 1;
+        }
       }
 
       bucket.items.push(item);
@@ -215,6 +290,29 @@ export class DailyTasksService {
         items: day.items
       }))
     };
+  }
+
+  private async getTimelineSourceTasks(sourceDailyTaskIds: Array<string | null>) {
+    const ids = Array.from(
+      new Set(sourceDailyTaskIds.filter((id): id is string => Boolean(id)))
+    );
+
+    if (!ids.length) {
+      return new Map<string, TimelineSourceTask>();
+    }
+
+    const tasks = await this.prisma.dailyTask.findMany({
+      where: {
+        id: {
+          in: ids
+        }
+      },
+      include: {
+        weeklyPlan: true
+      }
+    });
+
+    return new Map(tasks.map((task) => [task.id, task]));
   }
 
   async completeTask(userId: string, taskId: string, input: unknown) {
@@ -574,13 +672,21 @@ export class DailyTasksService {
     };
   }
 
-  private serializeTimelineItem(checkin: TimelineCheckin) {
+  private serializeTimelineCheckinItem(checkin: TimelineCheckin) {
     const task = checkin.dailyTask;
+    const submittedAt = checkin.submittedAt.toISOString();
 
     return {
       id: checkin.id,
+      kind: "CHECKIN" as const,
+      chainStage:
+        task?.taskType === RESCUE_TASK_TYPE
+          ? ("RESCUE_COMPLETED" as const)
+          : ("CHECKIN" as const),
+      timelineAt: submittedAt,
       date: this.toDateKey(checkin.submittedAt),
-      submittedAt: checkin.submittedAt.toISOString(),
+      submittedAt,
+      detectedAt: null,
       goalId: checkin.goalId,
       goalTitle: checkin.goal.title,
       dailyTaskId: checkin.dailyTaskId,
@@ -595,6 +701,10 @@ export class DailyTasksService {
       rescueReason: task?.rescueReason ?? null,
       rescueTriggerCode: task?.rescueTriggerCode ?? null,
       rescueRiskLevel: task?.rescueRiskLevel ?? null,
+      deviationReasons: [],
+      deviationMetrics: null,
+      sourceTask: null,
+      rescueTasks: [],
       investedMinutes: checkin.investedMinutes,
       checkin: this.serializeCheckin(checkin),
       aiScore: checkin.aiScore
@@ -607,6 +717,129 @@ export class DailyTasksService {
           }
         : null
     };
+  }
+
+  private serializeTimelineDeviationItem(
+    event: TimelineDeviationEvent,
+    sourceTask?: TimelineSourceTask
+  ) {
+    const detectedAt = event.detectedAt.toISOString();
+    const rescueTasks = event.rescueTasks.map((task) =>
+      this.serializeTimelineRescueTask(task)
+    );
+    const completedRescueTask = rescueTasks.find((task) => task.latestCheckin?.aiScore);
+    const latestScore = completedRescueTask?.latestCheckin?.aiScore ?? null;
+    const title = event.primaryReasonLabel
+      ? `偏差触发：${event.primaryReasonLabel}`
+      : "偏差触发";
+
+    return {
+      id: `deviation-${event.id}`,
+      kind: "DEVIATION" as const,
+      chainStage: "DEVIATION_CHAIN" as const,
+      timelineAt: detectedAt,
+      date: this.toDateKey(event.detectedAt),
+      submittedAt: detectedAt,
+      detectedAt,
+      goalId: event.goalId,
+      goalTitle: event.goal.title,
+      dailyTaskId: null,
+      sourceDailyTaskId: event.sourceDailyTaskId,
+      deviationEventId: event.id,
+      taskTitle: title,
+      taskDescription: event.primaryReasonDetail,
+      weeklyPlanTitle: null,
+      plannedMinutes: null,
+      taskType: "DEVIATION",
+      isRescueTask: false,
+      rescueReason: event.primaryReasonDetail,
+      rescueTriggerCode: event.primaryReasonCode,
+      rescueRiskLevel: event.riskLevel,
+      deviationReasons: this.normalizeDeviationReasons(event.reasons),
+      deviationMetrics: this.normalizeDeviationMetrics(event.metrics),
+      sourceTask: sourceTask
+        ? {
+            id: sourceTask.id,
+            title: sourceTask.title,
+            description: sourceTask.description,
+            weeklyPlanTitle: sourceTask.weeklyPlan?.title ?? null,
+            plannedMinutes: sourceTask.plannedMinutes,
+            status: sourceTask.status
+          }
+        : null,
+      rescueTasks,
+      investedMinutes: null,
+      checkin: null,
+      aiScore: latestScore
+    };
+  }
+
+  private serializeTimelineRescueTask(task: TimelineRescueTask) {
+    const latestCheckin = task.checkins[0] ?? null;
+
+    return {
+      id: task.id,
+      dailyTaskId: task.id,
+      deviationEventId: task.deviationEventId,
+      sourceDailyTaskId: task.sourceDailyTaskId,
+      title: task.title,
+      description: task.description,
+      weeklyPlanTitle: task.weeklyPlan?.title ?? null,
+      plannedMinutes: task.plannedMinutes,
+      status: task.status,
+      taskType: task.taskType,
+      rescueReason: task.rescueReason,
+      rescueTriggerCode: task.rescueTriggerCode,
+      rescueRiskLevel: task.rescueRiskLevel,
+      createdAt: task.createdAt.toISOString(),
+      completedAt: latestCheckin?.submittedAt.toISOString() ?? null,
+      latestCheckin: latestCheckin ? this.serializeCheckin(latestCheckin) : null
+    };
+  }
+
+  private normalizeDeviationReasons(value: unknown): TimelineDeviationReason[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return [];
+      }
+
+      const record = item as Record<string, unknown>;
+
+      return [
+        {
+          code: typeof record.code === "string" ? record.code : "",
+          level: typeof record.level === "string" ? record.level : "",
+          label: typeof record.label === "string" ? record.label : "",
+          detail: typeof record.detail === "string" ? record.detail : ""
+        }
+      ];
+    });
+  }
+
+  private normalizeDeviationMetrics(value: unknown): TimelineDeviationMetrics | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+
+    return {
+      averageScore:
+        typeof record.averageScore === "number" ? record.averageScore : null,
+      recentInvestedMinutes: this.getNumberMetric(record.recentInvestedMinutes),
+      expectedRecentMinutes: this.getNumberMetric(record.expectedRecentMinutes),
+      streakDays: this.getNumberMetric(record.streakDays),
+      overdueTaskCount: this.getNumberMetric(record.overdueTaskCount),
+      incompleteTodayTaskCount: this.getNumberMetric(record.incompleteTodayTaskCount)
+    };
+  }
+
+  private getNumberMetric(value: unknown) {
+    return typeof value === "number" ? value : 0;
   }
 
   private serializeAiJob(job: {

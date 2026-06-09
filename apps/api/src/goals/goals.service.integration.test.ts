@@ -100,6 +100,55 @@ describe("GoalsService.generateRescueTask integration", () => {
     assert.equal(doneRescueTaskCount, 1);
     assert.equal(pendingRescueTaskCount, 1);
   });
+
+  it("returns the deviation event, rescue task, and rescue review in the timeline", async () => {
+    const { goal, task: sourceTask } =
+      await createActiveGoalWithTodayTask("timeline-chain");
+
+    const generated = await goalsService.generateRescueTask(goal.userId, goal.id);
+    assert.ok(generated.deviation.eventId);
+
+    const completed = await dailyTasksService.completeTask(
+      goal.userId,
+      generated.rescueTask.id,
+      {
+        content:
+          "完成救援任务，补齐最小行动证据，并写下触发偏差后的恢复策略，明天按原计划继续推进。",
+        investedMinutes: 32
+      }
+    );
+    const timeline = await dailyTasksService.getTimeline(goal.userId, goal.id);
+    const deviationItem = timeline.items.find(
+      (item) =>
+        item.kind === "DEVIATION" &&
+        item.deviationEventId === generated.deviation.eventId
+    );
+    const rescueReviewItem = timeline.items.find(
+      (item) =>
+        item.kind === "CHECKIN" &&
+        item.deviationEventId === generated.deviation.eventId
+    );
+
+    assert.ok(deviationItem);
+    assert.equal(deviationItem.sourceDailyTaskId, sourceTask.id);
+    assert.equal(deviationItem.sourceTask?.id, sourceTask.id);
+    assert.equal(deviationItem.rescueRiskLevel, "danger");
+    assert.equal(deviationItem.deviationReasons[0]?.code, "LOW_INVESTMENT");
+    assert.equal(deviationItem.rescueTasks.length, 1);
+    assert.equal(deviationItem.rescueTasks[0].id, generated.rescueTask.id);
+    assert.equal(
+      deviationItem.rescueTasks[0].deviationEventId,
+      generated.deviation.eventId
+    );
+    assert.equal(deviationItem.rescueTasks[0].latestCheckin?.id, completed.checkin.id);
+    assert.ok(deviationItem.rescueTasks[0].latestCheckin?.aiScore);
+    assert.ok(deviationItem.aiScore);
+
+    assert.ok(rescueReviewItem);
+    assert.equal(rescueReviewItem.isRescueTask, true);
+    assert.equal(rescueReviewItem.checkin?.id, completed.checkin.id);
+    assert.equal(rescueReviewItem.aiScore?.totalScore, completed.checkin.aiScore?.totalScore);
+  });
 });
 
 async function cleanupTestUsers() {

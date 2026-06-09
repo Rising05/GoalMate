@@ -1831,6 +1831,52 @@ button.heat-cell:disabled {
   line-height: 1.45;
 }
 
+.timeline-chain {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-chain-step {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(138, 87, 52, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 250, 244, 0.7);
+}
+
+.timeline-chain-step strong {
+  color: var(--text);
+  font-size: 0.84rem;
+}
+
+.timeline-chain-step > span,
+.timeline-chain-step p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.timeline-rescue-stack,
+.timeline-rescue-complete {
+  display: grid;
+  gap: 6px;
+}
+
+.timeline-rescue-stack div,
+.timeline-rescue-complete {
+  display: grid;
+  gap: 4px;
+}
+
+.timeline-rescue-stack span,
+.timeline-rescue-complete span {
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 720;
+}
+
 .timeline-day-summary {
   display: grid;
   gap: 12px;
