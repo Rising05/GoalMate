@@ -34,6 +34,34 @@ type HealthTask = DailyTask & {
   checkins: Array<Checkin & { aiScore: AiScore | null }>;
 };
 
+type DeviationRiskLevel = "stable" | "warning" | "danger";
+
+type DeviationReasonCode =
+  | "LOW_SCORE"
+  | "LOW_INVESTMENT"
+  | "BROKEN_STREAK"
+  | "TASK_DELAY";
+
+interface DeviationReason {
+  code: DeviationReasonCode;
+  level: Exclude<DeviationRiskLevel, "stable">;
+  label: string;
+  detail: string;
+}
+
+interface DeviationSignal {
+  riskLevel: DeviationRiskLevel;
+  reasons: DeviationReason[];
+  metrics: {
+    averageScore: number | null;
+    recentInvestedMinutes: number;
+    expectedRecentMinutes: number;
+    streakDays: number;
+    overdueTaskCount: number;
+    incompleteTodayTaskCount: number;
+  };
+}
+
 @Injectable()
 export class GoalsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -91,6 +119,108 @@ export class GoalsService {
   }
 
   async getGoalHealth(userId: string, id: string) {
+    const context = await this.getGoalHealthContext(userId, id);
+    const {
+      goal,
+      todayTasks,
+      weekTasks,
+      allTasks,
+      recentCheckins,
+      todayStart,
+      recentStart,
+      recentEnd
+    } = context;
+    const todayCompletionRate = this.getCompletionRate(todayTasks);
+    const weekCompletionRate = this.getCompletionRate(weekTasks);
+    const streakDays = this.getStreakDays(allTasks, todayStart);
+    const averageScore = this.getAverageScore(recentCheckins);
+    const recentInvestedMinutes = this.getRecentInvestedMinutes(recentCheckins);
+    const toleranceRemaining = Math.max(
+      0,
+      goal.toleranceDaysAllowed - goal.toleranceDaysUsed
+    );
+    const deviation = this.buildDeviationSignal({
+      goal,
+      todayTasks,
+      allTasks,
+      recentCheckins,
+      todayStart,
+      recentStart,
+      recentEnd,
+      averageScore,
+      recentInvestedMinutes,
+      streakDays
+    });
+    const risks = this.buildHealthRisks({
+      todayCompletionRate,
+      weekCompletionRate,
+      streakDays,
+      averageScore,
+      toleranceRemaining,
+      deviation
+    });
+    const healthScore = this.getHealthScore({
+      todayCompletionRate,
+      weekCompletionRate,
+      streakDays,
+      averageScore,
+      toleranceRemaining,
+      riskCount: risks.length
+    });
+
+    return {
+      goalId: goal.id,
+      goalTitle: goal.title,
+      status: goal.status,
+      healthScore,
+      todayCompletionRate,
+      weekCompletionRate,
+      streakDays,
+      toleranceRemaining,
+      averageScore,
+      recentInvestedMinutes,
+      risks,
+      deviation
+    };
+  }
+
+  async generateRescueTask(userId: string, id: string) {
+    const context = await this.getGoalHealthContext(userId, id);
+    const {
+      goal,
+      todayTasks,
+      allTasks,
+      recentCheckins,
+      todayStart,
+      recentStart,
+      recentEnd
+    } = context;
+    const averageScore = this.getAverageScore(recentCheckins);
+    const recentInvestedMinutes = this.getRecentInvestedMinutes(recentCheckins);
+    const streakDays = this.getStreakDays(allTasks, todayStart);
+    const deviation = this.buildDeviationSignal({
+      goal,
+      todayTasks,
+      allTasks,
+      recentCheckins,
+      todayStart,
+      recentStart,
+      recentEnd,
+      averageScore,
+      recentInvestedMinutes,
+      streakDays
+    });
+    const rescueTask = this.buildMockRescueTask(goal, deviation);
+
+    return {
+      goalId: goal.id,
+      goalTitle: goal.title,
+      deviation,
+      rescueTask
+    };
+  }
+
+  private async getGoalHealthContext(userId: string, id: string) {
     const goal = await this.prisma.goal.findFirst({
       where: {
         id,
@@ -155,43 +285,16 @@ export class GoalsService {
         }
       })
     ]);
-    const todayCompletionRate = this.getCompletionRate(todayTasks);
-    const weekCompletionRate = this.getCompletionRate(weekTasks);
-    const streakDays = this.getStreakDays(allTasks, todayStart);
-    const averageScore = this.getAverageScore(recentCheckins);
-    const recentInvestedMinutes = this.getRecentInvestedMinutes(recentCheckins);
-    const toleranceRemaining = Math.max(
-      0,
-      goal.toleranceDaysAllowed - goal.toleranceDaysUsed
-    );
-    const risks = this.buildHealthRisks({
-      todayCompletionRate,
-      weekCompletionRate,
-      streakDays,
-      averageScore,
-      toleranceRemaining
-    });
-    const healthScore = this.getHealthScore({
-      todayCompletionRate,
-      weekCompletionRate,
-      streakDays,
-      averageScore,
-      toleranceRemaining,
-      riskCount: risks.length
-    });
 
     return {
-      goalId: goal.id,
-      goalTitle: goal.title,
-      status: goal.status,
-      healthScore,
-      todayCompletionRate,
-      weekCompletionRate,
-      streakDays,
-      toleranceRemaining,
-      averageScore,
-      recentInvestedMinutes,
-      risks
+      goal,
+      todayTasks,
+      weekTasks,
+      allTasks,
+      recentCheckins,
+      todayStart,
+      recentStart,
+      recentEnd
     };
   }
 
@@ -368,12 +471,167 @@ export class GoalsService {
     );
   }
 
+  private buildDeviationSignal(input: {
+    goal: Goal;
+    todayTasks: HealthTask[];
+    allTasks: HealthTask[];
+    recentCheckins: Array<Checkin & { aiScore: AiScore | null }>;
+    todayStart: Date;
+    recentStart: Date;
+    recentEnd: Date;
+    averageScore: number | null;
+    recentInvestedMinutes: number;
+    streakDays: number;
+  }): DeviationSignal {
+    const recentTasks = input.allTasks.filter(
+      (task) => task.taskDate >= input.recentStart && task.taskDate < input.recentEnd
+    );
+    const plannedRecentMinutes = recentTasks.reduce(
+      (sum, task) => sum + (task.plannedMinutes ?? 0),
+      0
+    );
+    const expectedRecentMinutes =
+      input.goal.dailyTimeBudgetMinutes !== null
+        ? input.goal.dailyTimeBudgetMinutes * 7
+        : plannedRecentMinutes;
+    const overdueTaskCount = input.allTasks.filter(
+      (task) => task.taskDate < input.todayStart && !this.isTaskCompleted(task)
+    ).length;
+    const incompleteTodayTaskCount = input.todayTasks.filter(
+      (task) => !this.isTaskCompleted(task)
+    ).length;
+    const reasons: DeviationReason[] = [];
+
+    if (input.averageScore !== null && input.averageScore < 70) {
+      reasons.push({
+        code: "LOW_SCORE",
+        level: input.averageScore < 60 ? "danger" : "warning",
+        label: "低评分",
+        detail: `最近平均 AI 评分 ${input.averageScore}，低于 70 分稳定线。`
+      });
+    }
+
+    if (
+      expectedRecentMinutes > 0 &&
+      input.recentInvestedMinutes < expectedRecentMinutes * 0.8
+    ) {
+      const percent = Math.round(
+        (input.recentInvestedMinutes / expectedRecentMinutes) * 100
+      );
+
+      reasons.push({
+        code: "LOW_INVESTMENT",
+        level: percent < 50 ? "danger" : "warning",
+        label: "低投入",
+        detail: `近 7 天投入 ${input.recentInvestedMinutes} 分钟，约为预期 ${expectedRecentMinutes} 分钟的 ${percent}%。`
+      });
+    }
+
+    if (
+      input.streakDays === 0 &&
+      (input.todayTasks.length > 0 || input.recentCheckins.length > 0)
+    ) {
+      reasons.push({
+        code: "BROKEN_STREAK",
+        level: incompleteTodayTaskCount > 0 ? "danger" : "warning",
+        label: "断签",
+        detail: incompleteTodayTaskCount
+          ? `今天还有 ${incompleteTodayTaskCount} 个任务未完成，连续完成已中断。`
+          : "最近连续完成天数为 0，需要先恢复最小执行节奏。"
+      });
+    }
+
+    if (overdueTaskCount > 0) {
+      reasons.push({
+        code: "TASK_DELAY",
+        level: overdueTaskCount >= 3 ? "danger" : "warning",
+        label: "任务延期",
+        detail: `已有 ${overdueTaskCount} 个历史任务未完成。`
+      });
+    }
+
+    return {
+      riskLevel: reasons.some((reason) => reason.level === "danger")
+        ? "danger"
+        : reasons.length
+          ? "warning"
+          : "stable",
+      reasons,
+      metrics: {
+        averageScore: input.averageScore,
+        recentInvestedMinutes: input.recentInvestedMinutes,
+        expectedRecentMinutes,
+        streakDays: input.streakDays,
+        overdueTaskCount,
+        incompleteTodayTaskCount
+      }
+    };
+  }
+
+  private buildMockRescueTask(goal: Goal, deviation: DeviationSignal) {
+    const primaryReason = deviation.reasons[0];
+    const fallbackMinutes = Math.min(
+      25,
+      Math.max(10, Math.round((goal.dailyTimeBudgetMinutes ?? 30) / 2))
+    );
+
+    if (!primaryReason) {
+      return {
+        title: "完成一次轻量巩固任务",
+        description: `围绕「${goal.title}」选择一个最小可交付动作，完成后写下 2 句复盘。`,
+        estimatedMinutes: fallbackMinutes,
+        reason: "当前节奏稳定，用低压力任务保持连续性。",
+        triggerCode: null,
+        createdAt: new Date().toISOString()
+      };
+    }
+
+    const templates: Record<
+      DeviationReasonCode,
+      { title: string; description: string; estimatedMinutes: number }
+    > = {
+      LOW_SCORE: {
+        title: "补一条可验证成果",
+        description:
+          "回到最近一次低分任务，补充一个截图、笔记、数据或具体产出，并用 3 句话说明它如何推进目标。",
+        estimatedMinutes: Math.min(20, fallbackMinutes)
+      },
+      LOW_INVESTMENT: {
+        title: "做 15 分钟最小推进",
+        description:
+          "只选一个不会卡住的小动作：阅读一页、整理一个知识点、快走一小段或完成一个微练习，到点即停。",
+        estimatedMinutes: Math.min(15, fallbackMinutes)
+      },
+      BROKEN_STREAK: {
+        title: "恢复连续性的低压打卡",
+        description:
+          "完成一个 10 分钟内能结束的目标相关动作，并提交一句完成事实，先把今天的执行链路接回来。",
+        estimatedMinutes: 10
+      },
+      TASK_DELAY: {
+        title: "清理一个延期任务的最小版本",
+        description:
+          "从延期任务里选最容易的一项，只完成原计划的第一步，并记录剩余部分明天如何继续。",
+        estimatedMinutes: Math.min(20, fallbackMinutes)
+      }
+    };
+    const template = templates[primaryReason.code];
+
+    return {
+      ...template,
+      reason: primaryReason.detail,
+      triggerCode: primaryReason.code,
+      createdAt: new Date().toISOString()
+    };
+  }
+
   private buildHealthRisks(input: {
     todayCompletionRate: number;
     weekCompletionRate: number;
     streakDays: number;
     averageScore: number | null;
     toleranceRemaining: number;
+    deviation: DeviationSignal;
   }) {
     const risks: Array<{
       level: "warning" | "danger";
@@ -416,6 +674,26 @@ export class GoalsService {
         detail: `剩余容错 ${input.toleranceRemaining} 次。`,
         suggestion: "未来 3 天降低任务规模，优先保证不断签。"
       });
+    }
+
+    for (const reason of input.deviation.reasons) {
+      if (reason.code === "LOW_INVESTMENT") {
+        risks.push({
+          level: reason.level,
+          title: "近 7 天投入不足",
+          detail: reason.detail,
+          suggestion: "先生成一个 10-15 分钟救援任务，恢复行动惯性。"
+        });
+      }
+
+      if (reason.code === "TASK_DELAY") {
+        risks.push({
+          level: reason.level,
+          title: "存在延期任务",
+          detail: reason.detail,
+          suggestion: "今天只处理一个延期任务的最小版本，避免积压继续扩大。"
+        });
+      }
     }
 
     return risks;

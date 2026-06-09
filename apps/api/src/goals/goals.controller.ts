@@ -42,6 +42,14 @@ export class GoalsController {
     return this.goalsService.getGoalHealth(request.user!.id, id);
   }
 
+  @Post(":id/rescue-task")
+  generateRescueTask(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ) {
+    return this.goalsService.generateRescueTask(request.user!.id, id);
+  }
+
   @Get(":id/plan")
   getPlan(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.aiJobsService.getGoalPlan(request.user!.id, id);

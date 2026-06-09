@@ -172,6 +172,7 @@ export interface GoalHealth {
   averageScore: number | null;
   recentInvestedMinutes: number;
   risks: GoalHealthRisk[];
+  deviation: DeviationSignal;
 }
 
 export interface GoalHealthRisk {
@@ -179,6 +180,35 @@ export interface GoalHealthRisk {
   title: string;
   detail: string;
   suggestion: string;
+}
+
+export interface DeviationSignal {
+  riskLevel: "stable" | "warning" | "danger";
+  reasons: DeviationReason[];
+  metrics: {
+    averageScore: number | null;
+    recentInvestedMinutes: number;
+    expectedRecentMinutes: number;
+    streakDays: number;
+    overdueTaskCount: number;
+    incompleteTodayTaskCount: number;
+  };
+}
+
+export interface DeviationReason {
+  code: "LOW_SCORE" | "LOW_INVESTMENT" | "BROKEN_STREAK" | "TASK_DELAY";
+  level: "warning" | "danger";
+  label: string;
+  detail: string;
+}
+
+export interface RescueTask {
+  title: string;
+  description: string;
+  estimatedMinutes: number;
+  reason: string;
+  triggerCode: DeviationReason["code"] | null;
+  createdAt: string;
 }
 
 export interface CreateGoalInput {
@@ -320,6 +350,33 @@ export async function fetchGoalHealth(token: string, goalId: string) {
   }
 
   return data as GoalHealth;
+}
+
+export async function generateRescueTask(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/rescue-task`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{
+    goalId: string;
+    goalTitle: string;
+    deviation: DeviationSignal;
+    rescueTask: RescueTask;
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "救援任务生成失败"));
+  }
+
+  return data as {
+    goalId: string;
+    goalTitle: string;
+    deviation: DeviationSignal;
+    rescueTask: RescueTask;
+  };
 }
 
 export async function fetchTodayTasks(token: string, goalId?: string) {

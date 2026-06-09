@@ -1134,6 +1134,65 @@ textarea:focus {
   line-height: 1.42;
 }
 
+.task-row.rescue {
+  border-color: rgba(31, 95, 70, 0.22);
+  background: rgba(231, 240, 235, 0.56);
+}
+
+.deviation-alert,
+.rescue-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.deviation-alert h2,
+.rescue-card h2 {
+  margin: 2px 0 4px;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.deviation-alert p,
+.rescue-card p,
+.rescue-card span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.48;
+}
+
+.rescue-card span {
+  display: block;
+  margin-top: 8px;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.deviation-alert.warning {
+  border-color: rgba(161, 117, 38, 0.25);
+  background: rgba(245, 234, 214, 0.6);
+}
+
+.deviation-alert.danger {
+  border-color: rgba(179, 64, 64, 0.24);
+  background: rgba(250, 228, 226, 0.62);
+}
+
+.rescue-actions {
+  margin-top: 10px;
+}
+
+.rescue-actions .primary-button {
+  width: 100%;
+}
+
 .score-ring {
   display: grid;
   width: 132px;

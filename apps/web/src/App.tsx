@@ -24,6 +24,7 @@ import {
   Goal,
   GoalHealth,
   GoalPlan,
+  RescueTask,
   TaskCheckin,
   TimelineDay,
   TimelineItem,
@@ -37,6 +38,7 @@ import {
   fetchTaskTimeline,
   fetchTodayTasks,
   generateGoalPlan,
+  generateRescueTask,
   listGoals
 } from "./api";
 
@@ -408,10 +410,14 @@ export function App() {
   const [activityDays, setActivityDays] = useState<ActivityDay[]>([]);
   const [timelineDays, setTimelineDays] = useState<TimelineDay[]>([]);
   const [goalHealth, setGoalHealth] = useState<GoalHealth | null>(null);
+  const [rescueTask, setRescueTask] = useState<RescueTask | null>(null);
+  const [temporaryRescueTask, setTemporaryRescueTask] =
+    useState<RescueTask | null>(null);
   const [dailyTaskMessage, setDailyTaskMessage] = useState("登录后可查看今日任务。");
   const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
   const [isLoadingDailyTasks, setIsLoadingDailyTasks] = useState(false);
   const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
+  const [isGeneratingRescueTask, setIsGeneratingRescueTask] = useState(false);
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
     toDateKey(new Date())
   );
@@ -494,7 +500,24 @@ export function App() {
         }
       ]
     : healthMetrics;
-  const visiblePlannedTasks =
+  const rescueTaskAsTodayTask: TodayDailyTask | null =
+    temporaryRescueTask && selectedGoal
+      ? {
+          id: `rescue-${selectedGoal.id}-${temporaryRescueTask.createdAt}`,
+          goalId: selectedGoal.id,
+          goalTitle: selectedGoal.title,
+          weeklyPlanId: null,
+          weeklyPlanTitle: "救援任务",
+          taskDate: temporaryRescueTask.createdAt,
+          date: toDateKey(new Date()),
+          title: temporaryRescueTask.title,
+          description: temporaryRescueTask.description,
+          plannedMinutes: temporaryRescueTask.estimatedMinutes,
+          status: "RESCUE",
+          latestCheckin: null
+        }
+      : null;
+  const baseVisiblePlannedTasks =
     todayTasks.length > 0
       ? todayTasks
       : selectedGeneratedPlan
@@ -517,6 +540,11 @@ export function App() {
               latestCheckin: null
             }))
         : plannedTasks;
+  const visiblePlannedTasks = rescueTaskAsTodayTask
+    ? [rescueTaskAsTodayTask, ...baseVisiblePlannedTasks]
+    : baseVisiblePlannedTasks;
+  const deviationLevel = goalHealth?.deviation.riskLevel ?? "stable";
+  const deviationReasons = goalHealth?.deviation.reasons ?? [];
   const todayCompletedCount = todayTasks.filter((task) => task.status === "DONE").length;
   const todayTaskCount = todayTasks.length;
   const selectedPlanTaskCount =
@@ -558,6 +586,8 @@ export function App() {
       setActivityDays([]);
       setTimelineDays([]);
       setGoalHealth(null);
+      setRescueTask(null);
+      setTemporaryRescueTask(null);
       setDailyTaskMessage("登录后可查看今日任务。");
       setTimelineMessage("登录后可查看成长时间线。");
       return;
@@ -565,6 +595,11 @@ export function App() {
 
     void refreshGoals(session.token);
   }, [session]);
+
+  useEffect(() => {
+    setRescueTask(null);
+    setTemporaryRescueTask(null);
+  }, [selectedGoalId]);
 
   useEffect(() => {
     if (!session) {
@@ -967,6 +1002,46 @@ export function App() {
     } finally {
       setIsConfirmingPlan(false);
     }
+  }
+
+  async function handleGenerateRescueTask() {
+    const goalId = selectedGoalId ?? currentGoalId;
+
+    if (!session || !goalId) {
+      setDailyTaskMessage("请先登录并选择一个目标。");
+      return;
+    }
+
+    setIsGeneratingRescueTask(true);
+    setDailyTaskMessage("正在生成救援任务...");
+
+    try {
+      const response = await generateRescueTask(session.token, goalId);
+
+      setRescueTask(response.rescueTask);
+      setGoalHealth((current) =>
+        current && current.goalId === response.goalId
+          ? { ...current, deviation: response.deviation }
+          : current
+      );
+      setDailyTaskMessage("救援任务已生成，可以加入今日任务。");
+    } catch (error) {
+      setDailyTaskMessage(
+        error instanceof Error ? error.message : "救援任务生成失败"
+      );
+    } finally {
+      setIsGeneratingRescueTask(false);
+    }
+  }
+
+  function handleAddRescueTaskToToday() {
+    if (!rescueTask) {
+      return;
+    }
+
+    setTemporaryRescueTask(rescueTask);
+    setDailyTaskMessage("救援任务已作为临时任务加入今日列表。");
+    setActivePage("today");
   }
 
   function renderPage() {
@@ -1603,9 +1678,56 @@ export function App() {
               <p className="eyebrow">Daily work</p>
               <h1>今日任务</h1>
               <p className="form-message">{dailyTaskMessage}</p>
+              {goalHealth && deviationLevel !== "stable" ? (
+                <section className={`deviation-alert ${deviationLevel}`}>
+                  <div>
+                    <p className="eyebrow">Deviation alert</p>
+                    <h2>
+                      {deviationLevel === "danger" ? "目标偏差较高" : "目标出现偏差"}
+                    </h2>
+                    <p>
+                      {deviationReasons.map((reason) => reason.label).join("、")}
+                    </p>
+                  </div>
+                  <button
+                    className="primary-button"
+                    disabled={isGeneratingRescueTask}
+                    type="button"
+                    onClick={handleGenerateRescueTask}
+                  >
+                    {isGeneratingRescueTask ? "生成中" : "生成救援任务"}
+                    <Sparkles size={16} aria-hidden="true" />
+                  </button>
+                </section>
+              ) : null}
+              {rescueTask ? (
+                <section className="rescue-card">
+                  <div>
+                    <p className="eyebrow">Rescue task</p>
+                    <h2>{rescueTask.title}</h2>
+                    <p>{rescueTask.description}</p>
+                    <span>
+                      {rescueTask.estimatedMinutes} 分钟 · {rescueTask.reason}
+                    </span>
+                  </div>
+                  <button
+                    className="ghost-button"
+                    disabled={temporaryRescueTask?.createdAt === rescueTask.createdAt}
+                    type="button"
+                    onClick={handleAddRescueTaskToToday}
+                  >
+                    {temporaryRescueTask?.createdAt === rescueTask.createdAt
+                      ? "已加入"
+                      : "加入今日任务"}
+                  </button>
+                </section>
+              ) : null}
               <div className="task-list">
                 {visiblePlannedTasks.map((task, index) => (
-                  <article className="task-row" key={task.id}>
+                  <article
+                    className={`task-row ${task.status === "RESCUE" ? "rescue" : ""}`}
+                    key={task.id}
+                  >
                     <span>{index + 1}</span>
                     <div>
                       <h2>{task.title}</h2>
@@ -1613,7 +1735,11 @@ export function App() {
                         {task.goalTitle}
                         {task.weeklyPlanTitle ? ` · ${task.weeklyPlanTitle}` : ""} ·{" "}
                         {task.plannedMinutes ? `${task.plannedMinutes} 分钟` : "待估时"} ·{" "}
-                        {task.status === "DONE" ? "已完成" : "待完成"}
+                        {task.status === "DONE"
+                          ? "已完成"
+                          : task.status === "RESCUE"
+                            ? "临时任务"
+                            : "待完成"}
                       </p>
                       <p className="task-description">{task.description}</p>
                       {task.latestCheckin ? (
@@ -1634,16 +1760,19 @@ export function App() {
                         isLoadingDailyTasks ||
                         completingTaskId === task.id ||
                         task.status === "DONE" ||
-                        task.status === "PREVIEW"
+                        task.status === "PREVIEW" ||
+                        task.status === "RESCUE"
                       }
                       onClick={() => openCompletionDialog(task as TodayDailyTask)}
                       type="button"
                     >
                       {task.status === "DONE"
                         ? "已完成"
-                        : completingTaskId === task.id
-                          ? "提交中"
-                          : "完成"}
+                        : task.status === "RESCUE"
+                          ? "临时"
+                          : completingTaskId === task.id
+                            ? "提交中"
+                            : "完成"}
                     </button>
                   </article>
                 ))}
@@ -1701,6 +1830,26 @@ export function App() {
                     </div>
                   )}
                 </div>
+                {goalHealth ? (
+                  <div className="rescue-actions">
+                    <button
+                      className="primary-button"
+                      disabled={isGeneratingRescueTask}
+                      type="button"
+                      onClick={handleGenerateRescueTask}
+                    >
+                      {isGeneratingRescueTask ? "生成中" : "生成救援任务"}
+                      <Sparkles size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                ) : null}
+                {rescueTask ? (
+                  <article className="risk-card stable">
+                    <strong>{rescueTask.title}</strong>
+                    <p>{rescueTask.description}</p>
+                    <span>{rescueTask.estimatedMinutes} 分钟 · {rescueTask.reason}</span>
+                  </article>
+                ) : null}
               </section>
             </aside>
           </div>
