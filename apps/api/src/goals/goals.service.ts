@@ -4,7 +4,15 @@ import {
   Injectable,
   NotFoundException
 } from "@nestjs/common";
-import { AiScore, Checkin, DailyTask, Goal, GoalCategory } from "@prisma/client";
+import {
+  AiScore,
+  Checkin,
+  DailyTask,
+  DeviationEvent,
+  Goal,
+  GoalCategory,
+  Prisma
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 
 interface CreateGoalPayload {
@@ -29,6 +37,8 @@ const CATEGORY_MAP: Record<string, GoalCategory> = {
 };
 
 const DONE_STATUS = "DONE";
+const RESCUE_TASK_TYPE = "RESCUE";
+const PENDING_STATUS = "PENDING";
 
 type HealthTask = DailyTask & {
   checkins: Array<Checkin & { aiScore: AiScore | null }>;
@@ -50,6 +60,8 @@ interface DeviationReason {
 }
 
 interface DeviationSignal {
+  eventId?: string | null;
+  detectedAt?: string | null;
   riskLevel: DeviationRiskLevel;
   reasons: DeviationReason[];
   metrics: {
@@ -127,6 +139,7 @@ export class GoalsService {
       allTasks,
       recentCheckins,
       todayStart,
+      todayEnd,
       recentStart,
       recentEnd
     } = context;
@@ -150,6 +163,14 @@ export class GoalsService {
       averageScore,
       recentInvestedMinutes,
       streakDays
+    });
+    const sourceTask = this.findRescueSourceTask(todayTasks, allTasks, todayStart);
+    const deviationEvent = await this.persistDeviationEvent({
+      goal,
+      deviation,
+      sourceTask,
+      todayStart,
+      todayEnd
     });
     const risks = this.buildHealthRisks({
       todayCompletionRate,
@@ -180,7 +201,7 @@ export class GoalsService {
       averageScore,
       recentInvestedMinutes,
       risks,
-      deviation
+      deviation: this.serializeDeviationSignal(deviation, deviationEvent)
     };
   }
 
@@ -195,6 +216,11 @@ export class GoalsService {
       recentStart,
       recentEnd
     } = context;
+
+    if (!["ACTIVE", "AT_RISK", "REPLANNING"].includes(goal.status)) {
+      throw new BadRequestException("当前目标状态不能生成救援任务");
+    }
+
     const averageScore = this.getAverageScore(recentCheckins);
     const recentInvestedMinutes = this.getRecentInvestedMinutes(recentCheckins);
     const streakDays = this.getStreakDays(allTasks, todayStart);
@@ -210,13 +236,65 @@ export class GoalsService {
       recentInvestedMinutes,
       streakDays
     });
-    const rescueTask = this.buildMockRescueTask(goal, deviation);
+    const sourceTask = this.findRescueSourceTask(todayTasks, allTasks, todayStart);
+    const existingRescueTask = await this.prisma.dailyTask.findFirst({
+      where: {
+        goalId: goal.id,
+        taskType: RESCUE_TASK_TYPE,
+        status: PENDING_STATUS,
+        taskDate: {
+          gte: todayStart,
+          lt: context.todayEnd
+        }
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+    const existingDeviationEvent = existingRescueTask?.deviationEventId
+      ? await this.prisma.deviationEvent.findUnique({
+          where: { id: existingRescueTask.deviationEventId }
+        })
+      : null;
+    const deviationEvent =
+      existingDeviationEvent ??
+      (await this.persistDeviationEvent({
+        goal,
+        deviation,
+        sourceTask,
+        todayStart,
+        todayEnd: context.todayEnd
+      }));
+    const rescueTaskDraft = this.buildMockRescueTask(goal, deviation);
+    const rescueTask = existingRescueTask
+      ? existingRescueTask.deviationEventId || !deviationEvent
+        ? existingRescueTask
+        : await this.prisma.dailyTask.update({
+            where: { id: existingRescueTask.id },
+            data: { deviationEventId: deviationEvent.id }
+          })
+      : await this.prisma.dailyTask.create({
+        data: {
+          goalId: goal.id,
+          sourceDailyTaskId: sourceTask?.id,
+          deviationEventId: deviationEvent?.id,
+          taskDate: todayStart,
+          title: rescueTaskDraft.title,
+          description: rescueTaskDraft.description,
+          plannedMinutes: rescueTaskDraft.estimatedMinutes,
+          taskType: RESCUE_TASK_TYPE,
+          rescueReason: rescueTaskDraft.reason,
+          rescueTriggerCode: rescueTaskDraft.triggerCode,
+          rescueRiskLevel: deviation.riskLevel,
+          status: PENDING_STATUS
+        }
+      });
 
     return {
       goalId: goal.id,
       goalTitle: goal.title,
-      deviation,
-      rescueTask
+      deviation: this.serializeDeviationSignal(deviation, deviationEvent),
+      rescueTask: this.serializeRescueTask(goal, rescueTask)
     };
   }
 
@@ -293,6 +371,7 @@ export class GoalsService {
       allTasks,
       recentCheckins,
       todayStart,
+      todayEnd,
       recentStart,
       recentEnd
     };
@@ -448,6 +527,76 @@ export class GoalsService {
 
   private isTaskCompleted(task: HealthTask) {
     return task.status === DONE_STATUS || task.checkins.some((checkin) => checkin.aiScore);
+  }
+
+  private findRescueSourceTask(
+    todayTasks: HealthTask[],
+    allTasks: HealthTask[],
+    todayStart: Date
+  ) {
+    return (
+      todayTasks.find((task) => !this.isTaskCompleted(task)) ??
+      allTasks
+        .filter((task) => task.taskDate < todayStart && !this.isTaskCompleted(task))
+        .sort((left, right) => right.taskDate.getTime() - left.taskDate.getTime())[0] ??
+      null
+    );
+  }
+
+  private async persistDeviationEvent(input: {
+    goal: Goal;
+    deviation: DeviationSignal;
+    sourceTask: HealthTask | null;
+    todayStart: Date;
+    todayEnd: Date;
+  }) {
+    if (input.deviation.riskLevel === "stable" || !input.deviation.reasons.length) {
+      return null;
+    }
+
+    const primaryReason = input.deviation.reasons[0];
+    const existingEvent = await this.prisma.deviationEvent.findFirst({
+      where: {
+        goalId: input.goal.id,
+        primaryReasonCode: primaryReason.code,
+        detectedAt: {
+          gte: input.todayStart,
+          lt: input.todayEnd
+        }
+      },
+      orderBy: {
+        detectedAt: "desc"
+      }
+    });
+    const data = {
+      sourceDailyTaskId:
+        input.sourceTask?.id ?? existingEvent?.sourceDailyTaskId ?? null,
+      riskLevel: input.deviation.riskLevel,
+      primaryReasonCode: primaryReason.code,
+      primaryReasonLabel: primaryReason.label,
+      primaryReasonDetail: primaryReason.detail,
+      reasons: this.toJson(input.deviation.reasons),
+      metrics: this.toJson(input.deviation.metrics),
+      detectedAt: new Date()
+    };
+
+    if (existingEvent) {
+      return this.prisma.deviationEvent.update({
+        where: { id: existingEvent.id },
+        data
+      });
+    }
+
+    return this.prisma.deviationEvent.create({
+      data: {
+        goalId: input.goal.id,
+        ...data
+      }
+    });
+  }
+
+  private toJson(value: unknown) {
+    return value as Prisma.InputJsonValue;
   }
 
   private getAverageScore(checkins: Array<Checkin & { aiScore: AiScore | null }>) {
@@ -779,6 +928,45 @@ export class GoalsService {
       finalReward: goal.finalReward,
       createdAt: goal.createdAt.toISOString(),
       updatedAt: goal.updatedAt.toISOString()
+    };
+  }
+
+  private serializeDeviationSignal(
+    deviation: DeviationSignal,
+    event: DeviationEvent | null
+  ) {
+    return {
+      ...deviation,
+      eventId: event?.id ?? null,
+      detectedAt: event?.detectedAt.toISOString() ?? null
+    };
+  }
+
+  private serializeRescueTask(goal: Goal, task: DailyTask) {
+    return {
+      id: task.id,
+      goalId: task.goalId,
+      goalTitle: goal.title,
+      weeklyPlanId: task.weeklyPlanId,
+      weeklyPlanTitle: null,
+      sourceDailyTaskId: task.sourceDailyTaskId,
+      deviationEventId: task.deviationEventId,
+      taskDate: task.taskDate.toISOString(),
+      date: this.toDateKey(task.taskDate),
+      title: task.title,
+      description: task.description,
+      plannedMinutes: task.plannedMinutes,
+      estimatedMinutes: task.plannedMinutes ?? 0,
+      taskType: task.taskType,
+      rescueReason: task.rescueReason,
+      rescueTriggerCode: task.rescueTriggerCode,
+      rescueRiskLevel: task.rescueRiskLevel,
+      reason: task.rescueReason ?? "系统生成的低压力补救动作。",
+      triggerCode: task.rescueTriggerCode,
+      riskLevel: task.rescueRiskLevel,
+      status: task.status,
+      latestCheckin: null,
+      createdAt: task.createdAt.toISOString()
     };
   }
 }

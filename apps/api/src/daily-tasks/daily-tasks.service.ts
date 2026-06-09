@@ -41,6 +41,7 @@ const EXECUTABLE_GOAL_STATUSES: GoalStatus[] = [
   "REPLANNING"
 ];
 const DONE_STATUS = "DONE";
+const RESCUE_TASK_TYPE = "RESCUE";
 const TIMEZONE = "Asia/Shanghai";
 const CHECKIN_SCORING = "CHECKIN_SCORING";
 
@@ -267,6 +268,8 @@ export class DailyTasksService {
           payload: {
             checkinId: createdCheckin.id,
             dailyTaskId: task.id,
+            taskType: task.taskType,
+            deviationEventId: task.deviationEventId,
             provider: "mock"
           }
         }
@@ -451,15 +454,26 @@ export class DailyTasksService {
       evidence: {
         source: "mock",
         dailyTaskId: task.id,
+        taskType: task.taskType,
+        deviationEventId: task.deviationEventId,
+        rescueTriggerCode: task.rescueTriggerCode,
+        rescueRiskLevel: task.rescueRiskLevel,
         plannedMinutes,
         investedMinutes,
         contentLength: content.length
       },
-      summary: `已完成「${task.title}」，本次复盘内容和投入时间已记录。`,
+      summary:
+        task.taskType === RESCUE_TASK_TYPE
+          ? `已完成救援任务「${task.title}」，补救动作和复盘已进入成长记录。`
+          : `已完成「${task.title}」，本次复盘内容和投入时间已记录。`,
       suggestion:
-        totalScore >= 88
-          ? "今天执行质量较高，明天可以继续按原计划推进。"
-          : "明天优先补充更具体的完成证据，并尽量贴近计划投入时间。"
+        task.taskType === RESCUE_TASK_TYPE
+          ? totalScore >= 88
+            ? "补救效果较好，明天可以回到原计划节奏。"
+            : "补救链路已经恢复，明天继续保留一个更小的起步动作。"
+          : totalScore >= 88
+            ? "今天执行质量较高，明天可以继续按原计划推进。"
+            : "明天优先补充更具体的完成证据，并尽量贴近计划投入时间。"
     };
   }
 
@@ -501,11 +515,18 @@ export class DailyTasksService {
       goalTitle: task.goal.title,
       weeklyPlanId: task.weeklyPlanId,
       weeklyPlanTitle: task.weeklyPlan?.title ?? null,
+      sourceDailyTaskId: task.sourceDailyTaskId,
+      deviationEventId: task.deviationEventId,
       taskDate: task.taskDate.toISOString(),
       date: this.toDateKey(task.taskDate),
       title: task.title,
       description: task.description,
       plannedMinutes: task.plannedMinutes,
+      estimatedMinutes: task.plannedMinutes ?? 0,
+      taskType: task.taskType,
+      rescueReason: task.rescueReason,
+      rescueTriggerCode: task.rescueTriggerCode,
+      rescueRiskLevel: task.rescueRiskLevel,
       status: task.status,
       latestCheckin: latestCheckin ? this.serializeCheckin(latestCheckin) : null
     };
@@ -521,6 +542,11 @@ export class DailyTasksService {
       title: task.title,
       description: task.description,
       plannedMinutes: task.plannedMinutes,
+      taskType: task.taskType,
+      deviationEventId: task.deviationEventId,
+      rescueReason: task.rescueReason,
+      rescueTriggerCode: task.rescueTriggerCode,
+      rescueRiskLevel: task.rescueRiskLevel,
       status: task.status,
       investedMinutes: latestCheckin?.investedMinutes ?? null,
       aiScore: latestCheckin?.aiScore?.totalScore ?? null,
@@ -558,10 +584,17 @@ export class DailyTasksService {
       goalId: checkin.goalId,
       goalTitle: checkin.goal.title,
       dailyTaskId: checkin.dailyTaskId,
+      sourceDailyTaskId: task?.sourceDailyTaskId ?? null,
+      deviationEventId: task?.deviationEventId ?? null,
       taskTitle: task?.title ?? "未关联任务复盘",
       taskDescription: task?.description ?? null,
       weeklyPlanTitle: task?.weeklyPlan?.title ?? null,
       plannedMinutes: task?.plannedMinutes ?? null,
+      taskType: task?.taskType ?? "CHECKIN",
+      isRescueTask: task?.taskType === RESCUE_TASK_TYPE,
+      rescueReason: task?.rescueReason ?? null,
+      rescueTriggerCode: task?.rescueTriggerCode ?? null,
+      rescueRiskLevel: task?.rescueRiskLevel ?? null,
       investedMinutes: checkin.investedMinutes,
       checkin: this.serializeCheckin(checkin),
       aiScore: checkin.aiScore

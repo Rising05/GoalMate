@@ -282,6 +282,8 @@ AI 复评约束：
 
 MVP 偏差检测先使用规则引擎，输出统一 `deviation` 信号：
 
+- `eventId`: 偏差事件 ID；稳定状态下为空。
+- `detectedAt`: 偏差事件检测时间；稳定状态下为空。
 - `riskLevel`: `stable / warning / danger`。
 - `reasons`: 触发原因数组，原因码包括 `LOW_SCORE / LOW_INVESTMENT / BROKEN_STREAK / TASK_DELAY`。
 - `metrics`: 最近平均分、近 7 天实际投入、近 7 天预期投入、连续天数、延期任务数、今日未完成任务数。
@@ -292,6 +294,14 @@ MVP 触发规则：
 - 低投入：近 7 天实际投入低于预期投入 80% 触发 `warning`，低于 50% 触发 `danger`。
 - 断签：连续完成天数为 0 且存在今日任务或近 7 天复盘记录时触发；若今日仍有未完成任务，触发 `danger`。
 - 任务延期：今天之前仍未完成的任务数大于 0 触发 `warning`，大于等于 3 触发 `danger`。
+
+MVP 偏差事件持久化：
+
+- 新增 `deviation_events` 表保存偏差检测结果。
+- 仅当 `riskLevel` 为 `warning` 或 `danger` 时写入事件；`stable` 不生成偏差事件。
+- 事件保存 `goalId`、可选 `sourceDailyTaskId`、风险等级、主触发原因、完整 `reasons` JSON、`metrics` JSON 和 `detectedAt`。
+- 为避免健康报告反复刷新制造重复数据，同一目标、同一自然日、同一主触发原因复用同一偏差事件，并更新最新指标快照。
+- 健康报告和救援任务接口返回的 `deviation.eventId` 指向该偏差事件，后续时间线、趋势和救援效果统计均以此作为链路入口。
 
 ### 5.8 救援任务机制
 
@@ -325,14 +335,44 @@ MVP 新增接口：
 
 MVP `rescueTask` 字段：
 
+- `id`: 已持久化的每日任务 ID。
 - `title`: 补救任务标题。
 - `description`: 低压力执行说明。
 - `estimatedMinutes`: 预计投入时间，建议 10-25 分钟。
 - `reason`: 生成原因，来自主要偏差信号。
 - `triggerCode`: 触发原因码，稳定状态下可为空。
+- `riskLevel`: 生成时的偏差风险等级。
+- `sourceDailyTaskId`: 可选，指向触发补救的未完成或延期任务。
+- `deviationEventId`: 可选，指向触发该救援任务的偏差事件。
+- `status`: 复用每日任务状态。
 - `createdAt`: 生成时间。
 
-MVP 阶段救援任务先不持久化到数据库，由前端作为临时任务展示。后续版本再决定是否新增救援任务表、完成状态和复盘关联。
+MVP 持久化策略：
+
+- 不新增独立 `RescueTask` 表，先在 `daily_tasks` 增加 `taskType` 和救援元数据字段。
+- 普通任务 `taskType=NORMAL`，救援任务 `taskType=RESCUE`。
+- 救援任务保存标题、说明、预计时间、触发原因、风险等级、状态、`goalId`、可选 `sourceDailyTaskId` 和可选 `deviationEventId`。
+- `POST /goals/:id/rescue-task` 生成后直接创建或复用当日未完成救援任务，并返回已持久化的任务对象。
+- 若当日已存在未完成救援任务，则复用该任务和已关联的偏差事件；若是旧数据缺少 `deviationEventId`，会补写当天对应偏差事件。
+- 前端今日任务列表直接读取后端任务，不再维护临时救援任务。
+
+状态流转：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Done: submit checkin
+    Pending --> Skipped: future optional
+    Done --> [*]
+    Skipped --> [*]
+```
+
+完成闭环：
+
+- 救援任务完成接口复用 `POST /daily-tasks/:id/complete`。
+- 完成时创建 `checkins`，创建 `CHECKIN_SCORING` AiJob，并写入 `ai_scores`。
+- 评分证据中保留 `taskType=RESCUE`、`deviationEventId`、触发原因码和生成时风险等级。
+- 完成后刷新今日任务、健康报告、热力图和成长时间线。
 
 ### 5.9 目标失败
 
@@ -439,7 +479,9 @@ MVP 支持：
 - 健康报告接口返回 `deviation`，前端根据 `riskLevel` 展示稳定、预警或危险状态。
 - 当 `riskLevel` 为 `warning` 或 `danger` 时，今日任务页顶部显示偏差提醒，列出触发原因。
 - 用户可以从健康报告风险卡片或今日任务页生成救援任务。
-- 生成后的救援任务可一键加入今日任务列表顶部作为临时任务展示，不替代原计划任务。
+- 生成后的救援任务作为 `taskType=RESCUE` 的正式每日任务出现在今日任务列表顶部或同日任务流中，不替代原计划任务。
+- 救援任务完成后计入当日完成数、热力图等级、投入分钟、平均评分和健康度计算。
+- 未完成救援任务也参与今日未完成任务与偏差检测，避免生成后无人处理。
 
 ### 7.3 成长时间线
 
@@ -461,6 +503,7 @@ MVP 优先实现基于每日复盘的成长时间线：
 - 返回最近完成任务、checkin、aiScore、日期、投入时间、目标标题、周计划标题和任务标题。
 - 返回数据需要同时包含扁平 `items` 和按日期聚合的 `days`，便于页面和热力图详情复用。
 - 每条记录至少展示任务标题、复盘摘要、投入时间、AI 总分、AI 总结和 AI 建议。
+- 救援任务复盘必须标记“救援任务复盘”，展示触发原因、风险等级和补救效果。
 - 空状态引导用户先完成今日任务。
 
 成长时间线需要和现有页面联动：
@@ -670,7 +713,7 @@ flowchart TD
 - ai_score_dimensions
 - score_appeals
 - deviation_events
-- rescue_tasks
+- rescue_tasks（后续独立表；MVP 使用 `daily_tasks.taskType=RESCUE`）
 - reward_boards
 - reward_cards
 - heatmap_daily_stats
@@ -684,6 +727,14 @@ flowchart TD
 - admin_roles
 - audit_logs
 - system_configs
+
+MVP 已落地的偏差和救援相关字段：
+
+- `deviation_events`: 记录目标偏差事件、主触发原因、风险等级、完整原因 JSON、指标快照 JSON、检测时间和可选来源任务。
+- `daily_tasks.taskType`: 区分 `NORMAL` 和 `RESCUE`。
+- `daily_tasks.sourceDailyTaskId`: 记录救援任务来源的延期或未完成任务 ID。
+- `daily_tasks.deviationEventId`: 记录救援任务对应的偏差事件 ID。
+- `daily_tasks.rescueReason / rescueTriggerCode / rescueRiskLevel`: 保存救援任务生成时的偏差信号摘要。
 
 ## 14. 状态机
 

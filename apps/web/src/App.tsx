@@ -285,6 +285,8 @@ const plannedTasks = [
     title: "阅读核心资料",
     description: "AI 计划生成并确认后，这里会显示当天真实任务。",
     plannedMinutes: 45,
+    taskType: "NORMAL",
+    rescueReason: null,
     status: "PREVIEW",
     latestCheckin: null
   },
@@ -295,6 +297,8 @@ const plannedTasks = [
     title: "输出学习笔记",
     description: "完成按钮会在真实任务生成后启用。",
     plannedMinutes: 20,
+    taskType: "NORMAL",
+    rescueReason: null,
     status: "PREVIEW",
     latestCheckin: null
   },
@@ -305,6 +309,8 @@ const plannedTasks = [
     title: "提交今日复盘",
     description: "完成后会写入 checkin 并更新热力图。",
     plannedMinutes: 10,
+    taskType: "NORMAL",
+    rescueReason: null,
     status: "PREVIEW",
     latestCheckin: null
   }
@@ -411,8 +417,6 @@ export function App() {
   const [timelineDays, setTimelineDays] = useState<TimelineDay[]>([]);
   const [goalHealth, setGoalHealth] = useState<GoalHealth | null>(null);
   const [rescueTask, setRescueTask] = useState<RescueTask | null>(null);
-  const [temporaryRescueTask, setTemporaryRescueTask] =
-    useState<RescueTask | null>(null);
   const [dailyTaskMessage, setDailyTaskMessage] = useState("登录后可查看今日任务。");
   const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
   const [isLoadingDailyTasks, setIsLoadingDailyTasks] = useState(false);
@@ -500,23 +504,6 @@ export function App() {
         }
       ]
     : healthMetrics;
-  const rescueTaskAsTodayTask: TodayDailyTask | null =
-    temporaryRescueTask && selectedGoal
-      ? {
-          id: `rescue-${selectedGoal.id}-${temporaryRescueTask.createdAt}`,
-          goalId: selectedGoal.id,
-          goalTitle: selectedGoal.title,
-          weeklyPlanId: null,
-          weeklyPlanTitle: "救援任务",
-          taskDate: temporaryRescueTask.createdAt,
-          date: toDateKey(new Date()),
-          title: temporaryRescueTask.title,
-          description: temporaryRescueTask.description,
-          plannedMinutes: temporaryRescueTask.estimatedMinutes,
-          status: "RESCUE",
-          latestCheckin: null
-        }
-      : null;
   const baseVisiblePlannedTasks =
     todayTasks.length > 0
       ? todayTasks
@@ -536,13 +523,13 @@ export function App() {
               title: task.title,
               description: task.description,
               plannedMinutes: task.plannedMinutes,
+              taskType: task.taskType ?? "NORMAL",
+              rescueReason: task.rescueReason ?? null,
               status: task.status,
               latestCheckin: null
             }))
         : plannedTasks;
-  const visiblePlannedTasks = rescueTaskAsTodayTask
-    ? [rescueTaskAsTodayTask, ...baseVisiblePlannedTasks]
-    : baseVisiblePlannedTasks;
+  const visiblePlannedTasks = baseVisiblePlannedTasks;
   const deviationLevel = goalHealth?.deviation.riskLevel ?? "stable";
   const deviationReasons = goalHealth?.deviation.reasons ?? [];
   const todayCompletedCount = todayTasks.filter((task) => task.status === "DONE").length;
@@ -587,7 +574,6 @@ export function App() {
       setTimelineDays([]);
       setGoalHealth(null);
       setRescueTask(null);
-      setTemporaryRescueTask(null);
       setDailyTaskMessage("登录后可查看今日任务。");
       setTimelineMessage("登录后可查看成长时间线。");
       return;
@@ -598,7 +584,6 @@ export function App() {
 
   useEffect(() => {
     setRescueTask(null);
-    setTemporaryRescueTask(null);
   }, [selectedGoalId]);
 
   useEffect(() => {
@@ -782,7 +767,7 @@ export function App() {
       }
       setDailyTaskMessage(
         todayResponse.tasks.length
-          ? `今日有 ${todayResponse.tasks.length} 个计划任务。`
+          ? `今日有 ${todayResponse.tasks.length} 个可执行任务。`
           : "今天暂无可执行任务，请先确认 AI 计划。"
       );
     } catch (error) {
@@ -873,6 +858,9 @@ export function App() {
       });
       setDailyTaskMessage("任务已完成，热力图已更新。");
       setCompletionResult(response);
+      if (completionTask.taskType === "RESCUE") {
+        setRescueTask(null);
+      }
       await refreshDailyTaskData(session.token, heatmapYear);
       setSelectedHeatmapDate(completionTask.date);
     } catch (error) {
@@ -1024,7 +1012,8 @@ export function App() {
           ? { ...current, deviation: response.deviation }
           : current
       );
-      setDailyTaskMessage("救援任务已生成，可以加入今日任务。");
+      await refreshDailyTaskData(session.token, heatmapYear, response.goalId);
+      setDailyTaskMessage("救援任务已保存到今日任务，可以直接完成。");
     } catch (error) {
       setDailyTaskMessage(
         error instanceof Error ? error.message : "救援任务生成失败"
@@ -1032,16 +1021,6 @@ export function App() {
     } finally {
       setIsGeneratingRescueTask(false);
     }
-  }
-
-  function handleAddRescueTaskToToday() {
-    if (!rescueTask) {
-      return;
-    }
-
-    setTemporaryRescueTask(rescueTask);
-    setDailyTaskMessage("救援任务已作为临时任务加入今日列表。");
-    setActivePage("today");
   }
 
   function renderPage() {
@@ -1712,20 +1691,20 @@ export function App() {
                   </div>
                   <button
                     className="ghost-button"
-                    disabled={temporaryRescueTask?.createdAt === rescueTask.createdAt}
+                    disabled={rescueTask.status === "DONE"}
                     type="button"
-                    onClick={handleAddRescueTaskToToday}
+                    onClick={() => openCompletionDialog(rescueTask as TodayDailyTask)}
                   >
-                    {temporaryRescueTask?.createdAt === rescueTask.createdAt
-                      ? "已加入"
-                      : "加入今日任务"}
+                    {rescueTask.status === "DONE" ? "已完成" : "完成救援任务"}
                   </button>
                 </section>
               ) : null}
               <div className="task-list">
                 {visiblePlannedTasks.map((task, index) => (
                   <article
-                    className={`task-row ${task.status === "RESCUE" ? "rescue" : ""}`}
+                    className={`task-row ${
+                      task.taskType === "RESCUE" ? "rescue" : ""
+                    }`}
                     key={task.id}
                   >
                     <span>{index + 1}</span>
@@ -1737,11 +1716,16 @@ export function App() {
                         {task.plannedMinutes ? `${task.plannedMinutes} 分钟` : "待估时"} ·{" "}
                         {task.status === "DONE"
                           ? "已完成"
-                          : task.status === "RESCUE"
-                            ? "临时任务"
+                          : task.taskType === "RESCUE"
+                            ? "救援任务"
                             : "待完成"}
                       </p>
                       <p className="task-description">{task.description}</p>
+                      {task.taskType === "RESCUE" && task.rescueReason ? (
+                        <p className="task-rescue-reason">
+                          触发原因：{task.rescueReason}
+                        </p>
+                      ) : null}
                       {task.latestCheckin ? (
                         <div className="task-result-inline">
                           <strong>
@@ -1760,19 +1744,18 @@ export function App() {
                         isLoadingDailyTasks ||
                         completingTaskId === task.id ||
                         task.status === "DONE" ||
-                        task.status === "PREVIEW" ||
-                        task.status === "RESCUE"
+                        task.status === "PREVIEW"
                       }
                       onClick={() => openCompletionDialog(task as TodayDailyTask)}
                       type="button"
                     >
                       {task.status === "DONE"
                         ? "已完成"
-                        : task.status === "RESCUE"
-                          ? "临时"
-                          : completingTaskId === task.id
+                        : completingTaskId === task.id
                             ? "提交中"
-                            : "完成"}
+                            : task.taskType === "RESCUE"
+                              ? "完成救援"
+                              : "完成"}
                     </button>
                   </article>
                 ))}
@@ -1847,7 +1830,10 @@ export function App() {
                   <article className="risk-card stable">
                     <strong>{rescueTask.title}</strong>
                     <p>{rescueTask.description}</p>
-                    <span>{rescueTask.estimatedMinutes} 分钟 · {rescueTask.reason}</span>
+                    <span>
+                      已保存到今日任务 · {rescueTask.estimatedMinutes} 分钟 ·{" "}
+                      {rescueTask.reason}
+                    </span>
                   </article>
                 ) : null}
               </section>
@@ -2091,6 +2077,14 @@ export function App() {
                                   : "待评分"}
                               </strong>
                             </div>
+                            {item.isRescueTask ? (
+                              <div className="timeline-rescue-note">
+                                <strong>救援任务复盘</strong>
+                                <span>
+                                  {item.rescueReason ?? "系统生成的补救动作已完成。"}
+                                </span>
+                              </div>
+                            ) : null}
                             <div className="timeline-meta">
                               <span>
                                 投入 {item.investedMinutes ?? 0} 分钟
@@ -2100,6 +2094,9 @@ export function App() {
                                   ? `计划 ${item.plannedMinutes} 分钟`
                                   : "计划待估时"}
                               </span>
+                              {item.isRescueTask ? (
+                                <span>补救效果已计入健康度和热力图</span>
+                              ) : null}
                             </div>
                             <div className="reflection-note">
                               {item.checkin.content.split("\n").map((line, index) => (
@@ -2378,6 +2375,9 @@ export function App() {
                   ? `计划 ${completionTask.plannedMinutes} 分钟`
                   : "待估时"}
               </span>
+              {completionTask.taskType === "RESCUE" && completionTask.rescueReason ? (
+                <span>救援原因：{completionTask.rescueReason}</span>
+              ) : null}
             </div>
             {completionResult ? (
               <div className="completion-result">

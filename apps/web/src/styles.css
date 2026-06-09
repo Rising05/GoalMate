@@ -1139,6 +1139,13 @@ textarea:focus {
   background: rgba(231, 240, 235, 0.56);
 }
 
+.task-rescue-reason {
+  margin-top: 6px;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
 .deviation-alert,
 .rescue-card {
   display: grid;
@@ -1802,6 +1809,26 @@ button.heat-cell:disabled {
   background: rgba(255, 255, 255, 0.58);
   font-size: 0.78rem;
   font-weight: 650;
+}
+
+.timeline-rescue-note {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid rgba(31, 95, 70, 0.16);
+  border-radius: 8px;
+  background: rgba(231, 240, 235, 0.64);
+}
+
+.timeline-rescue-note strong {
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+
+.timeline-rescue-note span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .timeline-day-summary {

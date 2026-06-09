@@ -78,10 +78,18 @@ export interface WeeklyPlan {
 export interface DailyTask {
   id: string;
   goalId: string;
+  sourceDailyTaskId?: string | null;
+  deviationEventId?: string | null;
   taskDate: string;
+  date?: string;
   title: string;
   description: string;
   plannedMinutes: number | null;
+  estimatedMinutes?: number;
+  taskType?: string;
+  rescueReason?: string | null;
+  rescueTriggerCode?: DeviationReason["code"] | null;
+  rescueRiskLevel?: "stable" | "warning" | "danger" | null;
   status: string;
 }
 
@@ -124,6 +132,11 @@ export interface ActivityTask {
   title: string;
   description: string;
   plannedMinutes: number | null;
+  taskType?: string;
+  deviationEventId?: string | null;
+  rescueReason?: string | null;
+  rescueTriggerCode?: DeviationReason["code"] | null;
+  rescueRiskLevel?: "stable" | "warning" | "danger" | null;
   status: string;
   investedMinutes: number | null;
   aiScore: number | null;
@@ -145,10 +158,17 @@ export interface TimelineItem {
   goalId: string;
   goalTitle: string;
   dailyTaskId: string | null;
+  sourceDailyTaskId: string | null;
+  deviationEventId: string | null;
   taskTitle: string;
   taskDescription: string | null;
   weeklyPlanTitle: string | null;
   plannedMinutes: number | null;
+  taskType: string;
+  isRescueTask: boolean;
+  rescueReason: string | null;
+  rescueTriggerCode: DeviationReason["code"] | null;
+  rescueRiskLevel: "stable" | "warning" | "danger" | null;
   investedMinutes: number | null;
   checkin: TaskCheckin;
   aiScore: {
@@ -183,6 +203,8 @@ export interface GoalHealthRisk {
 }
 
 export interface DeviationSignal {
+  eventId?: string | null;
+  detectedAt?: string | null;
   riskLevel: "stable" | "warning" | "danger";
   reasons: DeviationReason[];
   metrics: {
@@ -203,11 +225,28 @@ export interface DeviationReason {
 }
 
 export interface RescueTask {
+  id: string;
+  goalId: string;
+  goalTitle: string;
+  weeklyPlanId: string | null;
+  weeklyPlanTitle: string | null;
+  sourceDailyTaskId: string | null;
+  deviationEventId: string | null;
+  taskDate: string;
+  date: string;
   title: string;
   description: string;
+  plannedMinutes: number | null;
   estimatedMinutes: number;
+  taskType: string;
+  rescueReason: string | null;
+  rescueTriggerCode: DeviationReason["code"] | null;
+  rescueRiskLevel: "stable" | "warning" | "danger" | null;
   reason: string;
   triggerCode: DeviationReason["code"] | null;
+  riskLevel: "stable" | "warning" | "danger" | null;
+  status: string;
+  latestCheckin: TaskCheckin | null;
   createdAt: string;
 }
 
