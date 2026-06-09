@@ -7,6 +7,7 @@
     "start:dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:integration": "node --import tsx --test src/**/*.integration.test.ts",
     "prisma:generate": "XDG_CACHE_HOME=../../.cache prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "XDG_CACHE_HOME=../../.cache prisma migrate dev --schema prisma/schema.prisma",
     "prisma:studio": "XDG_CACHE_HOME=../../.cache prisma studio --schema prisma/schema.prisma"
