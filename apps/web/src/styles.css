@@ -1063,6 +1063,23 @@ textarea:focus {
   font-size: 0.84rem;
 }
 
+.notification-form,
+.reminder-type-list {
+  display: grid;
+  gap: 10px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+}
+
+.toggle-row input {
+  width: auto;
+}
+
 .task-list {
   display: grid;
   gap: 8px;

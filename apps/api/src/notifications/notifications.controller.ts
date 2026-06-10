@@ -1,0 +1,47 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Post,
+  Put,
+  Req,
+  UseGuards
+} from "@nestjs/common";
+import { AuthenticatedRequest, AuthGuard } from "../auth/auth.guard";
+import { NotificationsService } from "./notifications.service";
+
+@Controller("notifications")
+@UseGuards(AuthGuard)
+export class NotificationsController {
+  constructor(
+    @Inject(NotificationsService)
+    private readonly notificationsService: NotificationsService
+  ) {}
+
+  @Get("preferences")
+  getPreference(@Req() request: AuthenticatedRequest) {
+    return this.notificationsService.getPreference(request.user!.id);
+  }
+
+  @Put("preferences")
+  updatePreference(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.notificationsService.updatePreference(request.user!.id, body);
+  }
+
+  @Get("email-logs")
+  listEmailLogs(@Req() request: AuthenticatedRequest) {
+    return this.notificationsService.listEmailLogs(request.user!.id);
+  }
+
+  @Post("email-logs/preview")
+  createPreviewEmailLog(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.notificationsService.createPreviewEmailLog(request.user!.id, body);
+  }
+}

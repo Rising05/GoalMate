@@ -20,12 +20,15 @@ import {
   AuthResponse,
   ActivityDay,
   AiJob,
+  EmailLog,
   FailureReport,
   Goal,
   GoalHealth,
   GoalPlan,
+  NotificationPreference,
   RewardBoard,
   RewardCard,
+  ReminderType,
   RescueTask,
   TaskCheckin,
   TimelineDay,
@@ -33,12 +36,15 @@ import {
   TodayDailyTask,
   confirmGoalPlan,
   completeDailyTask,
+  createPreviewEmailLog,
   createRewardCard,
   createGoal,
   deleteRewardCard,
+  fetchEmailLogs,
   fetchFailureReport,
   fetchGoalPlan,
   fetchGoalHealth,
+  fetchNotificationPreference,
   fetchRewardBoard,
   fetchTaskActivity,
   fetchTaskTimeline,
@@ -48,6 +54,7 @@ import {
   listGoals,
   restartGoal,
   settleGoal,
+  updateNotificationPreference,
   updateRewardCard
 } from "./api";
 
@@ -461,16 +468,23 @@ export function App() {
   const [rescueTask, setRescueTask] = useState<RescueTask | null>(null);
   const [rewardBoard, setRewardBoard] = useState<RewardBoard | null>(null);
   const [failureReport, setFailureReport] = useState<FailureReport | null>(null);
+  const [notificationPreference, setNotificationPreference] =
+    useState<NotificationPreference | null>(null);
+  const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   const [dailyTaskMessage, setDailyTaskMessage] = useState("登录后可查看今日任务。");
   const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
   const [rewardMessage, setRewardMessage] = useState("选择目标后可维护奖励愿景板。");
   const [failureMessage, setFailureMessage] = useState("选择失败目标后可查看失败复盘。");
+  const [notificationMessage, setNotificationMessage] =
+    useState("登录后可设置邮件提醒。");
   const [isLoadingDailyTasks, setIsLoadingDailyTasks] = useState(false);
   const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
   const [isLoadingRewards, setIsLoadingRewards] = useState(false);
   const [isLoadingFailureReport, setIsLoadingFailureReport] = useState(false);
   const [isSettlingGoal, setIsSettlingGoal] = useState(false);
   const [isRestartingGoal, setIsRestartingGoal] = useState(false);
+  const [isSavingNotificationPreference, setIsSavingNotificationPreference] =
+    useState(false);
   const [isGeneratingRescueTask, setIsGeneratingRescueTask] = useState(false);
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
     toDateKey(new Date())
@@ -641,10 +655,13 @@ export function App() {
       setRescueTask(null);
       setRewardBoard(null);
       setFailureReport(null);
+      setNotificationPreference(null);
+      setEmailLogs([]);
       setDailyTaskMessage("登录后可查看今日任务。");
       setTimelineMessage("登录后可查看成长时间线。");
       setRewardMessage("登录后可维护奖励愿景板。");
       setFailureMessage("登录后可查看失败复盘。");
+      setNotificationMessage("登录后可设置邮件提醒。");
       return;
     }
 
@@ -676,6 +693,14 @@ export function App() {
       void loadFailureReport(session.token, selectedGoalId);
     }
   }, [activePage, session, selectedGoalId, selectedGoal?.status]);
+
+  useEffect(() => {
+    if (!session || activePage !== "account") {
+      return;
+    }
+
+    void loadNotificationSettings(session.token);
+  }, [activePage, session]);
 
   useEffect(() => {
     if (!session) {
@@ -1299,6 +1324,105 @@ export function App() {
       setFailureMessage(error instanceof Error ? error.message : "重新开启目标失败");
     } finally {
       setIsRestartingGoal(false);
+    }
+  }
+
+  async function loadNotificationSettings(token = session?.token) {
+    if (!token) {
+      return;
+    }
+
+    try {
+      const [preference, logsResponse] = await Promise.all([
+        fetchNotificationPreference(token),
+        fetchEmailLogs(token)
+      ]);
+      setNotificationPreference(preference);
+      setEmailLogs(logsResponse.logs);
+      setNotificationMessage("邮件提醒偏好已加载。");
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "提醒设置加载失败"
+      );
+    }
+  }
+
+  function updateNotificationPreferenceField(
+    field: "enabled" | "reminderTime",
+    value: boolean | string
+  ) {
+    setNotificationPreference((current) =>
+      current
+        ? {
+            ...current,
+            [field]: value
+          }
+        : current
+    );
+  }
+
+  function toggleReminderType(type: ReminderType) {
+    setNotificationPreference((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const hasType = current.reminderTypes.includes(type);
+      const reminderTypes = hasType
+        ? current.reminderTypes.filter((item) => item !== type)
+        : [...current.reminderTypes, type];
+
+      return {
+        ...current,
+        reminderTypes
+      };
+    });
+  }
+
+  async function handleSaveNotificationPreference() {
+    if (!session || !notificationPreference) {
+      setNotificationMessage("请先登录并加载提醒设置。");
+      return;
+    }
+
+    setIsSavingNotificationPreference(true);
+
+    try {
+      const saved = await updateNotificationPreference(session.token, {
+        enabled: notificationPreference.enabled,
+        reminderTime: notificationPreference.reminderTime,
+        reminderTypes: notificationPreference.reminderTypes,
+        timezone: notificationPreference.timezone
+      });
+      setNotificationPreference(saved);
+      setNotificationMessage("提醒偏好已保存。");
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "提醒偏好保存失败"
+      );
+    } finally {
+      setIsSavingNotificationPreference(false);
+    }
+  }
+
+  async function handleCreatePreviewEmailLog(type?: ReminderType) {
+    if (!session) {
+      setNotificationMessage("请先登录。");
+      return;
+    }
+
+    try {
+      await createPreviewEmailLog(session.token, {
+        type,
+        goalId: selectedGoalId
+      });
+      const logsResponse = await fetchEmailLogs(session.token);
+      setEmailLogs(logsResponse.logs);
+      setNotificationMessage("提醒预览已写入邮件日志。");
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "提醒预览创建失败"
+      );
     }
   }
 
@@ -2928,21 +3052,92 @@ export function App() {
             <aside className="stack">
               <section className="panel">
                 <p className="eyebrow">Email</p>
-                <h2>提醒</h2>
-                <div className="settings-list">
-                  <div>
-                    <span>每日任务提醒</span>
-                    <strong>09:00</strong>
+                <h2>提醒偏好</h2>
+                {notificationPreference ? (
+                  <div className="notification-form">
+                    <label className="toggle-row">
+                      <input
+                        checked={notificationPreference.enabled}
+                        type="checkbox"
+                        onChange={(event) =>
+                          updateNotificationPreferenceField(
+                            "enabled",
+                            event.target.checked
+                          )
+                        }
+                      />
+                      <span>开启邮件提醒</span>
+                    </label>
+                    <label>
+                      <span>每日提醒时间</span>
+                      <input
+                        type="time"
+                        value={notificationPreference.reminderTime}
+                        onChange={(event) =>
+                          updateNotificationPreferenceField(
+                            "reminderTime",
+                            event.target.value
+                          )
+                        }
+                      />
+                    </label>
+                    <div className="reminder-type-list">
+                      {notificationPreference.availableTypes.map((type) => (
+                        <label className="toggle-row" key={type.code}>
+                          <input
+                            checked={notificationPreference.reminderTypes.includes(
+                              type.code
+                            )}
+                            type="checkbox"
+                            onChange={() => toggleReminderType(type.code)}
+                          />
+                          <span>{type.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="form-actions">
+                      <button
+                        className="primary-button"
+                        disabled={isSavingNotificationPreference}
+                        type="button"
+                        onClick={() => void handleSaveNotificationPreference()}
+                      >
+                        {isSavingNotificationPreference ? "保存中" : "保存提醒"}
+                        <Bell size={16} aria-hidden="true" />
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() =>
+                          void handleCreatePreviewEmailLog(
+                            notificationPreference.reminderTypes[0]
+                          )
+                        }
+                      >
+                        写入预览日志
+                      </button>
+                    </div>
                   </div>
-                  <div>
-                    <span>未打卡提醒</span>
-                    <strong>21:00</strong>
+                ) : (
+                  <p className="muted-text">进入账号页后会加载提醒偏好。</p>
+                )}
+                <p className="form-message">{notificationMessage}</p>
+              </section>
+              <section className="panel">
+                <p className="eyebrow">Email logs</p>
+                <h2>邮件日志</h2>
+                {emailLogs.length ? (
+                  <div className="settings-list">
+                    {emailLogs.slice(0, 5).map((log) => (
+                      <div key={log.id}>
+                        <span>{log.subject}</span>
+                        <strong>{log.status}</strong>
+                      </div>
+                    ))}
                   </div>
-                  <div>
-                    <span>容错风险提醒</span>
-                    <strong>开启</strong>
-                  </div>
-                </div>
+                ) : (
+                  <p className="muted-text">暂无邮件日志。</p>
+                )}
               </section>
             </aside>
           </div>

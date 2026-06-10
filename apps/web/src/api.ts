@@ -375,6 +375,45 @@ export interface GoalSettlementResponse {
   failureReport: FailureReport | null;
 }
 
+export type ReminderType =
+  | "DAILY_TASK"
+  | "MISSED_CHECKIN"
+  | "TOLERANCE_RISK"
+  | "MILESTONE"
+  | "FAILURE_REVIEW"
+  | "MEMBERSHIP_EXPIRY";
+
+export interface NotificationPreference {
+  id: string;
+  userId: string;
+  enabled: boolean;
+  reminderTime: string;
+  reminderTypes: ReminderType[];
+  timezone: string;
+  createdAt: string;
+  updatedAt: string;
+  availableTypes: Array<{
+    code: ReminderType;
+    label: string;
+  }>;
+}
+
+export interface EmailLog {
+  id: string;
+  userId: string;
+  goalId: string | null;
+  type: string;
+  recipientEmail: string;
+  subject: string;
+  content: string;
+  status: string;
+  error: string | null;
+  scheduledFor: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CreateGoalInput {
   title?: string;
   description: string;
@@ -570,6 +609,90 @@ export async function restartGoal(
   }
 
   return data as { goal: Goal; sourceGoalId: string };
+}
+
+export async function fetchNotificationPreference(token: string) {
+  const response = await fetch(`${API_BASE_URL}/notifications/preferences`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<NotificationPreference>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "提醒偏好加载失败"));
+  }
+
+  return data as NotificationPreference;
+}
+
+export async function updateNotificationPreference(
+  token: string,
+  payload: {
+    enabled: boolean;
+    reminderTime: string;
+    reminderTypes: ReminderType[];
+    timezone?: string;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/notifications/preferences`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<NotificationPreference>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "提醒偏好保存失败"));
+  }
+
+  return data as NotificationPreference;
+}
+
+export async function fetchEmailLogs(token: string) {
+  const response = await fetch(`${API_BASE_URL}/notifications/email-logs`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ logs: EmailLog[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "邮件日志加载失败"));
+  }
+
+  return data as { logs: EmailLog[] };
+}
+
+export async function createPreviewEmailLog(
+  token: string,
+  payload: {
+    type?: ReminderType;
+    goalId?: string | null;
+  } = {}
+) {
+  const response = await fetch(`${API_BASE_URL}/notifications/email-logs/preview`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ log: EmailLog }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "提醒预览创建失败"));
+  }
+
+  return data as { log: EmailLog };
 }
 
 export async function generateRescueTask(token: string, goalId: string) {
