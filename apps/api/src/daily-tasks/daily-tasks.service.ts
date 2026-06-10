@@ -66,6 +66,11 @@ interface CompleteTaskPayload {
   investedMinutes?: number;
 }
 
+interface ScoreAppealPayload {
+  reason: string;
+  addedFacts: string;
+}
+
 const EXECUTABLE_GOAL_STATUSES: GoalStatus[] = [
   "ACTIVE",
   "AT_RISK",
@@ -75,6 +80,7 @@ const DONE_STATUS = "DONE";
 const RESCUE_TASK_TYPE = "RESCUE";
 const TIMEZONE = "Asia/Shanghai";
 const CHECKIN_SCORING = "CHECKIN_SCORING";
+const CHECKIN_SCORE_APPEAL = "CHECKIN_SCORE_APPEAL";
 
 @Injectable()
 export class DailyTasksService {
@@ -425,6 +431,104 @@ export class DailyTasksService {
     };
   }
 
+  async appealCheckinScore(userId: string, checkinId: string, input: unknown) {
+    const payload = this.parseScoreAppealPayload(input);
+    const checkin = await this.prisma.checkin.findFirst({
+      where: {
+        id: checkinId,
+        userId
+      },
+      include: {
+        aiScore: true,
+        dailyTask: {
+          include: {
+            goal: true,
+            weeklyPlan: true,
+            checkins: {
+              include: {
+                aiScore: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!checkin || !checkin.aiScore) {
+      throw new NotFoundException("复盘评分不存在");
+    }
+
+    const appealResult = this.getMockAppealResult(payload, checkin.aiScore.totalScore);
+    const { appeal, updatedCheckin, job } = await this.prisma.$transaction(async (tx) => {
+      const createdAppeal = await tx.scoreAppeal.create({
+        data: {
+          userId,
+          checkinId: checkin.id,
+          reason: payload.reason,
+          addedFacts: payload.addedFacts,
+          status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED",
+          originalScore: checkin.aiScore!.totalScore,
+          newScore: appealResult.newScore,
+          evidence: appealResult.evidence
+        }
+      });
+      const createdJob = await tx.aiJob.create({
+        data: {
+          userId,
+          goalId: checkin.goalId,
+          type: CHECKIN_SCORE_APPEAL,
+          status: "SUCCEEDED",
+          attempts: 1,
+          payload: {
+            checkinId: checkin.id,
+            appealId: createdAppeal.id,
+            provider: "mock"
+          },
+          result: {
+            accepted: appealResult.accepted,
+            originalScore: checkin.aiScore!.totalScore,
+            newScore: appealResult.newScore
+          }
+        }
+      });
+
+      if (appealResult.accepted) {
+        await tx.aiScore.update({
+          where: { id: checkin.aiScore!.id },
+          data: {
+            totalScore: appealResult.newScore,
+            dimensions: appealResult.dimensions,
+            evidence: appealResult.evidence,
+            summary: appealResult.summary,
+            suggestion: appealResult.suggestion
+          }
+        });
+      }
+
+      const changedCheckin = await tx.checkin.update({
+        where: { id: checkin.id },
+        data: {
+          status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED"
+        },
+        include: {
+          aiScore: true
+        }
+      });
+
+      return {
+        appeal: createdAppeal,
+        updatedCheckin: changedCheckin,
+        job: createdJob
+      };
+    });
+
+    return {
+      appeal: this.serializeScoreAppeal(appeal),
+      checkin: this.serializeCheckin(updatedCheckin),
+      job: this.serializeAiJob(job)
+    };
+  }
+
   private taskInclude() {
     return {
       goal: true,
@@ -493,6 +597,29 @@ export class DailyTasksService {
     return {
       content,
       investedMinutes
+    };
+  }
+
+  private parseScoreAppealPayload(input: unknown): ScoreAppealPayload {
+    if (!input || typeof input !== "object") {
+      throw new BadRequestException("请求参数不正确");
+    }
+
+    const body = input as Record<string, unknown>;
+    const reason = this.cleanText(body.reason, 1000);
+    const addedFacts = this.cleanText(body.addedFacts, 2000);
+
+    if (reason.length < 8) {
+      throw new BadRequestException("请说明申诉原因");
+    }
+
+    if (addedFacts.length < 10) {
+      throw new BadRequestException("申诉必须补充新增事实或证据");
+    }
+
+    return {
+      reason,
+      addedFacts
     };
   }
 
@@ -572,6 +699,60 @@ export class DailyTasksService {
           : totalScore >= 88
             ? "今天执行质量较高，明天可以继续按原计划推进。"
             : "明天优先补充更具体的完成证据，并尽量贴近计划投入时间。"
+    };
+  }
+
+  private getMockAppealResult(
+    payload: ScoreAppealPayload,
+    originalScore: number
+  ) {
+    const factLengthScore = Math.min(8, Math.floor(payload.addedFacts.length / 25));
+    const deniesNewFacts = /没有新增|无新增|没有.*证据|无.*证据|没有.*事实|无.*事实/.test(
+      payload.addedFacts
+    );
+    const evidenceBonus = !deniesNewFacts && /证据|截图|链接|数据|记录|产出|附件|commit|照片/i.test(
+      payload.addedFacts
+    )
+      ? 6
+      : 0;
+    const manipulationPenalty = /必须|威胁|讨好|改成满分|给我高分|不然/i.test(
+      `${payload.reason} ${payload.addedFacts}`
+    )
+      ? 10
+      : 0;
+    const delta = Math.max(
+      0,
+      factLengthScore + evidenceBonus - manipulationPenalty - (deniesNewFacts ? 8 : 0)
+    );
+    const accepted = delta >= 4;
+    const newScore = accepted ? Math.min(98, originalScore + delta) : originalScore;
+    const dimensions = {
+      completion: newScore,
+      timeMatch: Math.max(60, newScore - 5),
+      evidence: Math.min(98, newScore + (evidenceBonus ? 2 : -4)),
+      reflection: Math.max(60, newScore - 3)
+    };
+    const evidence = {
+      source: "mock-appeal",
+      originalScore,
+      addedFactLength: payload.addedFacts.length,
+      deniesNewFacts,
+      evidenceBonus,
+      manipulationPenalty,
+      accepted
+    };
+
+    return {
+      accepted,
+      newScore,
+      dimensions,
+      evidence,
+      summary: accepted
+        ? `申诉复评已采纳，新增事实足以支撑评分从 ${originalScore} 调整到 ${newScore}。`
+        : `申诉复评未采纳，新增事实不足以改变原评分 ${originalScore}。`,
+      suggestion: accepted
+        ? "后续复盘请直接写入关键证据，减少申诉成本。"
+        : "如需复评，请补充更具体的产出、截图、数据或投入说明。"
     };
   }
 
@@ -669,6 +850,34 @@ export class DailyTasksService {
             suggestion: checkin.aiScore.suggestion
           }
         : null
+    };
+  }
+
+  private serializeScoreAppeal(appeal: {
+    id: string;
+    userId: string;
+    checkinId: string;
+    reason: string;
+    addedFacts: string;
+    status: string;
+    originalScore: number;
+    newScore: number | null;
+    evidence: unknown;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: appeal.id,
+      userId: appeal.userId,
+      checkinId: appeal.checkinId,
+      reason: appeal.reason,
+      addedFacts: appeal.addedFacts,
+      status: appeal.status,
+      originalScore: appeal.originalScore,
+      newScore: appeal.newScore,
+      evidence: appeal.evidence,
+      createdAt: appeal.createdAt.toISOString(),
+      updatedAt: appeal.updatedAt.toISOString()
     };
   }
 

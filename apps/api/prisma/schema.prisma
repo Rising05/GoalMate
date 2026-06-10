@@ -78,6 +78,7 @@ model User {
   aiJobs     AiJob[]
   notificationPreference NotificationPreference?
   emailLogs   EmailLog[]
+  scoreAppeals ScoreAppeal[]
 
   @@map("users")
 }
@@ -323,9 +324,31 @@ model Checkin {
   goal      Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
   dailyTask DailyTask? @relation(fields: [dailyTaskId], references: [id], onDelete: SetNull)
   aiScore   AiScore?
+  scoreAppeals ScoreAppeal[]
 
   @@index([goalId, submittedAt])
   @@map("checkins")
+}
+
+model ScoreAppeal {
+  id            String   @id @default(cuid())
+  userId        String
+  checkinId     String
+  reason        String   @db.Text
+  addedFacts    String   @db.Text
+  status        String   @default("PENDING")
+  originalScore Int
+  newScore      Int?
+  evidence      Json
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  checkin Checkin @relation(fields: [checkinId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([checkinId, createdAt])
+  @@map("score_appeals")
 }
 
 model AiScore {

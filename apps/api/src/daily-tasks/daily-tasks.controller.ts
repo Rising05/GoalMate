@@ -53,4 +53,13 @@ export class DailyTasksController {
   ) {
     return this.dailyTasksService.completeTask(request.user!.id, id, body);
   }
+
+  @Post("checkins/:id/appeal")
+  appealCheckinScore(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: unknown
+  ) {
+    return this.dailyTasksService.appealCheckinScore(request.user!.id, id, body);
+  }
 }

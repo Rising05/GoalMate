@@ -2144,6 +2144,25 @@ button.heat-cell:disabled {
   float: right;
 }
 
+.score-appeal-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.score-appeal-form > strong {
+  color: var(--text);
+}
+
+.score-appeal-form > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
 .reward-list {
   display: grid;
   gap: 8px;

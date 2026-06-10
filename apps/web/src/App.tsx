@@ -30,10 +30,12 @@ import {
   RewardCard,
   ReminderType,
   RescueTask,
+  ScoreAppeal,
   TaskCheckin,
   TimelineDay,
   TimelineItem,
   TodayDailyTask,
+  appealCheckinScore,
   confirmGoalPlan,
   completeDailyTask,
   createPreviewEmailLog,
@@ -497,6 +499,13 @@ export function App() {
     blockers: "",
     tomorrowAdjustment: ""
   });
+  const [appealForm, setAppealForm] = useState({
+    reason: "",
+    addedFacts: ""
+  });
+  const [appealResult, setAppealResult] = useState<ScoreAppeal | null>(null);
+  const [appealMessage, setAppealMessage] = useState("");
+  const [isSubmittingAppeal, setIsSubmittingAppeal] = useState(false);
   const [rewardForm, setRewardForm] = useState({
     title: "",
     description: "",
@@ -1014,6 +1023,12 @@ export function App() {
   function openCompletionDialog(task: TodayDailyTask) {
     setCompletionTask(task);
     setCompletionResult(null);
+    setAppealResult(null);
+    setAppealMessage("");
+    setAppealForm({
+      reason: "",
+      addedFacts: ""
+    });
     setCompletionForm({
       investedMinutes: task.plannedMinutes ? String(task.plannedMinutes) : "",
       completedContent: "",
@@ -1029,6 +1044,8 @@ export function App() {
 
     setCompletionTask(null);
     setCompletionResult(null);
+    setAppealResult(null);
+    setAppealMessage("");
   }
 
   function updateCompletionField(
@@ -1036,6 +1053,13 @@ export function App() {
     value: string
   ) {
     setCompletionForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  function updateAppealField(field: keyof typeof appealForm, value: string) {
+    setAppealForm((current) => ({
       ...current,
       [field]: value
     }));
@@ -1097,6 +1121,48 @@ export function App() {
       );
     } finally {
       setCompletingTaskId(null);
+    }
+  }
+
+  async function handleAppealScore(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session || !completionResult) {
+      setAppealMessage("请先完成任务并获得评分。");
+      return;
+    }
+
+    setIsSubmittingAppeal(true);
+
+    try {
+      const response = await appealCheckinScore(
+        session.token,
+        completionResult.checkin.id,
+        {
+          reason: appealForm.reason,
+          addedFacts: appealForm.addedFacts
+        }
+      );
+      setAppealResult(response.appeal);
+      setCompletionResult((current) =>
+        current
+          ? {
+              ...current,
+              checkin: response.checkin,
+              job: response.job
+            }
+          : current
+      );
+      setAppealMessage(
+        response.appeal.status === "RESCORED"
+          ? "申诉复评已采纳，评分已更新。"
+          : "申诉复评未采纳，原评分已维持。"
+      );
+      await refreshDailyTaskData(session.token, heatmapYear);
+    } catch (error) {
+      setAppealMessage(error instanceof Error ? error.message : "评分申诉提交失败");
+    } finally {
+      setIsSubmittingAppeal(false);
     }
   }
 
@@ -3284,14 +3350,57 @@ export function App() {
                         </span>
                       ))}
                     </div>
-                    <div className="reflection-note">
-                      <strong>AI 总结</strong>
-                      <span>{completionResult.checkin.aiScore.summary}</span>
-                      <strong>明日建议</strong>
-                      <span>{completionResult.checkin.aiScore.suggestion}</span>
-                    </div>
-                  </>
-                ) : null}
+	                    <div className="reflection-note">
+	                      <strong>AI 总结</strong>
+	                      <span>{completionResult.checkin.aiScore.summary}</span>
+	                      <strong>明日建议</strong>
+	                      <span>{completionResult.checkin.aiScore.suggestion}</span>
+	                    </div>
+	                    <form className="score-appeal-form" onSubmit={handleAppealScore}>
+	                      <strong>评分申诉复评</strong>
+	                      <label>
+	                        <span>申诉原因</span>
+	                        <textarea
+	                          rows={2}
+	                          value={appealForm.reason}
+	                          onChange={(event) =>
+	                            updateAppealField("reason", event.target.value)
+	                          }
+	                          placeholder="例如：原复盘遗漏了关键证据。"
+	                        />
+	                      </label>
+	                      <label>
+	                        <span>新增事实或证据</span>
+	                        <textarea
+	                          rows={3}
+	                          value={appealForm.addedFacts}
+	                          onChange={(event) =>
+	                            updateAppealField("addedFacts", event.target.value)
+	                          }
+	                          placeholder="补充具体产出、截图链接、数据、投入说明或遗漏信息。"
+	                        />
+	                      </label>
+	                      <div className="form-actions">
+	                        <button
+	                          className="ghost-button"
+	                          disabled={isSubmittingAppeal}
+	                          type="submit"
+	                        >
+	                          {isSubmittingAppeal ? "复评中" : "提交申诉"}
+	                        </button>
+	                      </div>
+	                      {appealResult ? (
+	                        <span>
+	                          {appealResult.status} · 原分 {appealResult.originalScore}
+	                          {appealResult.newScore !== null
+	                            ? ` · 复评分 ${appealResult.newScore}`
+	                            : ""}
+	                        </span>
+	                      ) : null}
+	                      {appealMessage ? <span>{appealMessage}</span> : null}
+	                    </form>
+	                  </>
+	                ) : null}
                 <div className="result-impact-grid">
                   <span>热力图已记录今日完成</span>
                   <span>健康度会随复盘和评分刷新</span>

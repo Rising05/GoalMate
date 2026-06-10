@@ -116,6 +116,20 @@ export interface TaskCheckin {
   } | null;
 }
 
+export interface ScoreAppeal {
+  id: string;
+  userId: string;
+  checkinId: string;
+  reason: string;
+  addedFacts: string;
+  status: string;
+  originalScore: number;
+  newScore: number | null;
+  evidence: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ActivityDay {
   date: string;
   level: number;
@@ -862,6 +876,39 @@ export async function completeDailyTask(
   }
 
   return data as { task: TodayDailyTask; checkin: TaskCheckin; job: AiJob };
+}
+
+export async function appealCheckinScore(
+  token: string,
+  checkinId: string,
+  payload: {
+    reason: string;
+    addedFacts: string;
+  }
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/daily-tasks/checkins/${checkinId}/appeal`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  const data = await parseJson<{
+    appeal: ScoreAppeal;
+    checkin: TaskCheckin;
+    job: AiJob;
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "评分申诉提交失败"));
+  }
+
+  return data as { appeal: ScoreAppeal; checkin: TaskCheckin; job: AiJob };
 }
 
 export async function fetchTaskActivity(
