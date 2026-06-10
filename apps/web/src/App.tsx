@@ -716,6 +716,12 @@ export function App() {
   const goalPlaceholders =
     categoryExamples[goalForm.category] ?? categoryExamples.custom;
 
+  function handleAuthenticated(response: AuthResponse) {
+    setSession(response);
+    setActivePage("create");
+    setGoalMessage("已登录，可以创建目标草稿。");
+  }
+
   useEffect(() => {
     if (!session) {
       setGoals([]);
@@ -3517,7 +3523,7 @@ export function App() {
                   <p>{session.user.membership?.plan ?? "FREE"} 计划</p>
                 </div>
               ) : (
-                <AuthPanel onAuthenticated={setSession} />
+                <AuthPanel onAuthenticated={handleAuthenticated} />
               )}
             </section>
             <aside className="stack">
