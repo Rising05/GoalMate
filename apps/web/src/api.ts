@@ -323,6 +323,58 @@ export interface RewardCardInput {
   sortOrder?: number;
 }
 
+export interface FailureReport {
+  id: string;
+  goalId: string;
+  goalTitle?: string;
+  reasonAnalysis: string;
+  brokenStreakTimeline: Array<{
+    date: string;
+    taskCount: number;
+    pendingTaskTitles: string[];
+  }>;
+  lowScoreTasks: Array<{
+    checkinId: string;
+    dailyTaskId: string | null;
+    taskTitle: string;
+    submittedAt: string;
+    totalScore: number | null;
+    summary: string | null;
+    suggestion: string | null;
+  }>;
+  keyDeviationNodes: Array<{
+    id: string;
+    detectedAt: string;
+    riskLevel: string;
+    primaryReasonCode: string | null;
+    primaryReasonLabel: string | null;
+    primaryReasonDetail: string | null;
+    metrics: Record<string, unknown>;
+  }>;
+  suggestion: string;
+  restartGoalDraft: Partial<CreateGoalInput>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GoalSettlement {
+  status: string;
+  reachedEndDate: boolean;
+  toleranceDaysUsed: number;
+  toleranceDaysAllowed: number;
+  missedDays: Array<{
+    date: string;
+    taskCount: number;
+    pendingTaskTitles: string[];
+  }>;
+}
+
+export interface GoalSettlementResponse {
+  goal: Goal;
+  settlement: GoalSettlement;
+  failureReport: FailureReport | null;
+}
+
 export interface CreateGoalInput {
   title?: string;
   description: string;
@@ -462,6 +514,62 @@ export async function fetchGoalHealth(token: string, goalId: string) {
   }
 
   return data as GoalHealth;
+}
+
+export async function settleGoal(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/settle`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<GoalSettlementResponse>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标状态结算失败"));
+  }
+
+  return data as GoalSettlementResponse;
+}
+
+export async function fetchFailureReport(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/failure-report`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<FailureReport>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "失败复盘加载失败"));
+  }
+
+  return data as FailureReport;
+}
+
+export async function restartGoal(
+  token: string,
+  goalId: string,
+  payload: Partial<CreateGoalInput> = {}
+) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/restart`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ goal: Goal; sourceGoalId: string }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "重新开启目标失败"));
+  }
+
+  return data as { goal: Goal; sourceGoalId: string };
 }
 
 export async function generateRescueTask(token: string, goalId: string) {

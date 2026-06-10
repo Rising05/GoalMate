@@ -121,9 +121,27 @@ model Goal {
   aiJobs          AiJob[]
   deviationEvents DeviationEvent[]
   rewardCards     RewardCard[]
+  failureReport   FailureReport?
 
   @@index([userId, status])
   @@map("goals")
+}
+
+model FailureReport {
+  id                 String   @id @default(cuid())
+  goalId             String   @unique
+  reasonAnalysis     String   @db.Text
+  brokenStreakTimeline Json
+  lowScoreTasks      Json
+  keyDeviationNodes  Json
+  suggestion         String   @db.Text
+  restartGoalDraft   Json
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@map("failure_reports")
 }
 
 model RewardCard {

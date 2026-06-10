@@ -1937,6 +1937,30 @@ button.heat-cell:disabled {
   font-weight: 720;
 }
 
+.failure-report {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.failure-report section {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.failure-report h2,
+.failure-report p {
+  margin-bottom: 0;
+}
+
+.failure-report h2 {
+  font-size: 1rem;
+}
+
 .timeline-day-summary {
   display: grid;
   gap: 12px;

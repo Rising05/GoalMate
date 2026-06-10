@@ -9,8 +9,10 @@ import {
   Checkin,
   DailyTask,
   DeviationEvent,
+  FailureReport,
   Goal,
   GoalCategory,
+  GoalStatus,
   Prisma
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -28,6 +30,15 @@ interface CreateGoalPayload {
   finalReward?: string;
 }
 
+interface RestartGoalPayload {
+  title?: string;
+  description?: string;
+  startDate?: Date;
+  endDate?: Date;
+  dailyTimeBudgetMinutes?: number;
+  toleranceDaysAllowed?: number;
+}
+
 const CATEGORY_MAP: Record<string, GoalCategory> = {
   study: "STUDY",
   career: "CAREER",
@@ -39,9 +50,18 @@ const CATEGORY_MAP: Record<string, GoalCategory> = {
 const DONE_STATUS = "DONE";
 const RESCUE_TASK_TYPE = "RESCUE";
 const PENDING_STATUS = "PENDING";
+const SETTLEABLE_GOAL_STATUSES: GoalStatus[] = ["ACTIVE", "AT_RISK", "REPLANNING"];
 
 type HealthTask = DailyTask & {
   checkins: Array<Checkin & { aiScore: AiScore | null }>;
+};
+
+type GoalSettlementTask = DailyTask & {
+  checkins: Array<Checkin & { aiScore: AiScore | null }>;
+};
+
+type GoalFailureReport = FailureReport & {
+  goal: Goal;
 };
 
 type DeviationRiskLevel = "stable" | "warning" | "danger";
@@ -296,6 +316,377 @@ export class GoalsService {
       deviation: this.serializeDeviationSignal(deviation, deviationEvent),
       rescueTask: this.serializeRescueTask(goal, rescueTask)
     };
+  }
+
+  async settleGoal(userId: string, id: string) {
+    const goal = await this.getOwnedGoal(userId, id);
+    const tasks = await this.getGoalSettlementTasks(goal.id);
+    const missedDays = this.getMissedTaskDays(tasks);
+    const toleranceDaysUsed = missedDays.length;
+    const todayStart = this.getDateRange(this.toDateKey(new Date())).start;
+    const reachedEndDate = todayStart >= this.getDateRange(this.toDateKey(goal.endDate)).start;
+    let nextStatus = goal.status;
+    let failureReport: FailureReport | null = null;
+
+    if (SETTLEABLE_GOAL_STATUSES.includes(goal.status as (typeof SETTLEABLE_GOAL_STATUSES)[number])) {
+      if (toleranceDaysUsed > goal.toleranceDaysAllowed) {
+        nextStatus = "FAILED";
+      } else if (reachedEndDate) {
+        nextStatus = "COMPLETED";
+      }
+    }
+
+    const updatedGoal = await this.prisma.goal.update({
+      where: { id: goal.id },
+      data: {
+        status: nextStatus,
+        toleranceDaysUsed
+      }
+    });
+
+    if (nextStatus === "FAILED") {
+      failureReport = await this.upsertFailureReport(updatedGoal, tasks, missedDays);
+    }
+
+    return {
+      goal: this.serializeGoal(updatedGoal),
+      settlement: {
+        status: nextStatus,
+        reachedEndDate,
+        toleranceDaysUsed,
+        toleranceDaysAllowed: goal.toleranceDaysAllowed,
+        missedDays
+      },
+      failureReport: failureReport ? this.serializeFailureReport(failureReport) : null
+    };
+  }
+
+  async getFailureReport(userId: string, id: string) {
+    const goal = await this.getOwnedGoal(userId, id);
+    let report = await this.prisma.failureReport.findUnique({
+      where: { goalId: goal.id },
+      include: { goal: true }
+    });
+
+    if (!report && goal.status !== "FAILED") {
+      const settlement = await this.settleGoal(userId, id);
+
+      if (settlement.failureReport) {
+        return settlement.failureReport;
+      }
+    }
+
+    if (!report && goal.status === "FAILED") {
+      const tasks = await this.getGoalSettlementTasks(goal.id);
+      const createdReport = await this.upsertFailureReport(
+        goal,
+        tasks,
+        this.getMissedTaskDays(tasks)
+      );
+      return this.serializeFailureReport(createdReport);
+    }
+
+    if (!report) {
+      throw new NotFoundException("失败报告不存在");
+    }
+
+    return this.serializeFailureReport(report);
+  }
+
+  async restartGoal(userId: string, id: string, input: unknown) {
+    const original = await this.getOwnedGoal(userId, id);
+
+    if (original.status !== "FAILED") {
+      throw new BadRequestException("只有失败目标可以重新开启");
+    }
+
+    const payload = this.parseRestartGoalPayload(input);
+    const startDate = payload.startDate ?? this.getDateRange(this.toDateKey(new Date())).start;
+    const endDate = payload.endDate ?? this.addDays(startDate, this.getGoalDurationDays(original));
+    const goal = await this.prisma.goal.create({
+      data: {
+        userId,
+        title: payload.title ?? `${original.title}（重新开始）`,
+        description: payload.description ?? original.description,
+        category: original.category,
+        status: "DRAFT",
+        startDate,
+        endDate,
+        dailyTimeBudgetMinutes:
+          payload.dailyTimeBudgetMinutes ?? original.dailyTimeBudgetMinutes,
+        toleranceDaysAllowed:
+          payload.toleranceDaysAllowed ?? original.toleranceDaysAllowed,
+        currentBaseline: original.currentBaseline,
+        constraints: original.constraints,
+        finalReward: original.finalReward
+      }
+    });
+
+    return {
+      goal: this.serializeGoal(goal),
+      sourceGoalId: original.id
+    };
+  }
+
+  private async getOwnedGoal(userId: string, id: string) {
+    const goal = await this.prisma.goal.findFirst({
+      where: {
+        id,
+        userId
+      }
+    });
+
+    if (!goal) {
+      throw new NotFoundException("目标不存在");
+    }
+
+    return goal;
+  }
+
+  private async getGoalSettlementTasks(goalId: string) {
+    return this.prisma.dailyTask.findMany({
+      where: {
+        goalId
+      },
+      orderBy: {
+        taskDate: "asc"
+      },
+      include: {
+        checkins: {
+          orderBy: {
+            submittedAt: "desc"
+          },
+          include: {
+            aiScore: true
+          }
+        }
+      }
+    });
+  }
+
+  private getMissedTaskDays(tasks: GoalSettlementTask[]) {
+    const tasksByDate = new Map<string, GoalSettlementTask[]>();
+
+    for (const task of tasks) {
+      const dateKey = this.toDateKey(task.taskDate);
+      const dateTasks = tasksByDate.get(dateKey) ?? [];
+      dateTasks.push(task);
+      tasksByDate.set(dateKey, dateTasks);
+    }
+
+    return Array.from(tasksByDate.entries())
+      .filter(([, dateTasks]) => !dateTasks.some((task) => this.isTaskCompleted(task)))
+      .map(([date, dateTasks]) => ({
+        date,
+        taskCount: dateTasks.length,
+        pendingTaskTitles: dateTasks
+          .filter((task) => !this.isTaskCompleted(task))
+          .map((task) => task.title)
+      }));
+  }
+
+  private async upsertFailureReport(
+    goal: Goal,
+    tasks: GoalSettlementTask[],
+    missedDays: ReturnType<GoalsService["getMissedTaskDays"]>
+  ) {
+    const [lowScoreTasks, keyDeviationNodes] = await Promise.all([
+      this.getLowScoreTasks(goal.id),
+      this.getKeyDeviationNodes(goal.id)
+    ]);
+    const restartGoalDraft = {
+      title: `${goal.title}（重新开始）`,
+      description: goal.description,
+      category: goal.category,
+      dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes,
+      toleranceDaysAllowed: goal.toleranceDaysAllowed,
+      currentBaseline: goal.currentBaseline,
+      constraints: goal.constraints,
+      finalReward: goal.finalReward
+    };
+    const reasonAnalysis = this.buildFailureReasonAnalysis({
+      goal,
+      missedDays,
+      lowScoreTaskCount: lowScoreTasks.length,
+      keyDeviationCount: keyDeviationNodes.length
+    });
+    const suggestion = this.buildFailureSuggestion(goal, missedDays, lowScoreTasks.length);
+    const data = {
+      reasonAnalysis,
+      brokenStreakTimeline: this.toJson(missedDays),
+      lowScoreTasks: this.toJson(lowScoreTasks),
+      keyDeviationNodes: this.toJson(keyDeviationNodes),
+      suggestion,
+      restartGoalDraft: this.toJson(restartGoalDraft)
+    };
+    const existing = await this.prisma.failureReport.findUnique({
+      where: { goalId: goal.id }
+    });
+
+    if (existing) {
+      return this.prisma.failureReport.update({
+        where: { id: existing.id },
+        data
+      });
+    }
+
+    return this.prisma.failureReport.create({
+      data: {
+        goalId: goal.id,
+        ...data
+      }
+    });
+  }
+
+  private async getLowScoreTasks(goalId: string) {
+    const checkins = await this.prisma.checkin.findMany({
+      where: {
+        goalId,
+        aiScore: {
+          totalScore: {
+            lt: 70
+          }
+        }
+      },
+      orderBy: {
+        submittedAt: "desc"
+      },
+      take: 10,
+      include: {
+        dailyTask: true,
+        aiScore: true
+      }
+    });
+
+    return checkins.map((checkin) => ({
+      checkinId: checkin.id,
+      dailyTaskId: checkin.dailyTaskId,
+      taskTitle: checkin.dailyTask?.title ?? "未关联任务复盘",
+      submittedAt: checkin.submittedAt.toISOString(),
+      totalScore: checkin.aiScore?.totalScore ?? null,
+      summary: checkin.aiScore?.summary ?? null,
+      suggestion: checkin.aiScore?.suggestion ?? null
+    }));
+  }
+
+  private async getKeyDeviationNodes(goalId: string) {
+    const events = await this.prisma.deviationEvent.findMany({
+      where: {
+        goalId
+      },
+      orderBy: {
+        detectedAt: "desc"
+      },
+      take: 10
+    });
+
+    return events.map((event) => ({
+      id: event.id,
+      detectedAt: event.detectedAt.toISOString(),
+      riskLevel: event.riskLevel,
+      primaryReasonCode: event.primaryReasonCode,
+      primaryReasonLabel: event.primaryReasonLabel,
+      primaryReasonDetail: event.primaryReasonDetail,
+      metrics: event.metrics
+    }));
+  }
+
+  private buildFailureReasonAnalysis(input: {
+    goal: Goal;
+    missedDays: ReturnType<GoalsService["getMissedTaskDays"]>;
+    lowScoreTaskCount: number;
+    keyDeviationCount: number;
+  }) {
+    const parts = [
+      `目标「${input.goal.title}」已使用 ${input.missedDays.length} 天容错，超过允许的 ${input.goal.toleranceDaysAllowed} 天。`
+    ];
+
+    if (input.lowScoreTaskCount > 0) {
+      parts.push(`期间出现 ${input.lowScoreTaskCount} 次低分复盘，说明执行质量或证据记录不足。`);
+    }
+
+    if (input.keyDeviationCount > 0) {
+      parts.push(`系统记录了 ${input.keyDeviationCount} 个关键偏差节点，可作为重开目标时缩小计划颗粒度的依据。`);
+    }
+
+    return parts.join("");
+  }
+
+  private buildFailureSuggestion(
+    goal: Goal,
+    missedDays: ReturnType<GoalsService["getMissedTaskDays"]>,
+    lowScoreTaskCount: number
+  ) {
+    const dailyMinutes = goal.dailyTimeBudgetMinutes ?? 30;
+    const nextMinutes = Math.max(10, Math.round(dailyMinutes * 0.6));
+    const qualityHint =
+      lowScoreTaskCount > 0
+        ? "每次复盘补充一个可验证成果，优先提升证据质量。"
+        : "先保留文本复盘习惯，避免重新开始后再次断档。";
+
+    return `建议重新开启一个更小的新目标：每日投入先降到 ${nextMinutes} 分钟，连续 7 天只追踪一个最小动作。${qualityHint}最近断签 ${missedDays.length} 天，重开后先把容错次数留给突发情况，而不是计划过载。`;
+  }
+
+  private parseRestartGoalPayload(input: unknown): RestartGoalPayload {
+    if (!input || typeof input !== "object") {
+      return {};
+    }
+
+    const body = input as Record<string, unknown>;
+    const startDate =
+      typeof body.startDate === "string" && body.startDate
+        ? this.parseDate(body.startDate, "开始日期不正确")
+        : undefined;
+    const endDate =
+      typeof body.endDate === "string" && body.endDate
+        ? this.parseDate(body.endDate, "结束日期不正确")
+        : undefined;
+    const dailyTimeBudgetMinutes = this.parseOptionalInteger(
+      body.dailyTimeBudgetMinutes,
+      "每日投入时间必须是正整数"
+    );
+    const toleranceDaysAllowed = this.parseOptionalInteger(
+      body.toleranceDaysAllowed,
+      "容错次数必须是非负整数"
+    );
+
+    if (startDate && endDate && endDate < startDate) {
+      throw new BadRequestException("结束日期不能早于开始日期");
+    }
+
+    if (dailyTimeBudgetMinutes !== undefined && dailyTimeBudgetMinutes <= 0) {
+      throw new BadRequestException("每日投入时间必须大于 0");
+    }
+
+    if (
+      toleranceDaysAllowed !== undefined &&
+      (toleranceDaysAllowed < 0 || toleranceDaysAllowed > 366)
+    ) {
+      throw new BadRequestException("容错次数范围应为 0 到 366");
+    }
+
+    return {
+      title: this.cleanText(body.title, 80) || undefined,
+      description: this.cleanText(body.description, 2000) || undefined,
+      startDate,
+      endDate,
+      dailyTimeBudgetMinutes,
+      toleranceDaysAllowed
+    };
+  }
+
+  private getGoalDurationDays(goal: Goal) {
+    const start = this.getDateRange(this.toDateKey(goal.startDate)).start;
+    const end = this.getDateRange(this.toDateKey(goal.endDate)).start;
+    const diff = Math.round((end.getTime() - start.getTime()) / 86_400_000);
+
+    return Math.max(1, diff);
+  }
+
+  private addDays(date: Date, days: number) {
+    const next = new Date(date);
+    next.setUTCDate(date.getUTCDate() + days);
+    return next;
   }
 
   private async getGoalHealthContext(userId: string, id: string) {
@@ -929,6 +1320,30 @@ export class GoalsService {
       createdAt: goal.createdAt.toISOString(),
       updatedAt: goal.updatedAt.toISOString()
     };
+  }
+
+  private serializeFailureReport(report: FailureReport | GoalFailureReport) {
+    return {
+      id: report.id,
+      goalId: report.goalId,
+      goalTitle: "goal" in report ? report.goal.title : undefined,
+      reasonAnalysis: report.reasonAnalysis,
+      brokenStreakTimeline: this.jsonArray(report.brokenStreakTimeline),
+      lowScoreTasks: this.jsonArray(report.lowScoreTasks),
+      keyDeviationNodes: this.jsonArray(report.keyDeviationNodes),
+      suggestion: report.suggestion,
+      restartGoalDraft: this.jsonObject(report.restartGoalDraft),
+      createdAt: report.createdAt.toISOString(),
+      updatedAt: report.updatedAt.toISOString()
+    };
+  }
+
+  private jsonArray(value: unknown) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  private jsonObject(value: unknown) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   }
 
   private serializeDeviationSignal(

@@ -42,6 +42,28 @@ export class GoalsController {
     return this.goalsService.getGoalHealth(request.user!.id, id);
   }
 
+  @Post(":id/settle")
+  settle(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
+    return this.goalsService.settleGoal(request.user!.id, id);
+  }
+
+  @Get(":id/failure-report")
+  getFailureReport(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ) {
+    return this.goalsService.getFailureReport(request.user!.id, id);
+  }
+
+  @Post(":id/restart")
+  restart(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: unknown
+  ) {
+    return this.goalsService.restartGoal(request.user!.id, id, body);
+  }
+
   @Post(":id/rescue-task")
   generateRescueTask(
     @Req() request: AuthenticatedRequest,

@@ -20,6 +20,7 @@ import {
   AuthResponse,
   ActivityDay,
   AiJob,
+  FailureReport,
   Goal,
   GoalHealth,
   GoalPlan,
@@ -35,6 +36,7 @@ import {
   createRewardCard,
   createGoal,
   deleteRewardCard,
+  fetchFailureReport,
   fetchGoalPlan,
   fetchGoalHealth,
   fetchRewardBoard,
@@ -44,6 +46,8 @@ import {
   generateGoalPlan,
   generateRescueTask,
   listGoals,
+  restartGoal,
+  settleGoal,
   updateRewardCard
 } from "./api";
 
@@ -55,6 +59,7 @@ type PageId =
   | "heatmap"
   | "timeline"
   | "rewards"
+  | "failure"
   | "account";
 
 interface NavItem {
@@ -106,6 +111,12 @@ const navItems: NavItem[] = [
     label: "奖励愿景板",
     description: "Reward board",
     icon: Gift
+  },
+  {
+    id: "failure",
+    label: "失败复盘",
+    description: "Failure report",
+    icon: ShieldCheck
   },
   {
     id: "account",
@@ -449,12 +460,17 @@ export function App() {
   const [goalHealth, setGoalHealth] = useState<GoalHealth | null>(null);
   const [rescueTask, setRescueTask] = useState<RescueTask | null>(null);
   const [rewardBoard, setRewardBoard] = useState<RewardBoard | null>(null);
+  const [failureReport, setFailureReport] = useState<FailureReport | null>(null);
   const [dailyTaskMessage, setDailyTaskMessage] = useState("登录后可查看今日任务。");
   const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
   const [rewardMessage, setRewardMessage] = useState("选择目标后可维护奖励愿景板。");
+  const [failureMessage, setFailureMessage] = useState("选择失败目标后可查看失败复盘。");
   const [isLoadingDailyTasks, setIsLoadingDailyTasks] = useState(false);
   const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
   const [isLoadingRewards, setIsLoadingRewards] = useState(false);
+  const [isLoadingFailureReport, setIsLoadingFailureReport] = useState(false);
+  const [isSettlingGoal, setIsSettlingGoal] = useState(false);
+  const [isRestartingGoal, setIsRestartingGoal] = useState(false);
   const [isGeneratingRescueTask, setIsGeneratingRescueTask] = useState(false);
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
     toDateKey(new Date())
@@ -624,9 +640,11 @@ export function App() {
       setGoalHealth(null);
       setRescueTask(null);
       setRewardBoard(null);
+      setFailureReport(null);
       setDailyTaskMessage("登录后可查看今日任务。");
       setTimelineMessage("登录后可查看成长时间线。");
       setRewardMessage("登录后可维护奖励愿景板。");
+      setFailureMessage("登录后可查看失败复盘。");
       return;
     }
 
@@ -636,6 +654,7 @@ export function App() {
   useEffect(() => {
     setRescueTask(null);
     setRewardBoard(null);
+    setFailureReport(null);
   }, [selectedGoalId]);
 
   useEffect(() => {
@@ -647,6 +666,16 @@ export function App() {
       void loadRewardBoard(session.token, selectedGoalId);
     }
   }, [activePage, session, selectedGoalId]);
+
+  useEffect(() => {
+    if (!session || !selectedGoalId) {
+      return;
+    }
+
+    if (activePage === "failure" && selectedGoal?.status === "FAILED") {
+      void loadFailureReport(session.token, selectedGoalId);
+    }
+  }, [activePage, session, selectedGoalId, selectedGoal?.status]);
 
   useEffect(() => {
     if (!session) {
@@ -1197,6 +1226,82 @@ export function App() {
     }
   }
 
+  async function handleSettleSelectedGoal() {
+    if (!session || !selectedGoalId) {
+      setGoalMessage("请先登录并选择目标。");
+      return;
+    }
+
+    setIsSettlingGoal(true);
+
+    try {
+      const result = await settleGoal(session.token, selectedGoalId);
+      await refreshGoals(session.token, result.goal.id);
+
+      if (result.failureReport) {
+        setFailureReport(result.failureReport);
+        setActivePage("failure");
+      }
+
+      setGoalMessage(
+        result.goal.status === "FAILED"
+          ? "目标已进入失败状态，失败复盘已生成。"
+          : result.goal.status === "COMPLETED"
+            ? "目标已达结束日期并完成结算。"
+            : `目标已更新容错使用：${result.settlement.toleranceDaysUsed}/${result.settlement.toleranceDaysAllowed}`
+      );
+    } catch (error) {
+      setGoalMessage(error instanceof Error ? error.message : "目标状态结算失败");
+    } finally {
+      setIsSettlingGoal(false);
+    }
+  }
+
+  async function loadFailureReport(token = session?.token, goalId = selectedGoalId) {
+    if (!token || !goalId) {
+      setFailureReport(null);
+      setFailureMessage("选择失败目标后可查看失败复盘。");
+      return;
+    }
+
+    setIsLoadingFailureReport(true);
+
+    try {
+      const report = await fetchFailureReport(token, goalId);
+      setFailureReport(report);
+      setFailureMessage("失败复盘已生成，可根据建议重新开启新目标。");
+    } catch (error) {
+      setFailureMessage(error instanceof Error ? error.message : "失败复盘加载失败");
+    } finally {
+      setIsLoadingFailureReport(false);
+    }
+  }
+
+  async function handleRestartGoal() {
+    if (!session || !selectedGoalId || !failureReport) {
+      setFailureMessage("请先选择失败目标并加载失败复盘。");
+      return;
+    }
+
+    setIsRestartingGoal(true);
+
+    try {
+      const response = await restartGoal(
+        session.token,
+        selectedGoalId,
+        failureReport.restartGoalDraft
+      );
+      await refreshGoals(session.token, response.goal.id);
+      setCreatedGoal(response.goal);
+      setActivePage("plan");
+      setPlanMessage("新目标草稿已创建，可重新生成 AI 计划。");
+    } catch (error) {
+      setFailureMessage(error instanceof Error ? error.message : "重新开启目标失败");
+    } finally {
+      setIsRestartingGoal(false);
+    }
+  }
+
   function renderPage() {
     switch (activePage) {
       case "create":
@@ -1494,6 +1599,25 @@ export function App() {
                       奖励愿景板
                       <Gift size={16} aria-hidden="true" />
                     </button>
+                    <button
+                      className="ghost-button"
+                      disabled={isSettlingGoal}
+                      type="button"
+                      onClick={() => void handleSettleSelectedGoal()}
+                    >
+                      {isSettlingGoal ? "结算中" : "结算状态"}
+                      <ShieldCheck size={16} aria-hidden="true" />
+                    </button>
+                    {selectedGoal.status === "FAILED" ? (
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => setActivePage("failure")}
+                      >
+                        失败复盘
+                        <History size={16} aria-hidden="true" />
+                      </button>
+                    ) : null}
                   </div>
 
                   <section className="dashboard-progress">
@@ -2643,6 +2767,145 @@ export function App() {
                   自定义卡片 {customRewardCount}
                   {customRewardLimit ? ` / ${customRewardLimit}` : ""}。
                 </p>
+              </section>
+            </aside>
+          </div>
+        );
+      case "failure":
+        return (
+          <div className="content-grid">
+            <section className="panel main-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Failure report</p>
+                  <h1>失败复盘</h1>
+                </div>
+                <button
+                  className="ghost-button"
+                  disabled={!session || !selectedGoalId || isLoadingFailureReport}
+                  type="button"
+                  onClick={() => void loadFailureReport()}
+                >
+                  刷新
+                  <History size={16} aria-hidden="true" />
+                </button>
+              </div>
+              <p className="form-message">{failureMessage}</p>
+              {failureReport ? (
+                <div className="failure-report">
+                  <section>
+                    <p className="eyebrow">Reason</p>
+                    <h2>失败原因分析</h2>
+                    <p>{failureReport.reasonAnalysis}</p>
+                  </section>
+                  <section>
+                    <p className="eyebrow">Timeline</p>
+                    <h2>断签时间线</h2>
+                    {failureReport.brokenStreakTimeline.length ? (
+                      <div className="timeline-list">
+                        {failureReport.brokenStreakTimeline.map((day) => (
+                          <div key={day.date}>
+                            <strong>{formatActivityDate(day.date)}</strong>
+                            <span>
+                              {day.taskCount} 个任务未恢复 ·{" "}
+                              {day.pendingTaskTitles.join("、")}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">暂无断签记录。</p>
+                    )}
+                  </section>
+                  <section>
+                    <p className="eyebrow">Low score</p>
+                    <h2>低分任务</h2>
+                    {failureReport.lowScoreTasks.length ? (
+                      <div className="timeline-list">
+                        {failureReport.lowScoreTasks.map((task) => (
+                          <div key={task.checkinId}>
+                            <strong>{task.taskTitle}</strong>
+                            <span>
+                              {formatDateTime(task.submittedAt)}
+                              {task.totalScore !== null ? ` · AI ${task.totalScore}` : ""}
+                              {task.suggestion ? ` · ${task.suggestion}` : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">暂无低分任务。</p>
+                    )}
+                  </section>
+                  <section>
+                    <p className="eyebrow">Deviation</p>
+                    <h2>关键偏差节点</h2>
+                    {failureReport.keyDeviationNodes.length ? (
+                      <div className="timeline-list">
+                        {failureReport.keyDeviationNodes.map((node) => (
+                          <div key={node.id}>
+                            <strong>
+                              {node.primaryReasonLabel ?? node.primaryReasonCode ?? "偏差"}
+                            </strong>
+                            <span>
+                              {formatDateTime(node.detectedAt)} · {node.riskLevel}
+                              {node.primaryReasonDetail
+                                ? ` · ${node.primaryReasonDetail}`
+                                : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">暂无偏差节点。</p>
+                    )}
+                  </section>
+                  <section className="ai-advice-note">
+                    <strong>AI 复盘建议</strong>
+                    <span>{failureReport.suggestion}</span>
+                  </section>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <ShieldCheck size={24} aria-hidden="true" />
+                  <h2>{isLoadingFailureReport ? "正在加载失败复盘" : "暂无失败复盘"}</h2>
+                  <p>目标进入失败状态后，系统会生成失败原因、断签时间线和重开建议。</p>
+                </div>
+              )}
+            </section>
+            <aside className="stack">
+              <section className="panel">
+                <p className="eyebrow">Restart</p>
+                <h2>重新开启新目标</h2>
+                <p className="muted-text">
+                  重开会创建新的目标草稿，旧目标保留为历史参考。
+                </p>
+                <div className="form-actions">
+                  <button
+                    className="primary-button"
+                    disabled={!failureReport || isRestartingGoal}
+                    type="button"
+                    onClick={() => void handleRestartGoal()}
+                  >
+                    {isRestartingGoal ? "创建中" : "创建新目标"}
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                </div>
+              </section>
+              <section className="panel">
+                <p className="eyebrow">Current</p>
+                <div className="settings-list">
+                  <div>
+                    <span>当前目标</span>
+                    <strong>{selectedGoal?.title ?? "未选择"}</strong>
+                  </div>
+                  <div>
+                    <span>目标状态</span>
+                    <strong>
+                      {selectedGoal ? goalStatusLabels[selectedGoal.status] ?? selectedGoal.status : "-"}
+                    </strong>
+                  </div>
+                </div>
               </section>
             </aside>
           </div>
