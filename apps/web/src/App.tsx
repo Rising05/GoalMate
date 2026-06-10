@@ -50,6 +50,7 @@ import {
   createRewardCard,
   createGoal,
   deleteRewardCard,
+  enqueueDueEmailLogs,
   fetchAdminAiJobs,
   fetchAdminAuditLogs,
   fetchAdminEmailLogs,
@@ -70,6 +71,7 @@ import {
   generateGoalPlan,
   generateRescueTask,
   listGoals,
+  processQueuedEmailLogs,
   restartGoal,
   settleGoal,
   updateAdminMembership,
@@ -1556,6 +1558,48 @@ export function App() {
     } catch (error) {
       setNotificationMessage(
         error instanceof Error ? error.message : "提醒预览创建失败"
+      );
+    }
+  }
+
+  async function handleEnqueueDueEmailLogs() {
+    if (!session) {
+      setNotificationMessage("请先登录。");
+      return;
+    }
+
+    try {
+      const result = await enqueueDueEmailLogs(session.token);
+      const logsResponse = await fetchEmailLogs(session.token);
+      setEmailLogs(logsResponse.logs);
+      setNotificationMessage(
+        result.queued.length
+          ? `已生成 ${result.queued.length} 条今日提醒。`
+          : result.skipped[0] ?? "当前没有需要生成的提醒。"
+      );
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "提醒队列生成失败"
+      );
+    }
+  }
+
+  async function handleProcessQueuedEmailLogs() {
+    if (!session) {
+      setNotificationMessage("请先登录。");
+      return;
+    }
+
+    try {
+      const result = await processQueuedEmailLogs(session.token);
+      const logsResponse = await fetchEmailLogs(session.token);
+      setEmailLogs(logsResponse.logs);
+      setNotificationMessage(
+        `邮件队列已处理：成功 ${result.sent} 条，失败 ${result.failed} 条。`
+      );
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "邮件队列处理失败"
       );
     }
   }
@@ -3394,6 +3438,20 @@ export function App() {
                         }
                       >
                         写入预览日志
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => void handleEnqueueDueEmailLogs()}
+                      >
+                        生成今日提醒
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => void handleProcessQueuedEmailLogs()}
+                      >
+                        处理发送队列
                       </button>
                     </div>
                   </div>

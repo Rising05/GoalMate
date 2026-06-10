@@ -44,4 +44,20 @@ export class NotificationsController {
   ) {
     return this.notificationsService.createPreviewEmailLog(request.user!.id, body);
   }
+
+  @Post("email-logs/enqueue-due")
+  enqueueDueEmailLogs(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.notificationsService.enqueueDueEmailLogs(request.user!.id, body);
+  }
+
+  @Post("email-logs/process-queue")
+  processQueuedEmailLogs(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.notificationsService.processQueuedEmailLogs(request.user!.id, body);
+  }
 }

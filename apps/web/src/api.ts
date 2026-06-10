@@ -866,6 +866,51 @@ export async function createPreviewEmailLog(
   return data as { log: EmailLog };
 }
 
+export async function enqueueDueEmailLogs(token: string) {
+  const response = await fetch(`${API_BASE_URL}/notifications/email-logs/enqueue-due`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({})
+  });
+
+  const data = await parseJson<{ queued: EmailLog[]; skipped: string[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "提醒队列生成失败"));
+  }
+
+  return data as { queued: EmailLog[]; skipped: string[] };
+}
+
+export async function processQueuedEmailLogs(token: string) {
+  const response = await fetch(
+    `${API_BASE_URL}/notifications/email-logs/process-queue`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({})
+    }
+  );
+
+  const data = await parseJson<{
+    processed: EmailLog[];
+    sent: number;
+    failed: number;
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "邮件队列处理失败"));
+  }
+
+  return data as { processed: EmailLog[]; sent: number; failed: number };
+}
+
 export async function fetchAdminOverview(token: string) {
   const response = await fetch(`${API_BASE_URL}/admin/overview`, {
     headers: {

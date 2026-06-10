@@ -79,6 +79,52 @@ describe("NotificationsService integration", () => {
     assert.equal(logs.logs.length, 1);
     assert.equal(logs.logs[0].id, preview.log.id);
   });
+
+  it("queues due reminder emails once per day and processes them as sent", async () => {
+    const user = await createUser("queue");
+    await createGoalForReminders(user.id);
+    await notificationsService.updatePreference(user.id, {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: ["DAILY_TASK", "MISSED_CHECKIN", "TOLERANCE_RISK", "MILESTONE"]
+    });
+
+    const first = await notificationsService.enqueueDueEmailLogs(user.id, {
+      now: "2026-06-10T10:00:00.000+08:00"
+    });
+    const second = await notificationsService.enqueueDueEmailLogs(user.id, {
+      now: "2026-06-10T10:30:00.000+08:00"
+    });
+    const processed = await notificationsService.processQueuedEmailLogs(user.id, {
+      now: "2026-06-10T10:31:00.000+08:00"
+    });
+
+    assert.equal(first.queued.length, 4);
+    assert.equal(second.queued.length, 0);
+    assert.ok(second.skipped.length >= 4);
+    assert.equal(processed.sent, 4);
+    assert.equal(processed.failed, 0);
+    assert.ok(processed.processed.every((log) => log.status === "SENT"));
+    assert.ok(processed.processed.every((log) => log.sentAt));
+  });
+
+  it("records failed email delivery attempts", async () => {
+    const user = await createUser("failure");
+    await notificationsService.createPreviewEmailLog(user.id, {
+      type: "DAILY_TASK"
+    });
+
+    const processed = await notificationsService.processQueuedEmailLogs(user.id, {
+      now: "2026-06-11T10:00:00.000+08:00",
+      simulateFailure: true
+    });
+    const logs = await notificationsService.listEmailLogs(user.id);
+
+    assert.equal(processed.sent, 0);
+    assert.equal(processed.failed, 1);
+    assert.equal(logs.logs[0].status, "FAILED");
+    assert.equal(logs.logs[0].error, "Mock email provider failed");
+  });
 });
 
 async function cleanupTestUsers() {
@@ -101,6 +147,38 @@ async function createUser(scenario: string) {
       email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
       passwordHash: "test-password-hash",
       displayName: `Notifications ${scenario}`
+    }
+  });
+}
+
+async function createGoalForReminders(userId: string) {
+  return prisma.goal.create({
+    data: {
+      userId,
+      title: "邮件提醒目标",
+      description: "用于验证邮件提醒任务。",
+      category: "STUDY",
+      status: "ACTIVE",
+      startDate: new Date("2026-06-01T00:00:00.000+08:00"),
+      endDate: new Date("2026-06-30T00:00:00.000+08:00"),
+      toleranceDaysAllowed: 2,
+      toleranceDaysUsed: 1,
+      dailyTasks: {
+        create: {
+          taskDate: new Date("2026-06-10T00:00:00.000+08:00"),
+          title: "今日提醒任务",
+          description: "保持未完成以触发提醒。",
+          plannedMinutes: 30,
+          status: "PENDING"
+        }
+      },
+      milestones: {
+        create: {
+          title: "今日里程碑",
+          description: "用于触发阶段里程碑提醒。",
+          targetDate: new Date("2026-06-10T00:00:00.000+08:00")
+        }
+      }
     }
   });
 }

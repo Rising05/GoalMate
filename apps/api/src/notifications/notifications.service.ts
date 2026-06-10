@@ -103,6 +103,148 @@ export class NotificationsService {
     };
   }
 
+  async enqueueDueEmailLogs(userId: string, input: unknown = {}) {
+    const now = this.parseNow(input);
+    const preference = await this.ensurePreference(userId);
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        membership: true,
+        goals: {
+          where: {
+            status: {
+              in: ["ACTIVE", "AT_RISK", "REPLANNING", "FAILED"]
+            }
+          },
+          include: {
+            dailyTasks: {
+              where: this.todayTaskWhere(now),
+              orderBy: { taskDate: "asc" }
+            },
+            milestones: {
+              where: this.todayMilestoneWhere(now),
+              orderBy: { targetDate: "asc" }
+            },
+            failureReport: true
+          }
+        }
+      }
+    });
+
+    if (!user) {
+      throw new NotFoundException("用户不存在");
+    }
+
+    if (!preference.enabled) {
+      return {
+        queued: [],
+        skipped: ["邮件提醒已关闭"]
+      };
+    }
+
+    const scheduledFor = this.getScheduledAt(preference.reminderTime, now);
+
+    if (scheduledFor > now) {
+      return {
+        queued: [],
+        skipped: ["尚未到达今日提醒时间"]
+      };
+    }
+
+    const reminderTypes = new Set(this.jsonStringArray(preference.reminderTypes));
+    const candidates = this.buildDueEmailCandidates(user, reminderTypes, preference, now);
+    const queued: EmailLog[] = [];
+    const skipped: string[] = [];
+
+    for (const candidate of candidates) {
+      const exists = await this.prisma.emailLog.findFirst({
+        where: {
+          userId,
+          goalId: candidate.goalId,
+          type: candidate.type,
+          scheduledFor: this.todayDateWhere(now)
+        },
+        select: { id: true }
+      });
+
+      if (exists) {
+        skipped.push(`${candidate.type} 已存在`);
+        continue;
+      }
+
+      queued.push(
+        await this.prisma.emailLog.create({
+          data: {
+            userId,
+            goalId: candidate.goalId,
+            type: candidate.type,
+            recipientEmail: user.email,
+            subject: candidate.subject,
+            content: candidate.content,
+            status: "QUEUED",
+            scheduledFor
+          }
+        })
+      );
+    }
+
+    return {
+      queued: queued.map((log) => this.serializeEmailLog(log)),
+      skipped
+    };
+  }
+
+  async processQueuedEmailLogs(userId: string, input: unknown = {}) {
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const now = this.parseNow(input);
+    const limitValue = Number(body.limit ?? 20);
+    const limit = Number.isInteger(limitValue)
+      ? Math.min(50, Math.max(1, limitValue))
+      : 20;
+    const simulateFailure = body.simulateFailure === true;
+    const queuedLogs = await this.prisma.emailLog.findMany({
+      where: {
+        userId,
+        status: "QUEUED",
+        scheduledFor: {
+          lte: now
+        }
+      },
+      orderBy: { scheduledFor: "asc" },
+      take: limit
+    });
+    const processed: EmailLog[] = [];
+
+    for (const log of queuedLogs) {
+      const shouldFail =
+        simulateFailure ||
+        log.recipientEmail.includes("+fail") ||
+        log.content.includes("[[mock-email-fail]]");
+      processed.push(
+        await this.prisma.emailLog.update({
+          where: { id: log.id },
+          data: shouldFail
+            ? {
+                status: "FAILED",
+                error: "Mock email provider failed",
+                sentAt: null
+              }
+            : {
+                status: "SENT",
+                error: null,
+                sentAt: now
+              }
+        })
+      );
+    }
+
+    return {
+      processed: processed.map((log) => this.serializeEmailLog(log)),
+      sent: processed.filter((log) => log.status === "SENT").length,
+      failed: processed.filter((log) => log.status === "FAILED").length
+    };
+  }
+
   private async ensurePreference(userId: string) {
     const existing = await this.prisma.notificationPreference.findUnique({
       where: { userId }
@@ -121,6 +263,156 @@ export class NotificationsService {
         timezone: "Asia/Shanghai"
       }
     });
+  }
+
+  private buildDueEmailCandidates(
+    user: NonNullable<
+      Awaited<
+        ReturnType<NotificationsService["getUserForReminderCandidates"]>
+      >
+    >,
+    reminderTypes: Set<string>,
+    preference: NotificationPreference,
+    now: Date
+  ) {
+    const candidates: Array<{
+      type: string;
+      goalId: string | null;
+      subject: string;
+      content: string;
+    }> = [];
+    const activeGoals = user.goals.filter((goal) =>
+      ["ACTIVE", "AT_RISK", "REPLANNING"].includes(goal.status)
+    );
+
+    for (const goal of activeGoals) {
+      const pendingTasks = goal.dailyTasks.filter((task) => task.status !== "DONE");
+      const doneTasks = goal.dailyTasks.filter((task) => task.status === "DONE");
+
+      if (reminderTypes.has("DAILY_TASK") && pendingTasks.length) {
+        candidates.push({
+          type: "DAILY_TASK",
+          goalId: goal.id,
+          subject: "今日任务提醒",
+          content: this.buildReminderContent(
+            "DAILY_TASK",
+            preference,
+            `目标「${goal.title}」今天还有 ${pendingTasks.length} 个任务待完成。`
+          )
+        });
+      }
+
+      if (
+        reminderTypes.has("MISSED_CHECKIN") &&
+        pendingTasks.length &&
+        doneTasks.length === 0
+      ) {
+        candidates.push({
+          type: "MISSED_CHECKIN",
+          goalId: goal.id,
+          subject: "今日尚未打卡提醒",
+          content: this.buildReminderContent(
+            "MISSED_CHECKIN",
+            preference,
+            `目标「${goal.title}」今天还没有完成记录，可先完成一个最小任务。`
+          )
+        });
+      }
+
+      if (
+        reminderTypes.has("TOLERANCE_RISK") &&
+        goal.toleranceDaysAllowed > 0 &&
+        goal.toleranceDaysUsed >= goal.toleranceDaysAllowed - 1
+      ) {
+        candidates.push({
+          type: "TOLERANCE_RISK",
+          goalId: goal.id,
+          subject: "容错次数即将耗尽",
+          content: this.buildReminderContent(
+            "TOLERANCE_RISK",
+            preference,
+            `目标「${goal.title}」已使用 ${goal.toleranceDaysUsed}/${goal.toleranceDaysAllowed} 次容错。`
+          )
+        });
+      }
+
+      if (reminderTypes.has("MILESTONE") && goal.milestones.length) {
+        candidates.push({
+          type: "MILESTONE",
+          goalId: goal.id,
+          subject: "阶段里程碑提醒",
+          content: this.buildReminderContent(
+            "MILESTONE",
+            preference,
+            `目标「${goal.title}」今天有 ${goal.milestones.length} 个阶段里程碑需要关注。`
+          )
+        });
+      }
+    }
+
+    for (const goal of user.goals.filter((goal) => goal.status === "FAILED")) {
+      if (reminderTypes.has("FAILURE_REVIEW") && goal.failureReport) {
+        candidates.push({
+          type: "FAILURE_REVIEW",
+          goalId: goal.id,
+          subject: "失败复盘提醒",
+          content: this.buildReminderContent(
+            "FAILURE_REVIEW",
+            preference,
+            `目标「${goal.title}」已有失败复盘，可根据建议重新开启一个更小的新目标。`
+          )
+        });
+      }
+    }
+
+    if (
+      reminderTypes.has("MEMBERSHIP_EXPIRY") &&
+      user.membership?.plan === "PRO" &&
+      user.membership.expiresAt
+    ) {
+      const daysUntilExpiry = Math.ceil(
+        (user.membership.expiresAt.getTime() - now.getTime()) / 86_400_000
+      );
+
+      if (daysUntilExpiry >= 0 && daysUntilExpiry <= 7) {
+        candidates.push({
+          type: "MEMBERSHIP_EXPIRY",
+          goalId: null,
+          subject: "会员到期提醒",
+          content: this.buildReminderContent(
+            "MEMBERSHIP_EXPIRY",
+            preference,
+            `PRO 会员将在 ${daysUntilExpiry} 天后到期。`
+          )
+        });
+      }
+    }
+
+    return candidates;
+  }
+
+  private getUserForReminderCandidates(userId: string) {
+    return this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        membership: true,
+        goals: {
+          include: {
+            dailyTasks: true,
+            milestones: true,
+            failureReport: true
+          }
+        }
+      }
+    });
+  }
+
+  private buildReminderContent(
+    type: string,
+    preference: NotificationPreference,
+    detail: string
+  ) {
+    return `${REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒"}：${detail} 当前提醒时间为北京时间 ${preference.reminderTime}。`;
   }
 
   private parsePreferencePayload(input: unknown) {
@@ -175,6 +467,51 @@ export class NotificationsService {
 
     const type = value.trim().toUpperCase();
     return type in REMINDER_TYPE_LABELS ? type : null;
+  }
+
+  private parseNow(input: unknown) {
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+
+    if (typeof body.now !== "string" || !body.now.trim()) {
+      return new Date();
+    }
+
+    const now = new Date(body.now);
+
+    if (Number.isNaN(now.getTime())) {
+      throw new BadRequestException("当前时间格式不正确");
+    }
+
+    return now;
+  }
+
+  private todayDateWhere(now: Date) {
+    const todayKey = this.toDateKey(now);
+    const start = new Date(`${todayKey}T00:00:00.000+08:00`);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 1);
+
+    return {
+      gte: start,
+      lt: end
+    };
+  }
+
+  private todayTaskWhere(now: Date) {
+    return {
+      taskDate: this.todayDateWhere(now)
+    };
+  }
+
+  private todayMilestoneWhere(now: Date) {
+    return {
+      targetDate: this.todayDateWhere(now)
+    };
+  }
+
+  private getScheduledAt(reminderTime: string, now: Date) {
+    const todayKey = this.toDateKey(now);
+    return new Date(`${todayKey}T${reminderTime}:00.000+08:00`);
   }
 
   private getNextScheduledAt(reminderTime: string) {
