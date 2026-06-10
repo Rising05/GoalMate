@@ -63,6 +63,40 @@ describe("AiJobsService requestGoalReplan integration", () => {
       BadRequestException
     );
   });
+
+  it("retries AI plan generation before succeeding", async () => {
+    const provider = new FlakyPlanProvider(2);
+    const service = new AiJobsService(prisma, provider);
+    const user = await createUser("retry-success");
+    const goal = await createDraftGoal(user.id, "重试成功目标");
+
+    const result = await service.generateGoalPlan(user.id, goal.id);
+
+    assert.equal(result.job.status, "SUCCEEDED");
+    assert.equal(result.job.attempts, 3);
+    assert.equal(provider.calls, 3);
+    assert.equal(result.goal.status, "WAITING_CONFIRMATION");
+    assert.ok(result.plan);
+  });
+
+  it("marks AI plan generation as failed after max retries", async () => {
+    const provider = new FlakyPlanProvider(3);
+    const service = new AiJobsService(prisma, provider);
+    const user = await createUser("retry-failed");
+    const goal = await createDraftGoal(user.id, "重试失败目标");
+
+    const result = await service.generateGoalPlan(user.id, goal.id);
+    const storedGoal = await prisma.goal.findUniqueOrThrow({
+      where: { id: goal.id }
+    });
+
+    assert.equal(result.job.status, "FAILED");
+    assert.equal(result.job.attempts, 3);
+    assert.equal(provider.calls, 3);
+    assert.equal(result.plan, null);
+    assert.equal(storedGoal.status, "GENERATION_FAILED");
+    assert.match(result.job.error ?? "", /模拟 AI 失败/);
+  });
 });
 
 async function cleanupTestUsers() {
@@ -76,16 +110,7 @@ async function cleanupTestUsers() {
 }
 
 async function createActiveGoalWithPlan(scenario: string) {
-  const suffix = `${scenario}-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2)}`;
-  const user = await prisma.user.create({
-    data: {
-      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
-      passwordHash: "test-password-hash",
-      displayName: `Replan ${scenario}`
-    }
-  });
+  const user = await createUser(scenario);
   const goal = await prisma.goal.create({
     data: {
       userId: user.id,
@@ -132,4 +157,52 @@ async function createActiveGoalWithPlan(scenario: string) {
   });
 
   return { user, goal };
+}
+
+async function createUser(scenario: string) {
+  const suffix = `${scenario}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+
+  return prisma.user.create({
+    data: {
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      passwordHash: "test-password-hash",
+      displayName: `Replan ${scenario}`
+    }
+  });
+}
+
+async function createDraftGoal(userId: string, title: string) {
+  return prisma.goal.create({
+    data: {
+      userId,
+      title,
+      description: "用于验证 AI 失败重试。",
+      category: "STUDY",
+      status: "DRAFT",
+      startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+      endDate: new Date("2026-06-24T00:00:00.000+08:00"),
+      toleranceDaysAllowed: 2,
+      dailyTimeBudgetMinutes: 45
+    }
+  });
+}
+
+class FlakyPlanProvider extends MockPlanProvider {
+  calls = 0;
+
+  constructor(private readonly failuresBeforeSuccess: number) {
+    super();
+  }
+
+  override generate(goal: Parameters<MockPlanProvider["generate"]>[0]) {
+    this.calls += 1;
+
+    if (this.calls <= this.failuresBeforeSuccess) {
+      throw new Error(`模拟 AI 失败 ${this.calls}`);
+    }
+
+    return super.generate(goal);
+  }
 }

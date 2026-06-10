@@ -620,6 +620,8 @@ export function App() {
     selectedActivityDay?.averageScore ??
     null;
   const selectedHeatmapLevel = selectedActivityDay?.level ?? 0;
+  const selectedHeatmapHealthScore = selectedActivityDay?.healthScore ?? 0;
+  const selectedHeatmapCompletionRate = selectedActivityDay?.completionRate ?? 0;
   const heatmapContributionCount = activityDays.reduce(
     (total, day) => total + day.completedTaskCount,
     0
@@ -2829,11 +2831,13 @@ export function App() {
                     </div>
                     <div className="activity-stats">
                       <span>{selectedHeatmapMinutes} 分钟投入</span>
+                      <span>完成 {selectedHeatmapCompletionRate}%</span>
                       <span>
                         {selectedHeatmapAverageScore !== null
                           ? `AI 评分 ${selectedHeatmapAverageScore}`
                           : "暂无评分"}
                       </span>
+                      <span>健康 {selectedHeatmapHealthScore}</span>
                       <span>强度 {selectedHeatmapLevel}</span>
                     </div>
                     <div className="activity-actions">

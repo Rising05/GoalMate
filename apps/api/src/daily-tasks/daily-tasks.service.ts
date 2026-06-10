@@ -131,7 +131,9 @@ export class DailyTasksService {
       string,
       {
         date: string;
+        totalTaskCount: number;
         completedTaskCount: number;
+        plannedMinutes: number;
         investedMinutes: number;
         scoreTotal: number;
         scoreCount: number;
@@ -145,7 +147,9 @@ export class DailyTasksService {
         days.get(date) ??
         {
           date,
+          totalTaskCount: 0,
           completedTaskCount: 0,
+          plannedMinutes: 0,
           investedMinutes: 0,
           scoreTotal: 0,
           scoreCount: 0,
@@ -153,6 +157,8 @@ export class DailyTasksService {
       };
       const completedCheckins = task.checkins.filter((checkin) => checkin.aiScore);
       const isCompleted = task.status === DONE_STATUS || completedCheckins.length > 0;
+      bucket.totalTaskCount += 1;
+      bucket.plannedMinutes += task.plannedMinutes ?? 0;
 
       if (isCompleted) {
         bucket.completedTaskCount += 1;
@@ -173,16 +179,33 @@ export class DailyTasksService {
 
     return {
       year,
-      days: Array.from(days.values()).map((day) => ({
-        date: day.date,
-        level: Math.min(4, day.completedTaskCount),
-        completedTaskCount: day.completedTaskCount,
-        investedMinutes: day.investedMinutes,
-        averageScore: day.scoreCount
+      days: Array.from(days.values()).map((day) => {
+        const averageScore = day.scoreCount
           ? Math.round(day.scoreTotal / day.scoreCount)
-          : null,
-        tasks: day.tasks
-      }))
+          : null;
+        const completionRate = day.totalTaskCount
+          ? Math.round((day.completedTaskCount / day.totalTaskCount) * 100)
+          : 0;
+        const healthScore = this.getActivityHealthScore({
+          completionRate,
+          averageScore,
+          investedMinutes: day.investedMinutes,
+          plannedMinutes: day.plannedMinutes
+        });
+
+        return {
+          date: day.date,
+          level: this.getActivityLevel(healthScore),
+          healthScore,
+          completionRate,
+          totalTaskCount: day.totalTaskCount,
+          completedTaskCount: day.completedTaskCount,
+          plannedMinutes: day.plannedMinutes,
+          investedMinutes: day.investedMinutes,
+          averageScore,
+          tasks: day.tasks
+        };
+      })
     };
   }
 
@@ -754,6 +777,52 @@ export class DailyTasksService {
         ? "后续复盘请直接写入关键证据，减少申诉成本。"
         : "如需复评，请补充更具体的产出、截图、数据或投入说明。"
     };
+  }
+
+  private getActivityHealthScore(input: {
+    completionRate: number;
+    averageScore: number | null;
+    investedMinutes: number;
+    plannedMinutes: number;
+  }) {
+    const scoreComponent = input.averageScore ?? (input.completionRate ? 70 : 0);
+    const timeRatio = input.plannedMinutes
+      ? Math.min(1.2, input.investedMinutes / input.plannedMinutes)
+      : input.investedMinutes > 0
+        ? 1
+        : 0;
+    const timeScore = Math.round(Math.min(100, timeRatio * 100));
+    const consistencyScore =
+      input.completionRate >= 100
+        ? 100
+        : input.completionRate >= 50
+          ? 72
+          : input.completionRate > 0
+            ? 45
+            : 0;
+
+    return Math.round(
+      input.completionRate * 0.35 +
+        scoreComponent * 0.3 +
+        timeScore * 0.2 +
+        consistencyScore * 0.15
+    );
+  }
+
+  private getActivityLevel(healthScore: number) {
+    if (healthScore >= 85) {
+      return 4;
+    }
+
+    if (healthScore >= 68) {
+      return 3;
+    }
+
+    if (healthScore >= 45) {
+      return 2;
+    }
+
+    return healthScore > 0 ? 1 : 0;
   }
 
   private getDateRange(dateKey: string) {

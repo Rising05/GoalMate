@@ -13,6 +13,7 @@ const GOAL_PLAN_REPLAN = "GOAL_PLAN_REPLAN";
 const ACTIVE_GOAL_STATUSES = ["ACTIVE", "AT_RISK", "REPLANNING"] as const;
 const FREE_ACTIVE_GOAL_LIMIT = 1;
 const PRO_ACTIVE_GOAL_LIMIT = 5;
+const MAX_AI_JOB_ATTEMPTS = 3;
 
 type PlanWithItems = Plan & {
   weeklyPlans: Array<WeeklyPlan & { dailyTasks: DailyTask[] }>;
@@ -65,17 +66,7 @@ export class AiJobsService {
         data: { status: "GENERATING_PLAN" }
       });
 
-      await this.prisma.aiJob.update({
-        where: { id: job.id },
-        data: {
-          status: "RUNNING",
-          attempts: {
-            increment: 1
-          }
-        }
-      });
-
-      const generatedPlan = this.mockPlanProvider.generate(goal);
+      const generatedPlan = await this.generatePlanWithRetry(job.id, goal);
       const plan = await this.persistGeneratedPlan(goal, generatedPlan);
       const succeededJob = await this.prisma.aiJob.update({
         where: { id: job.id },
@@ -173,17 +164,7 @@ export class AiJobsService {
     });
 
     try {
-      await this.prisma.aiJob.update({
-        where: { id: job.id },
-        data: {
-          status: "RUNNING",
-          attempts: {
-            increment: 1
-          }
-        }
-      });
-
-      const generatedPlan = this.mockPlanProvider.generate(updatedGoal);
+      const generatedPlan = await this.generatePlanWithRetry(job.id, updatedGoal);
       const plan = await this.persistGeneratedPlan(
         updatedGoal,
         generatedPlan,
@@ -332,6 +313,46 @@ export class AiJobsService {
       currentBaseline: currentBaseline || undefined,
       dailyTimeBudgetMinutes
     };
+  }
+
+  private async generatePlanWithRetry(jobId: string, goal: Goal) {
+    let lastError: unknown = null;
+
+    for (let attempt = 1; attempt <= MAX_AI_JOB_ATTEMPTS; attempt += 1) {
+      await this.prisma.aiJob.update({
+        where: { id: jobId },
+        data: {
+          status: attempt === 1 ? "RUNNING" : "RETRYING",
+          attempts: {
+            increment: 1
+          },
+          error:
+            attempt === 1
+              ? null
+              : lastError instanceof Error
+                ? lastError.message
+                : "AI 调用失败，正在重试"
+        }
+      });
+
+      try {
+        return this.mockPlanProvider.generate(goal);
+      } catch (error) {
+        lastError = error;
+
+        if (attempt < MAX_AI_JOB_ATTEMPTS) {
+          await this.prisma.aiJob.update({
+            where: { id: jobId },
+            data: {
+              status: "RETRYING",
+              error: error instanceof Error ? error.message : "AI 调用失败，正在重试"
+            }
+          });
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("AI 调用失败");
   }
 
   private cleanText(value: unknown, maxLength: number) {

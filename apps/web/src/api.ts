@@ -133,7 +133,11 @@ export interface ScoreAppeal {
 export interface ActivityDay {
   date: string;
   level: number;
+  healthScore: number;
+  completionRate: number;
+  totalTaskCount: number;
   completedTaskCount: number;
+  plannedMinutes: number;
   investedMinutes: number;
   averageScore: number | null;
   tasks: ActivityTask[];
