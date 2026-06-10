@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AdminModule } from "./admin/admin.module";
 import { AuthModule } from "./auth/auth.module";
 import { DailyTasksModule } from "./daily-tasks/daily-tasks.module";
 import { GoalsModule } from "./goals/goals.module";
@@ -14,7 +15,8 @@ import { RewardsModule } from "./rewards/rewards.module";
     GoalsModule,
     DailyTasksModule,
     RewardsModule,
-    NotificationsModule
+    NotificationsModule,
+    AdminModule
   ],
   controllers: [HealthController],
   providers: []

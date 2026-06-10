@@ -428,6 +428,163 @@ export interface EmailLog {
   updatedAt: string;
 }
 
+export interface AdminOverview {
+  admin: {
+    role: string;
+    status: string;
+  };
+  metrics: {
+    users: number;
+    activeGoals: number;
+    atRiskGoals: number;
+    failedAiJobs: number;
+    pendingAiJobs: number;
+    proMemberships: number;
+    queuedEmails: number;
+  };
+  recentAuditLogs: AdminAuditLog[];
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  displayName: string | null;
+  status: string;
+  createdAt: string;
+  membership: {
+    id: string;
+    userId: string;
+    plan: string;
+    status: string;
+    expiresAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+  adminRole: string | null;
+  counts: {
+    goals: number;
+    aiJobs: number;
+    emailLogs: number;
+  };
+}
+
+export interface AdminGoal {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userDisplayName: string | null;
+  title: string;
+  category: string;
+  status: string;
+  startDate: string;
+  endDate: string;
+  toleranceDaysAllowed: number;
+  toleranceDaysUsed: number;
+  createdAt: string;
+  updatedAt: string;
+  counts: {
+    dailyTasks: number;
+    checkins: number;
+    deviationEvents: number;
+    rewardCards: number;
+  };
+}
+
+export interface AdminAiJob {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userDisplayName: string | null;
+  goalId: string | null;
+  goalTitle: string | null;
+  goalStatus: string | null;
+  type: string;
+  status: string;
+  attempts: number;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminEmailLog extends Omit<EmailLog, "content"> {
+  userEmail: string;
+  userDisplayName: string | null;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  actorUserId: string;
+  actorEmail: string | null;
+  actorDisplayName: string | null;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  reason: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AdminSystemConfig {
+  id: string;
+  key: string;
+  value: unknown;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminRawContent {
+  user: {
+    id: string;
+    email: string;
+    displayName: string | null;
+    status: string;
+    createdAt: string;
+  };
+  goals: Array<{
+    id: string;
+    title: string;
+    description: string;
+    currentBaseline: string | null;
+    constraints: string | null;
+    finalReward: string | null;
+    status: string;
+    createdAt: string;
+    checkins: Array<{
+      id: string;
+      taskTitle: string | null;
+      content: string;
+      investedMinutes: number | null;
+      submittedAt: string;
+      aiScore: {
+        totalScore: number;
+        summary: string;
+        suggestion: string;
+        evidence: unknown;
+      } | null;
+    }>;
+    rewardCards: Array<{
+      id: string;
+      title: string;
+      description: string | null;
+      cardType: string;
+      sourceType: string;
+      imageUrl: string | null;
+      linkUrl: string | null;
+    }>;
+    deviationEvents: Array<{
+      id: string;
+      riskLevel: string;
+      primaryReasonCode: string | null;
+      primaryReasonLabel: string | null;
+      primaryReasonDetail: string | null;
+      reasons: unknown;
+      metrics: unknown;
+      detectedAt: string;
+    }>;
+  }>;
+}
+
 export interface CreateGoalInput {
   title?: string;
   description: string;
@@ -707,6 +864,195 @@ export async function createPreviewEmailLog(
   }
 
   return data as { log: EmailLog };
+}
+
+export async function fetchAdminOverview(token: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/overview`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<AdminOverview>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "后台概览加载失败"));
+  }
+
+  return data as AdminOverview;
+}
+
+export async function fetchAdminUsers(token: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/users`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ users: AdminUser[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "后台用户列表加载失败"));
+  }
+
+  return data as { users: AdminUser[] };
+}
+
+export async function fetchAdminGoals(token: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/goals`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ goals: AdminGoal[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "后台目标列表加载失败"));
+  }
+
+  return data as { goals: AdminGoal[] };
+}
+
+export async function fetchAdminAiJobs(token: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/ai-jobs`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ jobs: AdminAiJob[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "后台 AI 任务加载失败"));
+  }
+
+  return data as { jobs: AdminAiJob[] };
+}
+
+export async function fetchAdminEmailLogs(token: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/email-logs`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ logs: AdminEmailLog[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "后台邮件日志加载失败"));
+  }
+
+  return data as { logs: AdminEmailLog[] };
+}
+
+export async function updateAdminMembership(
+  token: string,
+  userId: string,
+  payload: {
+    plan: "FREE" | "PRO";
+    status: "ACTIVE" | "EXPIRED" | "MANUAL";
+    expiresAt?: string | null;
+    reason?: string;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/admin/users/${userId}/membership`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ membership: AdminUser["membership"] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "会员状态更新失败"));
+  }
+
+  return data as { membership: AdminUser["membership"] };
+}
+
+export async function fetchAdminRawContent(
+  token: string,
+  userId: string,
+  reason: string
+) {
+  const url = new URL(`${API_BASE_URL}/admin/users/${userId}/raw-content`);
+  url.searchParams.set("reason", reason);
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<AdminRawContent>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "敏感原文加载失败"));
+  }
+
+  return data as AdminRawContent;
+}
+
+export async function fetchAdminAuditLogs(token: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/audit-logs`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ logs: AdminAuditLog[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "审计日志加载失败"));
+  }
+
+  return data as { logs: AdminAuditLog[] };
+}
+
+export async function fetchAdminSystemConfigs(token: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/system-configs`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ configs: AdminSystemConfig[] }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "系统配置加载失败"));
+  }
+
+  return data as { configs: AdminSystemConfig[] };
+}
+
+export async function upsertAdminSystemConfig(
+  token: string,
+  payload: {
+    key: string;
+    value: unknown;
+    description?: string | null;
+    reason?: string;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/admin/system-configs`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ config: AdminSystemConfig }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "系统配置保存失败"));
+  }
+
+  return data as { config: AdminSystemConfig };
 }
 
 export async function generateRescueTask(token: string, goalId: string) {

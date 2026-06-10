@@ -1063,6 +1063,87 @@ textarea:focus {
   font-size: 0.84rem;
 }
 
+.admin-grid {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.admin-sections {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.admin-sections section {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-table-list,
+.admin-user-list,
+.raw-content-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-table-list article,
+.admin-user-list > div,
+.raw-content-preview {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.admin-table-list article,
+.admin-user-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-table-list article > div,
+.admin-user-list > div > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.admin-table-list strong,
+.admin-user-list strong,
+.raw-content-preview strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-table-list span,
+.admin-user-list span,
+.raw-content-preview span,
+.raw-content-preview p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.admin-user-list .ghost-button {
+  min-width: 86px;
+}
+
+.admin-config-list {
+  margin-top: 12px;
+}
+
 .notification-form,
 .reminder-type-list {
   display: grid;
@@ -2288,11 +2369,16 @@ button.heat-cell:disabled {
   }
 
   .content-grid,
-  .content-grid.compact {
+  .content-grid.compact,
+  .admin-grid {
     grid-template-columns: 1fr;
   }
 
   .dashboard-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2366,6 +2452,16 @@ button.heat-cell:disabled {
 
   .dashboard-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .admin-metric-grid,
+  .admin-table-list article,
+  .admin-user-list > div {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-user-list .ghost-button {
+    width: 100%;
   }
 
   .next-action-card .primary-button,

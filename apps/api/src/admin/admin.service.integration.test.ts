@@ -1,0 +1,330 @@
+import "reflect-metadata";
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "node:test";
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
+import { loadEnv } from "../config/load-env";
+import { PrismaService } from "../prisma/prisma.service";
+import { AdminService } from "./admin.service";
+
+loadEnv();
+
+const TEST_EMAIL_PREFIX = "admin-integration-";
+const TEST_CONFIG_KEY = "admin.integration.flag";
+
+const prisma = new PrismaService();
+const adminService = new AdminService(prisma);
+
+describe("AdminService integration", () => {
+  before(async () => {
+    await cleanupTestData();
+  });
+
+  after(async () => {
+    await cleanupTestData();
+    await prisma.$disconnect();
+  });
+
+  it("rejects users without an active admin profile", async () => {
+    const { user } = await createUser("forbidden");
+
+    await assert.rejects(
+      () => adminService.getOverview(user.id),
+      ForbiddenException
+    );
+  });
+
+  it("lists users, goals, AI jobs, and email logs for an admin", async () => {
+    const { user: admin } = await createUser("operator");
+    const { user: member, goal } = await createUserWithOperationalData("lists");
+
+    await prisma.adminUser.create({
+      data: {
+        userId: admin.id,
+        role: "OPERATOR",
+        status: "ACTIVE"
+      }
+    });
+
+    const overview = await adminService.getOverview(admin.id);
+    const users = await adminService.listUsers(admin.id);
+    const goals = await adminService.listGoals(admin.id);
+    const aiJobs = await adminService.listAiJobs(admin.id);
+    const emailLogs = await adminService.listEmailLogs(admin.id);
+
+    assert.equal(overview.admin.role, "OPERATOR");
+    assert.ok(overview.metrics.users >= 2);
+    assert.ok(users.users.some((item) => item.id === member.id));
+    assert.ok(goals.goals.some((item) => item.id === goal.id));
+    assert.ok(aiJobs.jobs.some((item) => item.goalId === goal.id));
+    assert.ok(emailLogs.logs.some((item) => item.goalId === goal.id));
+  });
+
+  it("manually opens a membership and writes an audit log", async () => {
+    const { user: admin } = await createUser("membership-admin");
+    const { user: member } = await createUser("membership-member");
+
+    await prisma.adminUser.create({
+      data: {
+        userId: admin.id,
+        role: "OPERATOR",
+        status: "ACTIVE"
+      }
+    });
+
+    const result = await adminService.updateMembership(admin.id, member.id, {
+      plan: "PRO",
+      status: "MANUAL",
+      reason: "用户线下付费后手动开通"
+    });
+    const auditLogs = await adminService.listAuditLogs(admin.id);
+
+    assert.equal(result.membership.userId, member.id);
+    assert.equal(result.membership.plan, "PRO");
+    assert.equal(result.membership.status, "MANUAL");
+    assert.ok(
+      auditLogs.logs.some(
+        (log) =>
+          log.action === "MEMBERSHIP_UPDATE" &&
+          log.targetId === member.id &&
+          log.reason === "用户线下付费后手动开通"
+      )
+    );
+  });
+
+  it("requires super-admin access and a reason before returning raw content", async () => {
+    const { user: operator } = await createUser("raw-operator");
+    const { user: superAdmin } = await createUser("raw-super");
+    const { user: member, goal } = await createUserWithOperationalData("raw-member");
+
+    await prisma.adminUser.createMany({
+      data: [
+        {
+          userId: operator.id,
+          role: "OPERATOR",
+          status: "ACTIVE"
+        },
+        {
+          userId: superAdmin.id,
+          role: "SUPER_ADMIN",
+          status: "ACTIVE"
+        }
+      ]
+    });
+
+    await assert.rejects(
+      () =>
+        adminService.getRawUserContent(
+          operator.id,
+          member.id,
+          "排查用户反馈中的 AI 评分争议"
+        ),
+      ForbiddenException
+    );
+    await assert.rejects(
+      () => adminService.getRawUserContent(superAdmin.id, member.id, "太短"),
+      BadRequestException
+    );
+
+    const rawContent = await adminService.getRawUserContent(
+      superAdmin.id,
+      member.id,
+      "排查用户反馈中的 AI 评分争议"
+    );
+    const auditLogs = await adminService.listAuditLogs(superAdmin.id);
+
+    assert.equal(rawContent.user.id, member.id);
+    assert.ok(rawContent.goals.some((item) => item.id === goal.id));
+    assert.ok(
+      auditLogs.logs.some(
+        (log) =>
+          log.action === "RAW_USER_CONTENT_VIEW" &&
+          log.targetId === member.id &&
+          log.reason === "排查用户反馈中的 AI 评分争议"
+      )
+    );
+  });
+
+  it("lets a super-admin upsert system config with audit logging", async () => {
+    const { user: superAdmin } = await createUser("config-super");
+
+    await prisma.adminUser.create({
+      data: {
+        userId: superAdmin.id,
+        role: "SUPER_ADMIN",
+        status: "ACTIVE"
+      }
+    });
+
+    const result = await adminService.upsertSystemConfig(superAdmin.id, {
+      key: TEST_CONFIG_KEY,
+      value: {
+        enabled: true,
+        threshold: 3
+      },
+      description: "后台集成测试配置",
+      reason: "验证系统配置管理"
+    });
+    const configs = await adminService.listSystemConfigs(superAdmin.id);
+    const auditLogs = await adminService.listAuditLogs(superAdmin.id);
+
+    assert.equal(result.config.key, TEST_CONFIG_KEY);
+    assert.deepEqual(result.config.value, {
+      enabled: true,
+      threshold: 3
+    });
+    assert.ok(configs.configs.some((config) => config.key === TEST_CONFIG_KEY));
+    assert.ok(
+      auditLogs.logs.some(
+        (log) =>
+          log.action === "SYSTEM_CONFIG_UPSERT" &&
+          log.targetId === TEST_CONFIG_KEY
+      )
+    );
+  });
+});
+
+async function cleanupTestData() {
+  await prisma.systemConfig.deleteMany({
+    where: {
+      key: TEST_CONFIG_KEY
+    }
+  });
+  await prisma.user.deleteMany({
+    where: {
+      email: {
+        startsWith: TEST_EMAIL_PREFIX
+      }
+    }
+  });
+}
+
+async function createUser(scenario: string) {
+  const suffix = `${scenario}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  const user = await prisma.user.create({
+    data: {
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      passwordHash: "test-password-hash",
+      displayName: `Admin ${scenario}`
+    }
+  });
+
+  return { user };
+}
+
+async function createUserWithOperationalData(scenario: string) {
+  const { user } = await createUser(scenario);
+  const goal = await prisma.goal.create({
+    data: {
+      userId: user.id,
+      title: `后台目标 ${scenario}`,
+      description: "用于验证后台目标列表和敏感原文查看。",
+      category: "STUDY",
+      status: "AT_RISK",
+      startDate: new Date("2026-06-01T00:00:00.000+08:00"),
+      endDate: new Date("2026-06-30T00:00:00.000+08:00"),
+      toleranceDaysAllowed: 2,
+      dailyTimeBudgetMinutes: 30,
+      currentBaseline: "当前基础原文",
+      constraints: "限制条件原文",
+      finalReward: "最终奖励原文"
+    }
+  });
+  const task = await prisma.dailyTask.create({
+    data: {
+      goalId: goal.id,
+      taskDate: new Date("2026-06-10T00:00:00.000+08:00"),
+      title: "后台任务",
+      description: "用于后台统计。",
+      plannedMinutes: 30,
+      status: "DONE"
+    }
+  });
+  const checkin = await prisma.checkin.create({
+    data: {
+      userId: user.id,
+      goalId: goal.id,
+      dailyTaskId: task.id,
+      status: "SCORED",
+      content: "用户完成记录原文。",
+      investedMinutes: 28,
+      submittedAt: new Date("2026-06-10T20:00:00.000+08:00")
+    }
+  });
+
+  await prisma.aiScore.create({
+    data: {
+      checkinId: checkin.id,
+      totalScore: 88,
+      dimensions: {
+        completion: 88
+      },
+      evidence: {
+        source: "admin-test"
+      },
+      summary: "完成质量稳定。",
+      suggestion: "继续保持。"
+    }
+  });
+  await prisma.deviationEvent.create({
+    data: {
+      goalId: goal.id,
+      sourceDailyTaskId: task.id,
+      riskLevel: "warning",
+      primaryReasonCode: "LOW_INVESTMENT",
+      primaryReasonLabel: "投入不足",
+      primaryReasonDetail: "近几天投入低于计划。",
+      reasons: [
+        {
+          code: "LOW_INVESTMENT",
+          level: "warning",
+          label: "投入不足",
+          detail: "近几天投入低于计划。"
+        }
+      ],
+      metrics: {
+        recentInvestedMinutes: 30,
+        expectedRecentMinutes: 90
+      }
+    }
+  });
+  await prisma.rewardCard.create({
+    data: {
+      goalId: goal.id,
+      title: "后台奖励",
+      description: "奖励卡片原文",
+      cardType: "TEXT",
+      sourceType: "CUSTOM"
+    }
+  });
+  await prisma.aiJob.create({
+    data: {
+      userId: user.id,
+      goalId: goal.id,
+      type: "SCORE_CHECKIN",
+      status: "SUCCEEDED",
+      attempts: 1,
+      payload: {
+        checkinId: checkin.id
+      },
+      result: {
+        score: 88
+      }
+    }
+  });
+  await prisma.emailLog.create({
+    data: {
+      userId: user.id,
+      goalId: goal.id,
+      type: "DAILY_TASK",
+      recipientEmail: user.email,
+      subject: "后台邮件日志",
+      content: "提醒内容",
+      status: "QUEUED",
+      scheduledFor: new Date("2026-06-11T09:00:00.000+08:00")
+    }
+  });
+
+  return { user, goal };
+}

@@ -79,8 +79,53 @@ model User {
   notificationPreference NotificationPreference?
   emailLogs   EmailLog[]
   scoreAppeals ScoreAppeal[]
+  adminProfile AdminUser?
+  auditLogs AuditLog[]
 
   @@map("users")
+}
+
+model AdminUser {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  role      String   @default("OPERATOR")
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([role, status])
+  @@map("admin_users")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String
+  action      String
+  targetType  String
+  targetId    String?
+  reason      String?  @db.Text
+  metadata    Json
+  createdAt   DateTime @default(now())
+
+  actor User @relation(fields: [actorUserId], references: [id], onDelete: Cascade)
+
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_configs")
 }
 
 model NotificationPreference {

@@ -19,6 +19,14 @@ import { AuthPanel } from "./AuthPanel";
 import {
   AuthResponse,
   ActivityDay,
+  AdminAiJob,
+  AdminAuditLog,
+  AdminEmailLog,
+  AdminGoal,
+  AdminOverview,
+  AdminRawContent,
+  AdminSystemConfig,
+  AdminUser,
   AiJob,
   EmailLog,
   FailureReport,
@@ -42,6 +50,14 @@ import {
   createRewardCard,
   createGoal,
   deleteRewardCard,
+  fetchAdminAiJobs,
+  fetchAdminAuditLogs,
+  fetchAdminEmailLogs,
+  fetchAdminGoals,
+  fetchAdminOverview,
+  fetchAdminRawContent,
+  fetchAdminSystemConfigs,
+  fetchAdminUsers,
   fetchEmailLogs,
   fetchFailureReport,
   fetchGoalPlan,
@@ -56,8 +72,10 @@ import {
   listGoals,
   restartGoal,
   settleGoal,
+  updateAdminMembership,
   updateNotificationPreference,
-  updateRewardCard
+  updateRewardCard,
+  upsertAdminSystemConfig
 } from "./api";
 
 type PageId =
@@ -69,7 +87,8 @@ type PageId =
   | "timeline"
   | "rewards"
   | "failure"
-  | "account";
+  | "account"
+  | "admin";
 
 interface NavItem {
   id: PageId;
@@ -132,6 +151,12 @@ const navItems: NavItem[] = [
     label: "账号",
     description: "Account",
     icon: UserCircle
+  },
+  {
+    id: "admin",
+    label: "后台管理",
+    description: "Operations",
+    icon: ShieldCheck
   }
 ];
 
@@ -473,12 +498,24 @@ export function App() {
   const [notificationPreference, setNotificationPreference] =
     useState<NotificationPreference | null>(null);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
+  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminGoals, setAdminGoals] = useState<AdminGoal[]>([]);
+  const [adminAiJobs, setAdminAiJobs] = useState<AdminAiJob[]>([]);
+  const [adminEmailLogs, setAdminEmailLogs] = useState<AdminEmailLog[]>([]);
+  const [adminAuditLogs, setAdminAuditLogs] = useState<AdminAuditLog[]>([]);
+  const [adminSystemConfigs, setAdminSystemConfigs] = useState<
+    AdminSystemConfig[]
+  >([]);
+  const [adminRawContent, setAdminRawContent] =
+    useState<AdminRawContent | null>(null);
   const [dailyTaskMessage, setDailyTaskMessage] = useState("登录后可查看今日任务。");
   const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
   const [rewardMessage, setRewardMessage] = useState("选择目标后可维护奖励愿景板。");
   const [failureMessage, setFailureMessage] = useState("选择失败目标后可查看失败复盘。");
   const [notificationMessage, setNotificationMessage] =
     useState("登录后可设置邮件提醒。");
+  const [adminMessage, setAdminMessage] = useState("管理员账号登录后可查看后台。");
   const [isLoadingDailyTasks, setIsLoadingDailyTasks] = useState(false);
   const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
   const [isLoadingRewards, setIsLoadingRewards] = useState(false);
@@ -487,6 +524,10 @@ export function App() {
   const [isRestartingGoal, setIsRestartingGoal] = useState(false);
   const [isSavingNotificationPreference, setIsSavingNotificationPreference] =
     useState(false);
+  const [isLoadingAdmin, setIsLoadingAdmin] = useState(false);
+  const [isSavingAdminConfig, setIsSavingAdminConfig] = useState(false);
+  const [adminMembershipUpdatingUserId, setAdminMembershipUpdatingUserId] =
+    useState<string | null>(null);
   const [isGeneratingRescueTask, setIsGeneratingRescueTask] = useState(false);
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
     toDateKey(new Date())
@@ -512,6 +553,16 @@ export function App() {
     cardType: "TEXT" as RewardCard["cardType"],
     imageUrl: "",
     linkUrl: ""
+  });
+  const [adminRawForm, setAdminRawForm] = useState({
+    userId: "",
+    reason: ""
+  });
+  const [adminConfigForm, setAdminConfigForm] = useState({
+    key: "mvp.feature_flag",
+    value: "{\n  \"enabled\": true\n}",
+    description: "MVP 后台配置",
+    reason: "后台配置管理"
   });
   const [completionResult, setCompletionResult] = useState<{
     task: TodayDailyTask;
@@ -666,11 +717,20 @@ export function App() {
       setFailureReport(null);
       setNotificationPreference(null);
       setEmailLogs([]);
+      setAdminOverview(null);
+      setAdminUsers([]);
+      setAdminGoals([]);
+      setAdminAiJobs([]);
+      setAdminEmailLogs([]);
+      setAdminAuditLogs([]);
+      setAdminSystemConfigs([]);
+      setAdminRawContent(null);
       setDailyTaskMessage("登录后可查看今日任务。");
       setTimelineMessage("登录后可查看成长时间线。");
       setRewardMessage("登录后可维护奖励愿景板。");
       setFailureMessage("登录后可查看失败复盘。");
       setNotificationMessage("登录后可设置邮件提醒。");
+      setAdminMessage("管理员账号登录后可查看后台。");
       return;
     }
 
@@ -709,6 +769,14 @@ export function App() {
     }
 
     void loadNotificationSettings(session.token);
+  }, [activePage, session]);
+
+  useEffect(() => {
+    if (!session || activePage !== "admin") {
+      return;
+    }
+
+    void loadAdminDashboard(session.token);
   }, [activePage, session]);
 
   useEffect(() => {
@@ -1489,6 +1557,151 @@ export function App() {
       setNotificationMessage(
         error instanceof Error ? error.message : "提醒预览创建失败"
       );
+    }
+  }
+
+  async function loadAdminDashboard(token = session?.token) {
+    if (!token) {
+      setAdminMessage("管理员账号登录后可查看后台。");
+      return;
+    }
+
+    setIsLoadingAdmin(true);
+
+    try {
+      const [
+        overview,
+        usersResponse,
+        goalsResponse,
+        jobsResponse,
+        logsResponse,
+        auditResponse,
+        configsResponse
+      ] = await Promise.all([
+        fetchAdminOverview(token),
+        fetchAdminUsers(token),
+        fetchAdminGoals(token),
+        fetchAdminAiJobs(token),
+        fetchAdminEmailLogs(token),
+        fetchAdminAuditLogs(token),
+        fetchAdminSystemConfigs(token)
+      ]);
+
+      setAdminOverview(overview);
+      setAdminUsers(usersResponse.users);
+      setAdminGoals(goalsResponse.goals);
+      setAdminAiJobs(jobsResponse.jobs);
+      setAdminEmailLogs(logsResponse.logs);
+      setAdminAuditLogs(auditResponse.logs);
+      setAdminSystemConfigs(configsResponse.configs);
+      setAdminMessage("后台数据已加载。");
+      setAdminRawForm((current) => ({
+        ...current,
+        userId: current.userId || usersResponse.users[0]?.id || ""
+      }));
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "后台数据加载失败");
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  }
+
+  async function handleOpenProMembership(userId: string) {
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    setAdminMembershipUpdatingUserId(userId);
+
+    try {
+      await updateAdminMembership(session.token, userId, {
+        plan: "PRO",
+        status: "MANUAL",
+        reason: "后台手动开通 PRO 会员"
+      });
+      await loadAdminDashboard(session.token);
+      setAdminMessage("会员已手动开通为 PRO。");
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "会员状态更新失败");
+    } finally {
+      setAdminMembershipUpdatingUserId(null);
+    }
+  }
+
+  async function handleLoadAdminRawContent() {
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    const reason = adminRawForm.reason.trim();
+
+    if (!adminRawForm.userId || reason.length < 6) {
+      setAdminMessage("请选择用户并填写至少 6 个字符的查看原因。");
+      return;
+    }
+
+    try {
+      const rawContent = await fetchAdminRawContent(
+        session.token,
+        adminRawForm.userId,
+        reason
+      );
+      const auditResponse = await fetchAdminAuditLogs(session.token);
+      setAdminRawContent(rawContent);
+      setAdminAuditLogs(auditResponse.logs);
+      setAdminMessage("敏感原文已加载，并已写入审计日志。");
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "敏感原文加载失败");
+    }
+  }
+
+  function updateAdminConfigField(
+    field: keyof typeof adminConfigForm,
+    value: string
+  ) {
+    setAdminConfigForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  async function handleSaveAdminConfig() {
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    let parsedValue: unknown;
+
+    try {
+      parsedValue = JSON.parse(adminConfigForm.value);
+    } catch {
+      setAdminMessage("系统配置值必须是合法 JSON。");
+      return;
+    }
+
+    setIsSavingAdminConfig(true);
+
+    try {
+      await upsertAdminSystemConfig(session.token, {
+        key: adminConfigForm.key,
+        value: parsedValue,
+        description: adminConfigForm.description || null,
+        reason: adminConfigForm.reason
+      });
+      const [configsResponse, auditResponse] = await Promise.all([
+        fetchAdminSystemConfigs(session.token),
+        fetchAdminAuditLogs(session.token)
+      ]);
+      setAdminSystemConfigs(configsResponse.configs);
+      setAdminAuditLogs(auditResponse.logs);
+      setAdminMessage("系统配置已保存，并已写入审计日志。");
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "系统配置保存失败");
+    } finally {
+      setIsSavingAdminConfig(false);
     }
   }
 
@@ -3203,6 +3416,322 @@ export function App() {
                   </div>
                 ) : (
                   <p className="muted-text">暂无邮件日志。</p>
+                )}
+              </section>
+            </aside>
+          </div>
+        );
+      case "admin":
+        return (
+          <div className="content-grid admin-grid">
+            <section className="panel main-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Operations</p>
+                  <h1>后台管理</h1>
+                </div>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={!session || isLoadingAdmin}
+                  onClick={() => void loadAdminDashboard()}
+                >
+                  {isLoadingAdmin ? "加载中" : "刷新"}
+                  <ShieldCheck size={16} aria-hidden="true" />
+                </button>
+              </div>
+              <p className="form-message">{adminMessage}</p>
+
+              {adminOverview ? (
+                <div className="admin-sections">
+                  <section>
+                    <p className="eyebrow">Summary</p>
+                    <div className="metric-grid admin-metric-grid">
+                      {[
+                        ["用户", adminOverview.metrics.users],
+                        ["活跃目标", adminOverview.metrics.activeGoals],
+                        ["风险目标", adminOverview.metrics.atRiskGoals],
+                        ["失败 AI 任务", adminOverview.metrics.failedAiJobs],
+                        ["排队 AI 任务", adminOverview.metrics.pendingAiJobs],
+                        ["PRO 会员", adminOverview.metrics.proMemberships],
+                        ["待发邮件", adminOverview.metrics.queuedEmails],
+                        ["后台角色", adminOverview.admin.role]
+                      ].map(([label, value]) => (
+                        <div className="metric-card" key={label}>
+                          <span>{label}</span>
+                          <strong>{value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section>
+                    <p className="eyebrow">Goals</p>
+                    <h2>目标状态</h2>
+                    {adminGoals.length ? (
+                      <div className="admin-table-list">
+                        {adminGoals.slice(0, 8).map((goal) => (
+                          <article key={goal.id}>
+                            <div>
+                              <strong>{goal.title}</strong>
+                              <span>
+                                {goal.userEmail} ·{" "}
+                                {goalStatusLabels[goal.status] ?? goal.status}
+                              </span>
+                            </div>
+                            <span>
+                              任务 {goal.counts.dailyTasks} · 打卡{" "}
+                              {goal.counts.checkins} · 偏差{" "}
+                              {goal.counts.deviationEvents}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">暂无目标数据。</p>
+                    )}
+                  </section>
+
+                  <section>
+                    <p className="eyebrow">AI jobs</p>
+                    <h2>异步任务</h2>
+                    {adminAiJobs.length ? (
+                      <div className="admin-table-list">
+                        {adminAiJobs.slice(0, 8).map((job) => (
+                          <article key={job.id}>
+                            <div>
+                              <strong>{job.type}</strong>
+                              <span>
+                                {job.userEmail}
+                                {job.goalTitle ? ` · ${job.goalTitle}` : ""}
+                              </span>
+                            </div>
+                            <span>
+                              {job.status} · {job.attempts} 次
+                              {job.error ? ` · ${job.error}` : ""}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">暂无 AI 任务。</p>
+                    )}
+                  </section>
+
+                  <section>
+                    <p className="eyebrow">Email</p>
+                    <h2>邮件提醒日志</h2>
+                    {adminEmailLogs.length ? (
+                      <div className="admin-table-list">
+                        {adminEmailLogs.slice(0, 8).map((log) => (
+                          <article key={log.id}>
+                            <div>
+                              <strong>{log.subject}</strong>
+                              <span>{log.recipientEmail}</span>
+                            </div>
+                            <span>
+                              {log.type} · {log.status} ·{" "}
+                              {formatDateTime(log.createdAt)}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">暂无邮件日志。</p>
+                    )}
+                  </section>
+
+                  <section>
+                    <p className="eyebrow">Audit</p>
+                    <h2>审计日志</h2>
+                    {adminAuditLogs.length ? (
+                      <div className="admin-table-list">
+                        {adminAuditLogs.slice(0, 8).map((log) => (
+                          <article key={log.id}>
+                            <div>
+                              <strong>{log.action}</strong>
+                              <span>
+                                {log.actorEmail ?? "未知管理员"} ·{" "}
+                                {formatDateTime(log.createdAt)}
+                              </span>
+                            </div>
+                            <span>
+                              {log.targetType}
+                              {log.targetId ? ` · ${log.targetId}` : ""}
+                              {log.reason ? ` · ${log.reason}` : ""}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted-text">暂无审计日志。</p>
+                    )}
+                  </section>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <ShieldCheck size={24} aria-hidden="true" />
+                  <h2>{isLoadingAdmin ? "正在加载后台" : "暂无后台数据"}</h2>
+                  <p>当前登录账号需要存在有效管理员身份才能访问后台接口。</p>
+                </div>
+              )}
+            </section>
+
+            <aside className="stack">
+              <section className="panel">
+                <p className="eyebrow">Users</p>
+                <h2>用户与会员</h2>
+                {adminUsers.length ? (
+                  <div className="admin-user-list">
+                    {adminUsers.slice(0, 8).map((user) => (
+                      <div key={user.id}>
+                        <div>
+                          <strong>{user.displayName ?? user.email}</strong>
+                          <span>
+                            {user.membership?.plan ?? "FREE"} ·{" "}
+                            {user.membership?.status ?? "未开通"} · 目标{" "}
+                            {user.counts.goals}
+                          </span>
+                        </div>
+                        <button
+                          className="ghost-button"
+                          type="button"
+                          disabled={
+                            adminMembershipUpdatingUserId === user.id ||
+                            user.membership?.plan === "PRO"
+                          }
+                          onClick={() => void handleOpenProMembership(user.id)}
+                        >
+                          开通 PRO
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-text">暂无用户数据。</p>
+                )}
+              </section>
+
+              <section className="panel">
+                <p className="eyebrow">Raw view</p>
+                <h2>敏感原文查看</h2>
+                <div className="form-stack">
+                  <label>
+                    <span>目标用户</span>
+                    <select
+                      value={adminRawForm.userId}
+                      onChange={(event) =>
+                        setAdminRawForm((current) => ({
+                          ...current,
+                          userId: event.target.value
+                        }))
+                      }
+                    >
+                      <option value="">选择用户</option>
+                      {adminUsers.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.email}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>查看原因</span>
+                    <textarea
+                      rows={3}
+                      value={adminRawForm.reason}
+                      onChange={(event) =>
+                        setAdminRawForm((current) => ({
+                          ...current,
+                          reason: event.target.value
+                        }))
+                      }
+                      placeholder="例如：排查用户反馈中的评分争议"
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={!session}
+                    onClick={() => void handleLoadAdminRawContent()}
+                  >
+                    查看并审计
+                    <ShieldCheck size={16} aria-hidden="true" />
+                  </button>
+                </div>
+                {adminRawContent ? (
+                  <div className="raw-content-preview">
+                    <strong>{adminRawContent.user.email}</strong>
+                    <span>{adminRawContent.goals.length} 个目标原文已加载</span>
+                    {adminRawContent.goals.slice(0, 2).map((goal) => (
+                      <p key={goal.id}>{goal.title}：{goal.description}</p>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="panel">
+                <p className="eyebrow">Config</p>
+                <h2>系统配置</h2>
+                <div className="form-stack">
+                  <label>
+                    <span>键名</span>
+                    <input
+                      value={adminConfigForm.key}
+                      onChange={(event) =>
+                        updateAdminConfigField("key", event.target.value)
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>JSON 值</span>
+                    <textarea
+                      rows={5}
+                      value={adminConfigForm.value}
+                      onChange={(event) =>
+                        updateAdminConfigField("value", event.target.value)
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>说明</span>
+                    <input
+                      value={adminConfigForm.description}
+                      onChange={(event) =>
+                        updateAdminConfigField("description", event.target.value)
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>变更原因</span>
+                    <input
+                      value={adminConfigForm.reason}
+                      onChange={(event) =>
+                        updateAdminConfigField("reason", event.target.value)
+                      }
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={!session || isSavingAdminConfig}
+                    onClick={() => void handleSaveAdminConfig()}
+                  >
+                    {isSavingAdminConfig ? "保存中" : "保存配置"}
+                    <CheckCircle2 size={16} aria-hidden="true" />
+                  </button>
+                </div>
+                {adminSystemConfigs.length ? (
+                  <div className="settings-list admin-config-list">
+                    {adminSystemConfigs.slice(0, 4).map((config) => (
+                      <div key={config.id}>
+                        <span>{config.key}</span>
+                        <strong>{config.description ?? "无说明"}</strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-text">暂无系统配置。</p>
                 )}
               </section>
             </aside>
