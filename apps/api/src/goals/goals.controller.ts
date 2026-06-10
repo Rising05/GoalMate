@@ -82,6 +82,15 @@ export class GoalsController {
     return this.aiJobsService.generateGoalPlan(request.user!.id, id);
   }
 
+  @Post(":id/request-replan")
+  requestReplan(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: unknown
+  ) {
+    return this.aiJobsService.requestGoalReplan(request.user!.id, id, body);
+  }
+
   @Post(":id/confirm-plan")
   confirmPlan(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.aiJobsService.confirmGoalPlan(request.user!.id, id);

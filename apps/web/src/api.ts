@@ -677,6 +677,36 @@ export async function generateGoalPlan(token: string, goalId: string) {
   return data as { job: AiJob; goal: Goal; plan: GoalPlan | null };
 }
 
+export async function requestGoalReplan(
+  token: string,
+  goalId: string,
+  payload: {
+    adjustmentReason: string;
+    constraints?: string;
+    currentBaseline?: string;
+    dailyTimeBudgetMinutes?: number;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/request-replan`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ job: AiJob; goal: Goal; plan: GoalPlan | null }>(
+    response
+  );
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "计划调整失败"));
+  }
+
+  return data as { job: AiJob; goal: Goal; plan: GoalPlan | null };
+}
+
 export async function confirmGoalPlan(token: string, goalId: string) {
   const response = await fetch(`${API_BASE_URL}/goals/${goalId}/confirm-plan`, {
     method: "POST",

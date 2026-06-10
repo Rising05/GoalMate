@@ -72,6 +72,7 @@ import {
   generateRescueTask,
   listGoals,
   processQueuedEmailLogs,
+  requestGoalReplan,
   restartGoal,
   settleGoal,
   updateAdminMembership,
@@ -484,11 +485,18 @@ export function App() {
     constraints: "",
     finalReward: ""
   });
+  const [replanForm, setReplanForm] = useState({
+    adjustmentReason: "",
+    dailyTimeBudgetMinutes: "",
+    constraints: "",
+    currentBaseline: ""
+  });
   const [goalMessage, setGoalMessage] = useState("登录后可保存目标草稿。");
   const [planMessage, setPlanMessage] = useState("保存目标后可生成 AI 计划。");
   const [isCreatingGoal, setIsCreatingGoal] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [isConfirmingPlan, setIsConfirmingPlan] = useState(false);
+  const [isRequestingReplan, setIsRequestingReplan] = useState(false);
   const [isLoadingPlan, setIsLoadingPlan] = useState(false);
   const [todayTasks, setTodayTasks] = useState<TodayDailyTask[]>([]);
   const [activityDays, setActivityDays] = useState<ActivityDay[]>([]);
@@ -1243,6 +1251,13 @@ export function App() {
     }));
   }
 
+  function updateReplanField(field: keyof typeof replanForm, value: string) {
+    setReplanForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
   async function handleCreateGoal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1321,6 +1336,61 @@ export function App() {
       setPlanMessage(error instanceof Error ? error.message : "AI 计划生成失败");
     } finally {
       setIsGeneratingPlan(false);
+    }
+  }
+
+  async function handleRequestReplan(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const targetGoal = selectedGoal ?? createdGoal;
+
+    if (!session || !targetGoal) {
+      setPlanMessage("请先登录并选择执行中的目标。");
+      return;
+    }
+
+    if (replanForm.adjustmentReason.trim().length < 8) {
+      setPlanMessage("请写清楚为什么需要调整计划。");
+      return;
+    }
+
+    setIsRequestingReplan(true);
+    setPlanMessage("正在重新评估并生成调整计划...");
+
+    try {
+      const response = await requestGoalReplan(session.token, targetGoal.id, {
+        adjustmentReason: replanForm.adjustmentReason,
+        constraints: replanForm.constraints || undefined,
+        currentBaseline: replanForm.currentBaseline || undefined,
+        dailyTimeBudgetMinutes: replanForm.dailyTimeBudgetMinutes
+          ? Number(replanForm.dailyTimeBudgetMinutes)
+          : undefined
+      });
+
+      setCreatedGoal(response.goal);
+      setGeneratedPlan(response.plan);
+      setSelectedGoalId(response.goal.id);
+      setGoals((current) =>
+        current.some((goal) => goal.id === response.goal.id)
+          ? current.map((goal) => (goal.id === response.goal.id ? response.goal : goal))
+          : [response.goal, ...current]
+      );
+      setPlanMessage(
+        response.plan
+          ? `调整计划已生成，版本 ${response.plan.version}，确认后恢复执行。`
+          : response.job.error ?? "计划调整失败"
+      );
+      setReplanForm({
+        adjustmentReason: "",
+        dailyTimeBudgetMinutes: "",
+        constraints: "",
+        currentBaseline: ""
+      });
+      setActivePage("plan");
+    } catch (error) {
+      setPlanMessage(error instanceof Error ? error.message : "计划调整失败");
+    } finally {
+      setIsRequestingReplan(false);
     }
   }
 
@@ -2384,6 +2454,80 @@ export function App() {
                   <span>每日任务是否足够具体</span>
                   <span>投入时间是否符合现实约束</span>
                 </div>
+              </section>
+              <section className="panel">
+                <p className="eyebrow">Replan</p>
+                <h2>调整执行计划</h2>
+                <form className="form-stack" onSubmit={handleRequestReplan}>
+                  <label>
+                    <span>调整原因</span>
+                    <textarea
+                      rows={3}
+                      value={replanForm.adjustmentReason}
+                      onChange={(event) =>
+                        updateReplanField("adjustmentReason", event.target.value)
+                      }
+                      placeholder="例如：最近工作日时间被压缩，需要降低任务粒度"
+                    />
+                  </label>
+                  <label>
+                    <span>新的每日投入分钟</span>
+                    <input
+                      min="5"
+                      max="600"
+                      type="number"
+                      value={replanForm.dailyTimeBudgetMinutes}
+                      onChange={(event) =>
+                        updateReplanField(
+                          "dailyTimeBudgetMinutes",
+                          event.target.value
+                        )
+                      }
+                      placeholder={
+                        selectedGoal?.dailyTimeBudgetMinutes
+                          ? String(selectedGoal.dailyTimeBudgetMinutes)
+                          : "30"
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>新的限制条件</span>
+                    <textarea
+                      rows={3}
+                      value={replanForm.constraints}
+                      onChange={(event) =>
+                        updateReplanField("constraints", event.target.value)
+                      }
+                      placeholder={selectedGoal?.constraints ?? "例如：只保留一个最小动作"}
+                    />
+                  </label>
+                  <label>
+                    <span>新的当前基础</span>
+                    <textarea
+                      rows={3}
+                      value={replanForm.currentBaseline}
+                      onChange={(event) =>
+                        updateReplanField("currentBaseline", event.target.value)
+                      }
+                      placeholder={selectedGoal?.currentBaseline ?? "可选"}
+                    />
+                  </label>
+                  <button
+                    className="primary-button"
+                    disabled={
+                      !session ||
+                      !selectedGoal ||
+                      !["ACTIVE", "AT_RISK", "REPLANNING"].includes(
+                        selectedGoal.status
+                      ) ||
+                      isRequestingReplan
+                    }
+                    type="submit"
+                  >
+                    {isRequestingReplan ? "调整中" : "重新评估计划"}
+                    <Sparkles size={16} aria-hidden="true" />
+                  </button>
+                </form>
               </section>
               <section className="panel">
                 <p className="eyebrow">After confirm</p>

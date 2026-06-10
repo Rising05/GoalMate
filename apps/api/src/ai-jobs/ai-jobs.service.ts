@@ -9,6 +9,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { GeneratedGoalPlan, MockPlanProvider } from "./mock-plan.provider";
 
 const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
+const GOAL_PLAN_REPLAN = "GOAL_PLAN_REPLAN";
 const ACTIVE_GOAL_STATUSES = ["ACTIVE", "AT_RISK", "REPLANNING"] as const;
 const FREE_ACTIVE_GOAL_LIMIT = 1;
 const PRO_ACTIVE_GOAL_LIMIT = 5;
@@ -119,6 +120,120 @@ export class AiJobsService {
     }
   }
 
+  async requestGoalReplan(userId: string, goalId: string, input: unknown) {
+    const payload = this.parseReplanPayload(input);
+    const goal = await this.prisma.goal.findFirst({
+      where: {
+        id: goalId,
+        userId
+      }
+    });
+
+    if (!goal) {
+      throw new NotFoundException("目标不存在");
+    }
+
+    if (!["ACTIVE", "AT_RISK", "REPLANNING"].includes(goal.status)) {
+      throw new BadRequestException("当前目标状态不能调整计划");
+    }
+
+    const currentPlan = await this.prisma.plan.findUnique({
+      where: { goalId },
+      select: { version: true }
+    });
+    const nextVersion = (currentPlan?.version ?? 0) + 1;
+    const updatedGoal = await this.prisma.goal.update({
+      where: { id: goal.id },
+      data: {
+        status: "REPLANNING",
+        dailyTimeBudgetMinutes:
+          payload.dailyTimeBudgetMinutes ?? goal.dailyTimeBudgetMinutes,
+        constraints: payload.constraints ?? goal.constraints,
+        currentBaseline: payload.currentBaseline ?? goal.currentBaseline
+      }
+    });
+    const job = await this.prisma.aiJob.create({
+      data: {
+        userId,
+        goalId,
+        type: GOAL_PLAN_REPLAN,
+        status: "QUEUED",
+        payload: {
+          goalId,
+          previousStatus: goal.status,
+          previousPlanVersion: currentPlan?.version ?? null,
+          nextPlanVersion: nextVersion,
+          adjustmentReason: payload.adjustmentReason,
+          constraints: payload.constraints,
+          currentBaseline: payload.currentBaseline,
+          dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
+          provider: "mock"
+        }
+      }
+    });
+
+    try {
+      await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "RUNNING",
+          attempts: {
+            increment: 1
+          }
+        }
+      });
+
+      const generatedPlan = this.mockPlanProvider.generate(updatedGoal);
+      const plan = await this.persistGeneratedPlan(
+        updatedGoal,
+        generatedPlan,
+        nextVersion
+      );
+      const succeededJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "SUCCEEDED",
+          result: {
+            planId: plan.id,
+            planVersion: plan.version,
+            adjustmentReason: payload.adjustmentReason,
+            milestoneCount: plan.goal.milestones.length,
+            weeklyPlanCount: plan.weeklyPlans.length,
+            dailyTaskCount: plan.weeklyPlans.reduce(
+              (count, weeklyPlan) => count + weeklyPlan.dailyTasks.length,
+              0
+            )
+          }
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(succeededJob),
+        goal: this.serializeGoal(plan.goal),
+        plan: this.serializePlan(plan)
+      };
+    } catch (error) {
+      await this.prisma.goal.update({
+        where: { id: goal.id },
+        data: { status: "GENERATION_FAILED" }
+      });
+
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: error instanceof Error ? error.message : "计划调整失败"
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        goal: await this.getSerializedGoal(userId, goalId),
+        plan: null
+      };
+    }
+  }
+
   async confirmGoalPlan(userId: string, goalId: string) {
     const plan = await this.prisma.plan.findFirst({
       where: {
@@ -186,6 +301,57 @@ export class AiJobsService {
     };
   }
 
+  private parseReplanPayload(input: unknown) {
+    if (!input || typeof input !== "object") {
+      throw new BadRequestException("请求参数不正确");
+    }
+
+    const body = input as Record<string, unknown>;
+    const adjustmentReason = this.cleanText(body.adjustmentReason, 1000);
+    const constraints = this.cleanText(body.constraints, 2000);
+    const currentBaseline = this.cleanText(body.currentBaseline, 2000);
+    const dailyTimeBudgetMinutes = this.parseOptionalInteger(
+      body.dailyTimeBudgetMinutes,
+      "每日投入时间必须是正整数"
+    );
+
+    if (adjustmentReason.length < 8) {
+      throw new BadRequestException("请说明为什么需要调整计划");
+    }
+
+    if (
+      dailyTimeBudgetMinutes !== undefined &&
+      (dailyTimeBudgetMinutes < 5 || dailyTimeBudgetMinutes > 600)
+    ) {
+      throw new BadRequestException("每日投入时间必须在 5 到 600 分钟之间");
+    }
+
+    return {
+      adjustmentReason,
+      constraints: constraints || undefined,
+      currentBaseline: currentBaseline || undefined,
+      dailyTimeBudgetMinutes
+    };
+  }
+
+  private cleanText(value: unknown, maxLength: number) {
+    return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+  }
+
+  private parseOptionalInteger(value: unknown, errorMessage: string) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const numberValue = Number(value);
+
+    if (!Number.isInteger(numberValue)) {
+      throw new BadRequestException(errorMessage);
+    }
+
+    return numberValue;
+  }
+
   private async assertActiveGoalQuota(userId: string, goalId: string) {
     const [membership, activeGoalCount] = await Promise.all([
       this.prisma.membership.findUnique({
@@ -218,7 +384,11 @@ export class AiJobsService {
     }
   }
 
-  private async persistGeneratedPlan(goal: Goal, generatedPlan: GeneratedGoalPlan) {
+  private async persistGeneratedPlan(
+    goal: Goal,
+    generatedPlan: GeneratedGoalPlan,
+    version = 1
+  ) {
     return this.prisma.$transaction(async (tx) => {
       await tx.dailyTask.deleteMany({ where: { goalId: goal.id } });
       await tx.milestone.deleteMany({ where: { goalId: goal.id } });
@@ -227,7 +397,7 @@ export class AiJobsService {
       const plan = await tx.plan.create({
         data: {
           goalId: goal.id,
-          version: 1,
+          version,
           summary: generatedPlan.summary,
           isActive: false
         }
