@@ -9,6 +9,9 @@ import { PrismaService } from "../prisma/prisma.service";
 import { GeneratedGoalPlan, MockPlanProvider } from "./mock-plan.provider";
 
 const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
+const ACTIVE_GOAL_STATUSES = ["ACTIVE", "AT_RISK", "REPLANNING"] as const;
+const FREE_ACTIVE_GOAL_LIMIT = 1;
+const PRO_ACTIVE_GOAL_LIMIT = 5;
 
 type PlanWithItems = Plan & {
   weeklyPlans: Array<WeeklyPlan & { dailyTasks: DailyTask[] }>;
@@ -135,6 +138,8 @@ export class AiJobsService {
       throw new BadRequestException("当前目标状态不能确认计划");
     }
 
+    await this.assertActiveGoalQuota(userId, goalId);
+
     const confirmedPlan = await this.prisma.$transaction(async (tx) => {
       await tx.goal.update({
         where: { id: goalId },
@@ -179,6 +184,38 @@ export class AiJobsService {
     return {
       plan: this.serializePlan(plan)
     };
+  }
+
+  private async assertActiveGoalQuota(userId: string, goalId: string) {
+    const [membership, activeGoalCount] = await Promise.all([
+      this.prisma.membership.findUnique({
+        where: { userId }
+      }),
+      this.prisma.goal.count({
+        where: {
+          userId,
+          id: {
+            not: goalId
+          },
+          status: {
+            in: [...ACTIVE_GOAL_STATUSES]
+          }
+        }
+      })
+    ]);
+    const hasProAccess =
+      membership?.plan === "PRO" &&
+      ["ACTIVE", "MANUAL"].includes(membership.status) &&
+      (!membership.expiresAt || membership.expiresAt > new Date());
+    const limit = hasProAccess ? PRO_ACTIVE_GOAL_LIMIT : FREE_ACTIVE_GOAL_LIMIT;
+
+    if (activeGoalCount >= limit) {
+      throw new BadRequestException(
+        hasProAccess
+          ? `当前会员最多可同时执行 ${limit} 个目标`
+          : "免费版同时只能执行 1 个目标，请完成、失败归档或升级会员后再确认新计划"
+      );
+    }
   }
 
   private async persistGeneratedPlan(goal: Goal, generatedPlan: GeneratedGoalPlan) {
