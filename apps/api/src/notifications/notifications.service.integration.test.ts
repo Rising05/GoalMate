@@ -111,7 +111,8 @@ describe("NotificationsService integration", () => {
   it("records failed email delivery attempts", async () => {
     const user = await createUser("failure");
     await notificationsService.createPreviewEmailLog(user.id, {
-      type: "DAILY_TASK"
+      type: "DAILY_TASK",
+      scheduledFor: "2026-06-11T09:00:00.000+08:00"
     });
 
     const processed = await notificationsService.processQueuedEmailLogs(user.id, {

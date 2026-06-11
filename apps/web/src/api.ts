@@ -247,8 +247,59 @@ export interface GoalHealth {
   toleranceRemaining: number;
   averageScore: number | null;
   recentInvestedMinutes: number;
+  rescueSuccessCount7d: number;
+  rescueTaskCompletionRate: number;
+  normalTaskCompletionRate: number;
+  rescueNextDayRecovered: boolean | null;
+  completionMetrics: HealthCompletionMetrics;
+  rescueMetrics: HealthRescueMetrics;
+  healthWeights: {
+    healthScoreFormula: string;
+    taskTypeWeights: {
+      normal: number;
+      rescue: number;
+    };
+    note: string;
+  };
+  snapshot: HealthSnapshot;
   risks: GoalHealthRisk[];
   deviation: DeviationSignal;
+}
+
+export interface HealthCompletionMetrics {
+  todayCompletionRate: number;
+  weekCompletionRate: number;
+  recentNormalTaskCount: number;
+  recentNormalTaskCompletedCount: number;
+  recentNormalTaskCompletionRate: number;
+  recentRescueTaskCount: number;
+  recentRescueTaskCompletedCount: number;
+  recentRescueTaskCompletionRate: number;
+  taskTypeWeights: {
+    normal: number;
+    rescue: number;
+  };
+}
+
+export interface HealthRescueMetrics {
+  recentRescueSuccessCount: number;
+  rescueTaskCompletionRate: number;
+  rescueNextDayRecovered: boolean | null;
+  nextDayNormalTaskCompletionRate: number | null;
+  lastCompletedRescueTaskId: string | null;
+}
+
+export interface HealthSnapshot {
+  id: string;
+  goalId: string;
+  date: string;
+  healthScore: number;
+  deviationEventId: string | null;
+  completionMetrics: Record<string, unknown>;
+  rescueMetrics: Record<string, unknown>;
+  riskLevel: "stable" | "warning" | "danger";
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface GoalHealthRisk {
@@ -758,6 +809,24 @@ export async function fetchGoalHealth(token: string, goalId: string) {
   }
 
   return data as GoalHealth;
+}
+
+export async function fetchGoalHealthSnapshots(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/health-snapshots`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ goalId: string; snapshots: HealthSnapshot[] }>(
+    response
+  );
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "健康快照加载失败"));
+  }
+
+  return data as { goalId: string; snapshots: HealthSnapshot[] };
 }
 
 export async function settleGoal(token: string, goalId: string) {

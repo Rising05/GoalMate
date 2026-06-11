@@ -13,6 +13,7 @@ import {
   Goal,
   GoalCategory,
   GoalStatus,
+  HealthSnapshot,
   Prisma
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -92,6 +93,29 @@ interface DeviationSignal {
     overdueTaskCount: number;
     incompleteTodayTaskCount: number;
   };
+}
+
+interface HealthCompletionMetrics {
+  todayCompletionRate: number;
+  weekCompletionRate: number;
+  recentNormalTaskCount: number;
+  recentNormalTaskCompletedCount: number;
+  recentNormalTaskCompletionRate: number;
+  recentRescueTaskCount: number;
+  recentRescueTaskCompletedCount: number;
+  recentRescueTaskCompletionRate: number;
+  taskTypeWeights: {
+    normal: number;
+    rescue: number;
+  };
+}
+
+interface HealthRescueMetrics {
+  recentRescueSuccessCount: number;
+  rescueTaskCompletionRate: number;
+  rescueNextDayRecovered: boolean | null;
+  nextDayNormalTaskCompletionRate: number | null;
+  lastCompletedRescueTaskId: string | null;
 }
 
 @Injectable()
@@ -192,6 +216,19 @@ export class GoalsService {
       todayStart,
       todayEnd
     });
+    const completionMetrics = this.buildHealthCompletionMetrics({
+      todayTasks,
+      weekTasks,
+      allTasks,
+      recentStart,
+      recentEnd
+    });
+    const rescueMetrics = this.buildHealthRescueMetrics({
+      allTasks,
+      recentStart,
+      recentEnd,
+      todayStart
+    });
     const risks = this.buildHealthRisks({
       todayCompletionRate,
       weekCompletionRate,
@@ -208,6 +245,15 @@ export class GoalsService {
       toleranceRemaining,
       riskCount: risks.length
     });
+    const snapshot = await this.upsertHealthSnapshot({
+      goal,
+      date: todayStart,
+      healthScore,
+      deviationEvent,
+      completionMetrics,
+      rescueMetrics,
+      riskLevel: deviation.riskLevel
+    });
 
     return {
       goalId: goal.id,
@@ -220,8 +266,34 @@ export class GoalsService {
       toleranceRemaining,
       averageScore,
       recentInvestedMinutes,
+      rescueSuccessCount7d: rescueMetrics.recentRescueSuccessCount,
+      rescueTaskCompletionRate: rescueMetrics.rescueTaskCompletionRate,
+      normalTaskCompletionRate: completionMetrics.recentNormalTaskCompletionRate,
+      rescueNextDayRecovered: rescueMetrics.rescueNextDayRecovered,
+      completionMetrics,
+      rescueMetrics,
+      healthWeights: this.getHealthWeights(),
+      snapshot: this.serializeHealthSnapshot(snapshot),
       risks,
       deviation: this.serializeDeviationSignal(deviation, deviationEvent)
+    };
+  }
+
+  async listHealthSnapshots(userId: string, id: string) {
+    const goal = await this.getOwnedGoal(userId, id);
+    const snapshots = await this.prisma.healthSnapshot.findMany({
+      where: {
+        goalId: goal.id
+      },
+      orderBy: {
+        date: "asc"
+      },
+      take: 120
+    });
+
+    return {
+      goalId: goal.id,
+      snapshots: snapshots.map((snapshot) => this.serializeHealthSnapshot(snapshot))
     };
   }
 
@@ -1165,6 +1237,177 @@ export class GoalsService {
     };
   }
 
+  private buildHealthCompletionMetrics(input: {
+    todayTasks: HealthTask[];
+    weekTasks: HealthTask[];
+    allTasks: HealthTask[];
+    recentStart: Date;
+    recentEnd: Date;
+  }): HealthCompletionMetrics {
+    const recentTasks = input.allTasks.filter(
+      (task) => task.taskDate >= input.recentStart && task.taskDate < input.recentEnd
+    );
+    const recentNormalTasks = recentTasks.filter(
+      (task) => task.taskType !== RESCUE_TASK_TYPE
+    );
+    const recentRescueTasks = recentTasks.filter(
+      (task) => task.taskType === RESCUE_TASK_TYPE
+    );
+    const normalStats = this.getTaskCompletionStats(recentNormalTasks);
+    const rescueStats = this.getTaskCompletionStats(recentRescueTasks);
+
+    return {
+      todayCompletionRate: this.getCompletionRate(input.todayTasks),
+      weekCompletionRate: this.getCompletionRate(input.weekTasks),
+      recentNormalTaskCount: normalStats.totalCount,
+      recentNormalTaskCompletedCount: normalStats.completedCount,
+      recentNormalTaskCompletionRate: normalStats.completionRate,
+      recentRescueTaskCount: rescueStats.totalCount,
+      recentRescueTaskCompletedCount: rescueStats.completedCount,
+      recentRescueTaskCompletionRate: rescueStats.completionRate,
+      taskTypeWeights: {
+        normal: 1,
+        rescue: 0.6
+      }
+    };
+  }
+
+  private buildHealthRescueMetrics(input: {
+    allTasks: HealthTask[];
+    recentStart: Date;
+    recentEnd: Date;
+    todayStart: Date;
+  }): HealthRescueMetrics {
+    const recentRescueTasks = input.allTasks.filter(
+      (task) =>
+        task.taskType === RESCUE_TASK_TYPE &&
+        task.taskDate >= input.recentStart &&
+        task.taskDate < input.recentEnd
+    );
+    const rescueStats = this.getTaskCompletionStats(recentRescueTasks);
+    const completedRescueTasks = recentRescueTasks
+      .filter((task) => this.isTaskCompleted(task))
+      .sort((left, right) => right.taskDate.getTime() - left.taskDate.getTime());
+    const lastCompletedRescueTask = completedRescueTasks[0] ?? null;
+    const nextDayRecovery = lastCompletedRescueTask
+      ? this.getNextDayNormalRecovery({
+          allTasks: input.allTasks,
+          rescueTaskDate: lastCompletedRescueTask.taskDate,
+          todayStart: input.todayStart
+        })
+      : {
+          recovered: null,
+          completionRate: null
+        };
+
+    return {
+      recentRescueSuccessCount: rescueStats.completedCount,
+      rescueTaskCompletionRate: rescueStats.completionRate,
+      rescueNextDayRecovered: nextDayRecovery.recovered,
+      nextDayNormalTaskCompletionRate: nextDayRecovery.completionRate,
+      lastCompletedRescueTaskId: lastCompletedRescueTask?.id ?? null
+    };
+  }
+
+  private getTaskCompletionStats(tasks: HealthTask[]) {
+    const completedCount = tasks.filter((task) => this.isTaskCompleted(task)).length;
+
+    return {
+      totalCount: tasks.length,
+      completedCount,
+      completionRate: tasks.length
+        ? Math.round((completedCount / tasks.length) * 100)
+        : 0
+    };
+  }
+
+  private getNextDayNormalRecovery(input: {
+    allTasks: HealthTask[];
+    rescueTaskDate: Date;
+    todayStart: Date;
+  }) {
+    const nextDayStart = new Date(input.rescueTaskDate);
+    nextDayStart.setUTCDate(input.rescueTaskDate.getUTCDate() + 1);
+    const nextDayEnd = new Date(nextDayStart);
+    nextDayEnd.setUTCDate(nextDayStart.getUTCDate() + 1);
+
+    if (nextDayStart > input.todayStart) {
+      return {
+        recovered: null,
+        completionRate: null
+      };
+    }
+
+    const nextDayNormalTasks = input.allTasks.filter(
+      (task) =>
+        task.taskType !== RESCUE_TASK_TYPE &&
+        task.taskDate >= nextDayStart &&
+        task.taskDate < nextDayEnd
+    );
+
+    if (!nextDayNormalTasks.length) {
+      return {
+        recovered: null,
+        completionRate: null
+      };
+    }
+
+    const stats = this.getTaskCompletionStats(nextDayNormalTasks);
+
+    return {
+      recovered: stats.completionRate >= 50,
+      completionRate: stats.completionRate
+    };
+  }
+
+  private getHealthWeights() {
+    return {
+      healthScoreFormula:
+        "20 + todayCompletionRate*0.22 + weekCompletionRate*0.28 + streakBonus(最多15) + averageScore*0.25 + toleranceBonus(最多10) - riskCount*6",
+      taskTypeWeights: {
+        normal: 1,
+        rescue: 0.6
+      },
+      note:
+        "普通任务代表原计划执行，救援任务用于恢复节奏；救援完成计入健康度和热力图，但在任务类型权重说明中低于普通任务。"
+    };
+  }
+
+  private async upsertHealthSnapshot(input: {
+    goal: Goal;
+    date: Date;
+    healthScore: number;
+    deviationEvent: DeviationEvent | null;
+    completionMetrics: HealthCompletionMetrics;
+    rescueMetrics: HealthRescueMetrics;
+    riskLevel: DeviationRiskLevel;
+  }) {
+    return this.prisma.healthSnapshot.upsert({
+      where: {
+        goalId_date: {
+          goalId: input.goal.id,
+          date: input.date
+        }
+      },
+      update: {
+        healthScore: input.healthScore,
+        deviationEventId: input.deviationEvent?.id ?? null,
+        completionMetrics: this.toJson(input.completionMetrics),
+        rescueMetrics: this.toJson(input.rescueMetrics),
+        riskLevel: input.riskLevel
+      },
+      create: {
+        goalId: input.goal.id,
+        date: input.date,
+        healthScore: input.healthScore,
+        deviationEventId: input.deviationEvent?.id ?? null,
+        completionMetrics: this.toJson(input.completionMetrics),
+        rescueMetrics: this.toJson(input.rescueMetrics),
+        riskLevel: input.riskLevel
+      }
+    });
+  }
+
   private buildHealthRisks(input: {
     todayCompletionRate: number;
     weekCompletionRate: number;
@@ -1354,6 +1597,21 @@ export class GoalsService {
       ...deviation,
       eventId: event?.id ?? null,
       detectedAt: event?.detectedAt.toISOString() ?? null
+    };
+  }
+
+  private serializeHealthSnapshot(snapshot: HealthSnapshot) {
+    return {
+      id: snapshot.id,
+      goalId: snapshot.goalId,
+      date: this.toDateKey(snapshot.date),
+      healthScore: snapshot.healthScore,
+      deviationEventId: snapshot.deviationEventId,
+      completionMetrics: this.jsonObject(snapshot.completionMetrics),
+      rescueMetrics: this.jsonObject(snapshot.rescueMetrics),
+      riskLevel: snapshot.riskLevel,
+      createdAt: snapshot.createdAt.toISOString(),
+      updatedAt: snapshot.updatedAt.toISOString()
     };
   }
 

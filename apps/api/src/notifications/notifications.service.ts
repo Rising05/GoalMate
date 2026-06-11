@@ -83,7 +83,10 @@ export class NotificationsService {
 
     const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
     const type = this.parseReminderType(body.type) ?? "DAILY_TASK";
-    const scheduledFor = this.getNextScheduledAt(preference.reminderTime);
+    const scheduledFor =
+      typeof body.scheduledFor === "string" && body.scheduledFor.trim()
+        ? this.parseNow({ now: body.scheduledFor })
+        : this.getNextScheduledAt(preference.reminderTime);
     const subject = REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒";
     const log = await this.prisma.emailLog.create({
       data: {

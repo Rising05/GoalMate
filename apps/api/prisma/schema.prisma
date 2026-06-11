@@ -206,6 +206,7 @@ model Goal {
   aiJobs          AiJob[]
   deviationEvents DeviationEvent[]
   rewardCards     RewardCard[]
+  healthSnapshots HealthSnapshot[]
   failureReport   FailureReport?
 
   @@index([userId, status])
@@ -352,6 +353,27 @@ model DeviationEvent {
   @@index([goalId, riskLevel])
   @@index([sourceDailyTaskId])
   @@map("deviation_events")
+}
+
+model HealthSnapshot {
+  id                String   @id @default(cuid())
+  goalId            String
+  date              DateTime
+  healthScore       Int
+  deviationEventId  String?
+  completionMetrics Json
+  rescueMetrics     Json
+  riskLevel         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, date])
+  @@index([goalId, date])
+  @@index([goalId, riskLevel])
+  @@index([deviationEventId])
+  @@map("health_snapshots")
 }
 
 model Checkin {

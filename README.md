@@ -20,10 +20,17 @@ npm run dev:api
 
 ## Current Milestone
 
-The first implementation milestone focuses on the end-to-end MVP skeleton:
+The MVP now covers the core GoalPilot AI loop:
 
-1. Web goal creation guide.
-2. API health check.
-3. Shared domain vocabulary.
-4. Future-ready modules for auth, goals, AI jobs, reminders, and admin.
+1. Email registration/login, goal creation, mock AI plan generation, and plan confirmation.
+2. Daily tasks, text check-ins, mock AI scoring, score appeals, deviation detection, rescue tasks, heatmap, health report, and growth timeline.
+3. Goal settlement, failure reports, restart flow, reward board, notification preferences/email logs, membership quota checks, and admin audit interfaces.
+4. Health report rescue metrics and daily `health_snapshots` for future trend charts.
 
+Core validation commands:
+
+```bash
+npm run typecheck
+npm run test:integration
+npm run build
+```

@@ -652,6 +652,31 @@ export function App() {
           label: "容错剩余",
           value: `${goalHealth.toleranceRemaining}`,
           tone: goalHealth.toleranceRemaining > 1 ? "good" : "neutral"
+        },
+        {
+          label: "近7天救援",
+          value: `${goalHealth.rescueSuccessCount7d}`,
+          tone: goalHealth.rescueSuccessCount7d > 0 ? "good" : "neutral"
+        },
+        {
+          label: "救援完成",
+          value: `${goalHealth.rescueTaskCompletionRate}%`,
+          tone: goalHealth.rescueTaskCompletionRate >= 80 ? "good" : "neutral"
+        },
+        {
+          label: "普通完成",
+          value: `${goalHealth.normalTaskCompletionRate}%`,
+          tone: goalHealth.normalTaskCompletionRate >= 60 ? "good" : "neutral"
+        },
+        {
+          label: "次日恢复",
+          value:
+            goalHealth.rescueNextDayRecovered === null
+              ? "待观察"
+              : goalHealth.rescueNextDayRecovered
+                ? "是"
+                : "否",
+          tone: goalHealth.rescueNextDayRecovered ? "good" : "neutral"
         }
       ]
     : healthMetrics;
@@ -2673,6 +2698,13 @@ export function App() {
                     近 7 天 {goalHealth?.recentInvestedMinutes ?? 0} 分钟
                   </span>
                 </div>
+                {goalHealth ? (
+                  <p className="muted-text">
+                    普通任务权重 {goalHealth.healthWeights.taskTypeWeights.normal}，
+                    救援任务权重 {goalHealth.healthWeights.taskTypeWeights.rescue}。
+                    今日快照 {goalHealth.snapshot.date} 已保存。
+                  </p>
+                ) : null}
               </section>
               <section className="panel">
                 <p className="eyebrow">Signals</p>

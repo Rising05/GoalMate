@@ -490,6 +490,10 @@ MVP 支持：
 - AI 风险建议
 - 偏差风险等级和触发原因
 - 救援任务生成入口
+- 近 7 天救援成功次数
+- 救援任务完成率
+- 普通任务完成率
+- 救援后次日是否回到正常计划
 
 健康报告和今日任务联动：
 
@@ -500,6 +504,20 @@ MVP 支持：
 - 救援任务完成后计入当日完成数、热力图等级、投入分钟、平均评分和健康度计算。
 - 未完成救援任务也参与今日未完成任务与偏差检测，避免生成后无人处理。
 - 健康报告的 `deviation.eventId` 是救援任务、成长时间线和后续救援统计的统一链路 ID。
+
+MVP 已验证的健康报告细化：
+
+- `GET /goals/:id/health` 返回 `rescueSuccessCount7d`、`rescueTaskCompletionRate`、`normalTaskCompletionRate`、`rescueNextDayRecovered`、`completionMetrics`、`rescueMetrics`、`healthWeights` 和当日 `snapshot`。
+- 健康度公式继续使用今日完成率、本周完成率、连续天数、近 7 天平均 AI 评分、容错余额和风险扣分；接口同时声明任务类型权重：普通任务权重 `1`，救援任务权重 `0.6`。普通任务代表原计划执行，救援任务用于恢复节奏，救援完成计入健康度和热力图但不替代普通任务。
+- `rescueNextDayRecovered` 以最近完成的救援任务为入口，检查次日普通任务完成率是否达到 50%；若次日尚未到来或没有普通任务，返回 `null`。
+
+MVP 已落地每日健康快照：
+
+- 新增 `health_snapshots` 表，按 `goalId + date` 唯一保存每日健康快照。
+- 快照字段包括 `goalId`、北京时间自然日 `date`、`healthScore`、可选 `deviationEventId`、`completionMetrics`、`rescueMetrics` 和 `riskLevel`。
+- 每次读取健康报告会 upsert 当日快照，刷新不会产生重复快照。
+- 预留趋势接口：`GET /goals/:id/health-snapshots`，返回当前用户当前目标最近快照列表。
+- 2026-06-11 已补充 `GoalsService health snapshots integration`，验证救援统计、普通任务完成率、次日恢复判断、当日快照 upsert 和趋势接口读取。
 
 ### 7.3 成长时间线
 
@@ -741,6 +759,7 @@ flowchart TD
 - reward_boards
 - reward_cards
 - heatmap_daily_stats
+- health_snapshots
 - health_reports
 - timeline_events
 - notifications
@@ -759,6 +778,7 @@ MVP 已落地的偏差和救援相关字段：
 - `daily_tasks.sourceDailyTaskId`: 记录救援任务来源的延期或未完成任务 ID。
 - `daily_tasks.deviationEventId`: 记录救援任务对应的偏差事件 ID。
 - `daily_tasks.rescueReason / rescueTriggerCode / rescueRiskLevel`: 保存救援任务生成时的偏差信号摘要。
+- `health_snapshots`: 保存每日健康度、偏差事件 ID、完成率指标、救援统计和风险等级；用于健康趋势图和救援后恢复轨迹。
 
 ## 14. 状态机
 
@@ -1012,10 +1032,11 @@ AI 任务包括：
 - 已补充 `generateRescueTask` 后端集成测试，覆盖有偏差时创建 `deviation_events`。
 - 已补充同日同主原因复用偏差事件的集成测试。
 - 已补充同日未完成救援任务复用、完成后可新建救援任务的集成测试。
-- 将成长时间线从“救援任务复盘”升级为“触发偏差 -> 系统介入 -> 救援任务完成”的偏差链路展示。
-- 明确救援任务完成率和普通任务完成率在健康报告中的权重。
-- 健康报告增加近 7 天救援成功次数、救援任务完成率、救援后次日是否回到正常计划。
-- 设计每日健康快照表，保存 `healthScore`、`deviationEventId` 和关键 metrics，用于健康趋势和恢复轨迹。
+- 已将成长时间线从“救援任务复盘”升级为“触发偏差 -> 系统介入 -> 救援任务完成”的偏差链路展示，并通过 `deviationEventId` 集成测试验证。
+- 已明确救援任务完成率和普通任务完成率在健康报告中的权重，健康报告返回 `healthWeights.taskTypeWeights`。
+- 已在健康报告增加近 7 天救援成功次数、救援任务完成率、普通任务完成率、救援后次日是否回到正常计划。
+- 已新增每日健康快照表 `health_snapshots`，保存 `healthScore`、`deviationEventId`、completion metrics、rescue metrics 和 `riskLevel`，并预留 `GET /goals/:id/health-snapshots` 趋势接口。
+- 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration` 和 `npm run build` 验证阶段 2/3 后端、前端类型和构建。
 
 ## 21. 验收标准
 
@@ -1037,6 +1058,8 @@ AI 任务包括：
 - 失败目标可以生成失败报告。
 - 用户可以重新开启一个新目标。
 - 到达结束日期且未超过容错次数时目标完成。
+- 健康报告可以返回救援统计、普通任务完成率、救援后次日恢复判断和当日健康快照。
+- `health_snapshots` 按目标和自然日稳定 upsert，并可通过趋势预留接口读取。
 
 ### 21.2 可视化验收
 

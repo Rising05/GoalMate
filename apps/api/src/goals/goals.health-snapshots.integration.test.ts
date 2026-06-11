@@ -1,0 +1,213 @@
+import "reflect-metadata";
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "node:test";
+import { loadEnv } from "../config/load-env";
+import { PrismaService } from "../prisma/prisma.service";
+import { GoalsService } from "./goals.service";
+
+loadEnv();
+
+const TEST_EMAIL_PREFIX = "health-snapshot-integration-";
+const TIMEZONE = "Asia/Shanghai";
+
+const prisma = new PrismaService();
+const goalsService = new GoalsService(prisma);
+
+describe("GoalsService health snapshots integration", () => {
+  before(async () => {
+    await cleanupTestUsers();
+  });
+
+  after(async () => {
+    await cleanupTestUsers();
+    await prisma.$disconnect();
+  });
+
+  it("returns rescue metrics and upserts the daily health snapshot", async () => {
+    const { goal, todayStart } = await createGoalWithHealthSignals("metrics");
+
+    const first = await goalsService.getGoalHealth(goal.userId, goal.id);
+    const second = await goalsService.getGoalHealth(goal.userId, goal.id);
+    const snapshots = await prisma.healthSnapshot.findMany({
+      where: {
+        goalId: goal.id
+      }
+    });
+    const trend = await goalsService.listHealthSnapshots(goal.userId, goal.id);
+
+    assert.equal(first.rescueSuccessCount7d, 1);
+    assert.equal(first.rescueTaskCompletionRate, 100);
+    assert.equal(first.normalTaskCompletionRate, 50);
+    assert.equal(first.rescueNextDayRecovered, true);
+    assert.equal(first.completionMetrics.recentNormalTaskCount, 2);
+    assert.equal(first.completionMetrics.recentNormalTaskCompletedCount, 1);
+    assert.equal(first.rescueMetrics.lastCompletedRescueTaskId !== null, true);
+    assert.equal(first.snapshot.date, toDateKey(todayStart));
+    assert.equal(first.snapshot.healthScore, first.healthScore);
+    assert.equal(second.snapshot.id, first.snapshot.id);
+    assert.equal(snapshots.length, 1);
+    assert.equal(trend.snapshots.length, 1);
+    assert.equal(trend.snapshots[0].id, first.snapshot.id);
+  });
+});
+
+async function cleanupTestUsers() {
+  await prisma.user.deleteMany({
+    where: {
+      email: {
+        startsWith: TEST_EMAIL_PREFIX
+      }
+    }
+  });
+}
+
+async function createGoalWithHealthSignals(scenario: string) {
+  const todayKey = toDateKey(new Date());
+  const todayStart = toBeijingDate(todayKey);
+  const yesterdayStart = addDays(todayStart, -1);
+  const suffix = `${scenario}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  const user = await prisma.user.create({
+    data: {
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      passwordHash: "test-password-hash",
+      displayName: `Health ${scenario}`
+    }
+  });
+  const goal = await prisma.goal.create({
+    data: {
+      userId: user.id,
+      title: `健康快照测试 ${scenario}`,
+      description: "用于验证救援统计、普通任务完成率和每日健康快照。",
+      category: "STUDY",
+      status: "ACTIVE",
+      startDate: addDays(todayStart, -3),
+      endDate: addDays(todayStart, 7),
+      dailyTimeBudgetMinutes: 60,
+      toleranceDaysAllowed: 2
+    }
+  });
+  const rescueTask = await prisma.dailyTask.create({
+    data: {
+      goalId: goal.id,
+      taskDate: yesterdayStart,
+      title: "昨日救援任务",
+      description: "完成后验证次日是否恢复普通计划。",
+      plannedMinutes: 15,
+      taskType: "RESCUE",
+      rescueReason: "低投入触发救援。",
+      rescueTriggerCode: "LOW_INVESTMENT",
+      rescueRiskLevel: "danger",
+      status: "DONE"
+    }
+  });
+  await createScoredCheckin({
+    userId: user.id,
+    goalId: goal.id,
+    taskId: rescueTask.id,
+    content: "完成救援任务并记录恢复策略。",
+    investedMinutes: 15,
+    submittedAt: addHours(yesterdayStart, 20),
+    score: 82
+  });
+
+  const completedNormalTask = await prisma.dailyTask.create({
+    data: {
+      goalId: goal.id,
+      taskDate: todayStart,
+      title: "今日普通任务已完成",
+      description: "用于验证救援后次日恢复正常计划。",
+      plannedMinutes: 60,
+      status: "DONE"
+    }
+  });
+  await createScoredCheckin({
+    userId: user.id,
+    goalId: goal.id,
+    taskId: completedNormalTask.id,
+    content: "按原计划完成一个普通任务，并补充证据。",
+    investedMinutes: 60,
+    submittedAt: addHours(todayStart, 9),
+    score: 86
+  });
+  await prisma.dailyTask.create({
+    data: {
+      goalId: goal.id,
+      taskDate: todayStart,
+      title: "今日普通任务未完成",
+      description: "保留一个未完成普通任务，让完成率为 50%。",
+      plannedMinutes: 60,
+      status: "PENDING"
+    }
+  });
+
+  return { user, goal, todayStart };
+}
+
+async function createScoredCheckin(input: {
+  userId: string;
+  goalId: string;
+  taskId: string;
+  content: string;
+  investedMinutes: number;
+  submittedAt: Date;
+  score: number;
+}) {
+  const checkin = await prisma.checkin.create({
+    data: {
+      userId: input.userId,
+      goalId: input.goalId,
+      dailyTaskId: input.taskId,
+      status: "SCORED",
+      content: input.content,
+      investedMinutes: input.investedMinutes,
+      submittedAt: input.submittedAt
+    }
+  });
+
+  await prisma.aiScore.create({
+    data: {
+      checkinId: checkin.id,
+      totalScore: input.score,
+      dimensions: {
+        completion: input.score
+      },
+      evidence: {
+        source: "health-snapshot-test"
+      },
+      summary: "测试评分。",
+      suggestion: "继续保持稳定执行。"
+    }
+  });
+}
+
+function toDateKey(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return `${year}-${month}-${day}`;
+}
+
+function toBeijingDate(dateKey: string) {
+  return new Date(`${dateKey}T00:00:00.000+08:00`);
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(date.getUTCDate() + days);
+  return next;
+}
+
+function addHours(date: Date, hours: number) {
+  const next = new Date(date);
+  next.setUTCHours(date.getUTCHours() + hours);
+  return next;
+}

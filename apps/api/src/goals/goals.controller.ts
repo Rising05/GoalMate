@@ -42,6 +42,14 @@ export class GoalsController {
     return this.goalsService.getGoalHealth(request.user!.id, id);
   }
 
+  @Get(":id/health-snapshots")
+  getHealthSnapshots(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ) {
+    return this.goalsService.listHealthSnapshots(request.user!.id, id);
+  }
+
   @Post(":id/settle")
   settle(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.goalsService.settleGoal(request.user!.id, id);
