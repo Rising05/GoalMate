@@ -878,10 +878,11 @@ MVP 已落地的 AI Provider 和队列基础版：
 - DeepSeek provider 调用 `https://api.deepseek.com/chat/completions`，默认模型为 `deepseek-chat`，可用 `DEEPSEEK_MODEL` 覆盖；返回内容要求为计划 JSON，并解析为现有 `Plan/Milestone/WeeklyPlan/DailyTask` 数据结构。
 - 新增 BullMQ 队列基础服务，依赖 Redis，配置 `BULLMQ_ENABLED=true` 后可向 `ai-jobs` 和 `email` 队列入队；默认关闭时返回明确 disabled 状态，不破坏当前同步 Mock MVP 链路。
 - 新增 `GET /ai-jobs/:id`，前端可按 job id 查询自己的 AI 任务状态；跨用户读取返回不存在。
+- 前端计划页和打卡复盘弹窗已接入最近 AI 任务状态面板，计划生成、重规划、打卡评分和评分申诉都会记录最近 job，并可通过刷新按钮调用 `GET /ai-jobs/:id` 获取最新状态。
 - 计划生成和重规划创建 `ai_jobs` 后会尝试写入 BullMQ `ai-jobs` 队列，并把队列结果写入 job payload；队列不可用不会破坏当前同步生成链路。
 - 打卡评分新增 `ScoringProvider` 抽象，默认使用 `MockScoringProvider`；评分创建 `CHECKIN_SCORING` job 后会尝试写入 BullMQ `ai-jobs` 队列，并在 payload 中保留 provider 与 queue 元数据。
 - 邮件提醒新增 `MailProvider` 抽象，默认使用 `MockMailProvider`；邮件日志创建后会尝试写入 BullMQ `email` 队列，邮件处理通过 provider 返回发送成功或失败。
-- 2026-06-11 已补充 AI job provider payload、job 状态权限隔离、评分 provider/queue payload、MailProvider 注入、QueueService 默认关闭和 Redis 实际入队测试；`npm run test:integration` 通过 36/36。
+- 2026-06-12 已补充 AI job provider payload、job 状态权限隔离、评分 provider/queue payload、MailProvider 注入、QueueService 默认关闭、Redis 实际入队测试和前端 job 状态刷新展示；`npm run typecheck`、`npm run test:integration`、`npm run build` 已作为验收命令。
 
 ## 16. API 边界
 
@@ -1020,6 +1021,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 实现用户提醒配置页。
 - 实现会员状态页。
 - 实现管理后台基础页面。
+- 已实现最近 AI 任务状态展示和手动刷新，覆盖计划生成、重规划、打卡评分、评分申诉链路。
 
 ### 20.3 后端
 

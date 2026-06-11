@@ -10,6 +10,7 @@ import {
   LineChart,
   PanelLeftClose,
   PanelLeftOpen,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Trophy,
@@ -61,6 +62,7 @@ import {
   fetchAdminRawContent,
   fetchAdminSystemConfigs,
   fetchAdminUsers,
+  fetchAiJob,
   fetchEmailLogs,
   fetchFailureReport,
   fetchGoalPlan,
@@ -208,6 +210,22 @@ const rewardSourceLabels: Record<string, string> = {
   FINAL_REWARD: "最终奖励",
   MILESTONE_REWARD: "阶段奖励",
   CUSTOM: "自定义"
+};
+
+const aiJobTypeLabels: Record<string, string> = {
+  GOAL_PLAN_GENERATION: "计划生成",
+  GOAL_PLAN_REPLAN: "计划调整",
+  CHECKIN_SCORING: "打卡评分",
+  CHECKIN_SCORE_APPEAL: "评分复评",
+  SCORE_CHECKIN: "打卡评分",
+  SEND_EMAIL: "邮件发送"
+};
+
+const aiJobStatusLabels: Record<string, string> = {
+  PENDING: "排队中",
+  RUNNING: "处理中",
+  SUCCEEDED: "已完成",
+  FAILED: "失败"
 };
 
 const journeySteps = [
@@ -581,12 +599,20 @@ export function App() {
     checkin: TaskCheckin;
     job: AiJob;
   } | null>(null);
+  const [trackedAiJob, setTrackedAiJob] = useState<AiJob | null>(null);
+  const [aiJobMessage, setAiJobMessage] =
+    useState("完成 AI 操作后可查看最近任务状态。");
+  const [isRefreshingAiJob, setIsRefreshingAiJob] = useState(false);
 
   const activeNavItem =
     navItems.find((item) => item.id === activePage) ?? navItems[0];
   const selectedGoal =
     goals.find((goal) => goal.id === selectedGoalId) ??
     (createdGoal?.id === selectedGoalId ? createdGoal : null);
+  const completionJobStatus =
+    completionResult && trackedAiJob?.id === completionResult.job.id
+      ? trackedAiJob.status
+      : completionResult?.job.status;
   const selectedGeneratedPlan =
     generatedPlan && generatedPlan.goalId === selectedGoalId ? generatedPlan : null;
   const contributionMap = getYearContributionMap(heatmapYear, activityDays);
@@ -1151,6 +1177,10 @@ export function App() {
       setRewardBoard(null);
       setFailureReport(null);
       setSelectedGoalId(null);
+      if (trackedAiJob?.goalId === selectedGoal.id) {
+        setTrackedAiJob(null);
+        setAiJobMessage("目标已删除，最近 AI 任务已清空。");
+      }
       await refreshGoals(session.token);
       setGoalMessage("目标及关联数据已删除。");
       setActivePage("create");
@@ -1175,6 +1205,8 @@ export function App() {
     try {
       await deleteCurrentAccount(session.token);
       setSession(null);
+      setTrackedAiJob(null);
+      setAiJobMessage("账号已删除，最近 AI 任务已清空。");
       setActivePage("account");
       setGoalMessage("账号已删除。");
     } catch (error) {
@@ -1242,6 +1274,42 @@ export function App() {
     }));
   }
 
+  function trackAiJob(job: AiJob, message = "AI 任务状态已记录，可手动刷新。") {
+    setTrackedAiJob(job);
+    setAiJobMessage(message);
+  }
+
+  async function handleRefreshTrackedAiJob() {
+    if (!session || !trackedAiJob) {
+      setAiJobMessage("暂无可刷新的 AI 任务。");
+      return;
+    }
+
+    setIsRefreshingAiJob(true);
+
+    try {
+      const response = await fetchAiJob(session.token, trackedAiJob.id);
+      setTrackedAiJob(response.job);
+      setCompletionResult((current) =>
+        current?.job.id === response.job.id
+          ? {
+              ...current,
+              job: response.job
+            }
+          : current
+      );
+      setAiJobMessage(
+        `AI 任务已刷新：${aiJobStatusLabels[response.job.status] ?? response.job.status}`
+      );
+    } catch (error) {
+      setAiJobMessage(
+        error instanceof Error ? error.message : "AI 任务状态刷新失败"
+      );
+    } finally {
+      setIsRefreshingAiJob(false);
+    }
+  }
+
   async function handleCompleteDailyTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1287,6 +1355,7 @@ export function App() {
       });
       setDailyTaskMessage("任务已完成，热力图已更新。");
       setCompletionResult(response);
+      trackAiJob(response.job, "打卡评分任务已记录，可刷新查看最新状态。");
       if (completionTask.taskType === "RESCUE") {
         setRescueTask(null);
       }
@@ -1321,6 +1390,7 @@ export function App() {
         }
       );
       setAppealResult(response.appeal);
+      trackAiJob(response.job, "评分复评任务已记录，可刷新查看最新状态。");
       setCompletionResult((current) =>
         current
           ? {
@@ -1417,6 +1487,7 @@ export function App() {
 
       setCreatedGoal(response.goal);
       setGeneratedPlan(response.plan);
+      trackAiJob(response.job, "计划生成任务已记录，可刷新查看最新状态。");
       setSelectedGoalId(response.goal.id);
       setGoals((current) =>
         current.some((goal) => goal.id === response.goal.id)
@@ -1468,6 +1539,7 @@ export function App() {
 
       setCreatedGoal(response.goal);
       setGeneratedPlan(response.plan);
+      trackAiJob(response.job, "计划调整任务已记录，可刷新查看最新状态。");
       setSelectedGoalId(response.goal.id);
       setGoals((current) =>
         current.some((goal) => goal.id === response.goal.id)
@@ -1630,6 +1702,60 @@ export function App() {
     } finally {
       setIsRestartingGoal(false);
     }
+  }
+
+  function renderAiJobStatusPanel() {
+    return (
+      <section className="ai-job-status">
+        <div>
+          <p className="eyebrow">AI job</p>
+          <h2>最近 AI 任务</h2>
+        </div>
+        {trackedAiJob ? (
+          <>
+            <div className="ai-job-metrics">
+              <span>
+                类型
+                <strong>
+                  {aiJobTypeLabels[trackedAiJob.type] ?? trackedAiJob.type}
+                </strong>
+              </span>
+              <span>
+                状态
+                <strong>
+                  {aiJobStatusLabels[trackedAiJob.status] ?? trackedAiJob.status}
+                </strong>
+              </span>
+              <span>
+                尝试
+                <strong>{trackedAiJob.attempts}</strong>
+              </span>
+              <span>
+                更新时间
+                <strong>{formatDateTime(trackedAiJob.updatedAt)}</strong>
+              </span>
+            </div>
+            {trackedAiJob.error ? (
+              <p className="form-message">{trackedAiJob.error}</p>
+            ) : null}
+          </>
+        ) : (
+          <p className="muted-text">完成计划生成、重规划、打卡评分或复评后显示。</p>
+        )}
+        <div className="form-actions">
+          <button
+            className="ghost-button"
+            disabled={!trackedAiJob || isRefreshingAiJob}
+            type="button"
+            onClick={handleRefreshTrackedAiJob}
+          >
+            {isRefreshingAiJob ? "刷新中" : "刷新状态"}
+            <RefreshCw size={16} aria-hidden="true" />
+          </button>
+          <span className="form-message">{aiJobMessage}</span>
+        </div>
+      </section>
+    );
   }
 
   async function loadNotificationSettings(token = session?.token) {
@@ -2526,6 +2652,7 @@ export function App() {
               )}
             </section>
             <aside className="stack">
+              {renderAiJobStatusPanel()}
               <section className="panel">
                 <p className="eyebrow">Current goal</p>
                 <div className="timeline-list">
@@ -4198,10 +4325,17 @@ export function App() {
                   <div>
                     <p className="eyebrow">Mock AI score</p>
                     <h2>{completionResult.checkin.aiScore?.totalScore ?? "-"}</h2>
-                    <span>评分任务 {completionResult.job.status}</span>
+                    <span>
+                      评分任务{" "}
+                      {completionJobStatus
+                        ? aiJobStatusLabels[completionJobStatus] ??
+                          completionJobStatus
+                        : "-"}
+                    </span>
                   </div>
                   <CheckCircle2 size={28} aria-hidden="true" />
                 </section>
+                {renderAiJobStatusPanel()}
                 <div className="reflection-note">
                   <strong>完成内容</strong>
                   <span>{completionResult.checkin.content}</span>

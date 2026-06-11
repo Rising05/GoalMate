@@ -353,6 +353,50 @@ p {
   backdrop-filter: blur(18px) saturate(1.18);
 }
 
+.ai-job-status {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.64);
+  -webkit-backdrop-filter: blur(18px) saturate(1.18);
+  backdrop-filter: blur(18px) saturate(1.18);
+}
+
+.ai-job-status h2 {
+  margin-bottom: 0;
+  font-size: 1rem;
+}
+
+.ai-job-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ai-job-metrics span {
+  display: grid;
+  gap: 4px;
+  min-height: 56px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.ai-job-metrics strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .main-panel {
   align-self: start;
   padding: 18px;
