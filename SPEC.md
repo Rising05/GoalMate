@@ -608,6 +608,14 @@ MVP 不接入真实支付。
 - 深度健康报告。
 - 高级奖励愿景板。
 
+MVP 已落地的会员额度统计：
+
+- 免费版进行中目标上限为 1，PRO 进行中目标上限为 5，确认计划时由后端统一校验。
+- `AuthService` 在注册、登录和 `GET /auth/me` 返回 `quota`，包含当前会员计划、是否具有 PRO 权益、进行中目标使用量、今日 AI job 使用量、本周重规划使用量和本周评分申诉使用量。
+- MVP 阶段 AI 次数先作为统计和前端展示，不强制拦截所有 AI job；进行中目标额度已经强制校验。
+- 前端账号页展示进行中目标、今日 AI 次数、本周重规划和本周申诉额度。
+- 2026-06-11 已补充 `AuthService quota integration`，验证当前用户 quota 和 AI usage 统计。
+
 ## 10. 管理后台
 
 后台 MVP 功能：
@@ -1025,7 +1033,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 实现热力图聚合接口。
 - 实现健康报告和时间线。
 - 已实现邮件提醒任务、MailProvider 抽象、邮件日志和队列入队元数据。
-- 实现会员额度限制。
+- 已实现会员额度限制和 AI 使用统计；进行中目标额度强制校验，AI job、重规划和申诉额度返回给前端展示。
 - 实现后台管理接口。
 - 实现审计日志。
 
@@ -1050,6 +1058,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 已新增每日健康快照表 `health_snapshots`，保存 `healthScore`、`deviationEventId`、completion metrics、rescue metrics 和 `riskLevel`，并预留 `GET /goals/:id/health-snapshots` 趋势接口。
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration` 和 `npm run build` 验证阶段 2/3 后端、前端类型和构建。
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（36/36）和 `npm run build` 验证 provider/queue 增量。
+- 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（37/37）和 `npm run build` 验证会员 quota/AI usage 增量。
 
 ## 21. 验收标准
 

@@ -11,6 +11,26 @@ export interface AuthUser {
     status: string;
     expiresAt: string | null;
   } | null;
+  quota: {
+    plan: string;
+    hasProAccess: boolean;
+    activeGoals: {
+      used: number;
+      limit: number;
+    };
+    aiJobsToday: {
+      used: number;
+      limit: number;
+    };
+    replansThisWeek: {
+      used: number;
+      limit: number;
+    };
+    scoreAppealsThisWeek: {
+      used: number;
+      limit: number;
+    };
+  };
 }
 
 export interface AuthResponse {

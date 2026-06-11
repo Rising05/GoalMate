@@ -737,6 +737,14 @@ export function App() {
     : [];
   const selectedGoalStatus =
     selectedGoal ? goalStatusLabels[selectedGoal.status] ?? selectedGoal.status : "待选择";
+  const accountQuotaMetrics = session
+    ? [
+        ["进行中目标", session.user.quota.activeGoals],
+        ["今日 AI 次数", session.user.quota.aiJobsToday],
+        ["本周重规划", session.user.quota.replansThisWeek],
+        ["本周申诉", session.user.quota.scoreAppealsThisWeek]
+      ] as const
+    : [];
   const dashboardAction = getDashboardAction();
   const goalPlaceholders =
     categoryExamples[goalForm.category] ?? categoryExamples.custom;
@@ -3553,6 +3561,16 @@ export function App() {
                 <div className="signed-in">
                   <h2>{session.user.displayName ?? session.user.email}</h2>
                   <p>{session.user.membership?.plan ?? "FREE"} 计划</p>
+                  <div className="metric-grid">
+                    {accountQuotaMetrics.map(([label, quota]) => (
+                      <div className="metric-card neutral" key={label}>
+                        <span>{label}</span>
+                        <strong>
+                          {quota.used}/{quota.limit}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <AuthPanel onAuthenticated={handleAuthenticated} />

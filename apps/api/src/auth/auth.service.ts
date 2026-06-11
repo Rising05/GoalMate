@@ -14,6 +14,16 @@ interface AuthPayload {
   displayName?: string;
 }
 
+const ACTIVE_GOAL_STATUSES = ["ACTIVE", "AT_RISK", "REPLANNING"] as const;
+const FREE_ACTIVE_GOAL_LIMIT = 1;
+const PRO_ACTIVE_GOAL_LIMIT = 5;
+const FREE_DAILY_AI_JOB_LIMIT = 20;
+const PRO_DAILY_AI_JOB_LIMIT = 200;
+const FREE_WEEKLY_REPLAN_LIMIT = 3;
+const PRO_WEEKLY_REPLAN_LIMIT = 20;
+const FREE_WEEKLY_APPEAL_LIMIT = 3;
+const PRO_WEEKLY_APPEAL_LIMIT = 30;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -92,11 +102,11 @@ export class AuthService {
     }
 
     return {
-      user: this.sanitizeUser(user)
+      user: await this.sanitizeUser(user)
     };
   }
 
-  private buildAuthResponse(user: {
+  private async buildAuthResponse(user: {
     id: string;
     email: string;
     displayName: string | null;
@@ -115,11 +125,11 @@ export class AuthService {
 
     return {
       token,
-      user: this.sanitizeUser(user)
+      user: await this.sanitizeUser(user)
     };
   }
 
-  private sanitizeUser(user: {
+  private async sanitizeUser(user: {
     id: string;
     email: string;
     displayName: string | null;
@@ -143,8 +153,106 @@ export class AuthService {
             status: user.membership.status,
             expiresAt: user.membership.expiresAt?.toISOString() ?? null
           }
-        : null
+        : null,
+      quota: await this.getQuotaSummary(user.id, user.membership)
     };
+  }
+
+  private async getQuotaSummary(
+    userId: string,
+    membership: {
+      plan: string;
+      status: string;
+      expiresAt: Date | null;
+    } | null
+  ) {
+    const hasProAccess =
+      membership?.plan === "PRO" &&
+      ["ACTIVE", "MANUAL"].includes(membership.status) &&
+      (!membership.expiresAt || membership.expiresAt > new Date());
+    const now = new Date();
+    const todayStart = this.getDateRange(this.toDateKey(now)).start;
+    const weekStart = new Date(todayStart);
+    weekStart.setUTCDate(todayStart.getUTCDate() - 6);
+    const [activeGoalCount, aiJobsToday, replansThisWeek, appealsThisWeek] =
+      await Promise.all([
+        this.prisma.goal.count({
+          where: {
+            userId,
+            status: {
+              in: [...ACTIVE_GOAL_STATUSES]
+            }
+          }
+        }),
+        this.prisma.aiJob.count({
+          where: {
+            userId,
+            createdAt: {
+              gte: todayStart
+            }
+          }
+        }),
+        this.prisma.aiJob.count({
+          where: {
+            userId,
+            type: "GOAL_PLAN_REPLAN",
+            createdAt: {
+              gte: weekStart
+            }
+          }
+        }),
+        this.prisma.scoreAppeal.count({
+          where: {
+            userId,
+            createdAt: {
+              gte: weekStart
+            }
+          }
+        })
+      ]);
+
+    return {
+      plan: hasProAccess ? "PRO" : "FREE",
+      hasProAccess,
+      activeGoals: {
+        used: activeGoalCount,
+        limit: hasProAccess ? PRO_ACTIVE_GOAL_LIMIT : FREE_ACTIVE_GOAL_LIMIT
+      },
+      aiJobsToday: {
+        used: aiJobsToday,
+        limit: hasProAccess ? PRO_DAILY_AI_JOB_LIMIT : FREE_DAILY_AI_JOB_LIMIT
+      },
+      replansThisWeek: {
+        used: replansThisWeek,
+        limit: hasProAccess ? PRO_WEEKLY_REPLAN_LIMIT : FREE_WEEKLY_REPLAN_LIMIT
+      },
+      scoreAppealsThisWeek: {
+        used: appealsThisWeek,
+        limit: hasProAccess ? PRO_WEEKLY_APPEAL_LIMIT : FREE_WEEKLY_APPEAL_LIMIT
+      }
+    };
+  }
+
+  private getDateRange(dateKey: string) {
+    const start = new Date(`${dateKey}T00:00:00.000+08:00`);
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 1);
+
+    return { start, end };
+  }
+
+  private toDateKey(date: Date) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(date);
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+
+    return `${year}-${month}-${day}`;
   }
 
   private parseAuthPayload(input: unknown, allowDisplayName: boolean): AuthPayload {
