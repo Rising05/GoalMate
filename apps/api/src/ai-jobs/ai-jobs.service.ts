@@ -2,10 +2,20 @@ import {
   BadRequestException,
   Inject,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from "@nestjs/common";
-import { AiJob, DailyTask, Goal, Milestone, Plan, WeeklyPlan } from "@prisma/client";
+import {
+  AiJob,
+  DailyTask,
+  Goal,
+  Milestone,
+  Plan,
+  Prisma,
+  WeeklyPlan
+} from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { QueueService } from "../queue/queue.service";
 import { GeneratedGoalPlan, MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER, PlanProvider } from "./plan-provider";
 
@@ -27,7 +37,10 @@ export class AiJobsService {
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
     @Inject(PLAN_PROVIDER)
-    private readonly planProvider: PlanProvider = new MockPlanProvider()
+    private readonly planProvider: PlanProvider = new MockPlanProvider(),
+    @Optional()
+    @Inject(QueueService)
+    private readonly queueService?: QueueService
   ) {}
 
   async generateGoalPlan(userId: string, goalId: string) {
@@ -46,7 +59,7 @@ export class AiJobsService {
       throw new BadRequestException("当前目标状态不能生成计划");
     }
 
-    const job = await this.prisma.aiJob.create({
+    const createdJob = await this.prisma.aiJob.create({
       data: {
         userId,
         goalId,
@@ -60,6 +73,7 @@ export class AiJobsService {
         }
       }
     });
+    const job = await this.attachQueueMetadata(createdJob);
 
     try {
       await this.prisma.goal.update({
@@ -144,7 +158,7 @@ export class AiJobsService {
         currentBaseline: payload.currentBaseline ?? goal.currentBaseline
       }
     });
-    const job = await this.prisma.aiJob.create({
+    const createdJob = await this.prisma.aiJob.create({
       data: {
         userId,
         goalId,
@@ -163,6 +177,7 @@ export class AiJobsService {
         }
       }
     });
+    const job = await this.attachQueueMetadata(createdJob);
 
     try {
       const generatedPlan = await this.generatePlanWithRetry(job.id, updatedGoal);
@@ -300,6 +315,47 @@ export class AiJobsService {
     };
   }
 
+  private async attachQueueMetadata(job: AiJob) {
+    const payload = this.jsonObject(job.payload);
+
+    try {
+      const queue = await this.queueService?.enqueueAiJob({
+        jobId: job.id,
+        type: job.type,
+        goalId: job.goalId,
+        userId: job.userId
+      });
+
+      return this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          payload: this.toJson({
+            ...payload,
+            queue: queue ?? {
+              queued: false,
+              queueName: "ai-jobs",
+              reason: "Queue service is not configured."
+            }
+          })
+        }
+      });
+    } catch (error) {
+      return this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          payload: this.toJson({
+            ...payload,
+            queue: {
+              queued: false,
+              queueName: "ai-jobs",
+              error: error instanceof Error ? error.message : "Queue enqueue failed"
+            }
+          })
+        }
+      });
+    }
+  }
+
   private parseReplanPayload(input: unknown) {
     if (!input || typeof input !== "object") {
       throw new BadRequestException("请求参数不正确");
@@ -375,6 +431,16 @@ export class AiJobsService {
 
   private cleanText(value: unknown, maxLength: number) {
     return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+  }
+
+  private jsonObject(value: unknown) {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  private toJson(value: unknown) {
+    return value as Prisma.InputJsonValue;
   }
 
   private parseOptionalInteger(value: unknown, errorMessage: string) {

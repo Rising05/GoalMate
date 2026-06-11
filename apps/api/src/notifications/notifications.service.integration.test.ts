@@ -4,6 +4,7 @@ import { after, before, describe, it } from "node:test";
 import { BadRequestException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
+import { MailProvider } from "./mail-provider";
 import { NotificationsService } from "./notifications.service";
 
 loadEnv();
@@ -126,7 +127,38 @@ describe("NotificationsService integration", () => {
     assert.equal(logs.logs[0].status, "FAILED");
     assert.equal(logs.logs[0].error, "Mock email provider failed");
   });
+
+  it("sends queued logs through the configured mail provider", async () => {
+    const provider = new CountingMailProvider();
+    const service = new NotificationsService(prisma, provider);
+    const user = await createUser("provider");
+    await service.createPreviewEmailLog(user.id, {
+      type: "DAILY_TASK",
+      scheduledFor: "2026-06-11T09:00:00.000+08:00"
+    });
+
+    const processed = await service.processQueuedEmailLogs(user.id, {
+      now: "2026-06-11T10:00:00.000+08:00"
+    });
+
+    assert.equal(provider.calls, 1);
+    assert.equal(processed.sent, 1);
+    assert.equal(processed.processed[0].status, "SENT");
+  });
 });
+
+class CountingMailProvider implements MailProvider {
+  readonly name = "counting-mail";
+  calls = 0;
+
+  async send() {
+    this.calls += 1;
+    return {
+      status: "SENT" as const,
+      error: null
+    };
+  }
+}
 
 async function cleanupTestUsers() {
   await prisma.user.deleteMany({

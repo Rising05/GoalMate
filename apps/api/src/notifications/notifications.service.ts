@@ -2,10 +2,14 @@ import {
   BadRequestException,
   Inject,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from "@nestjs/common";
 import { EmailLog, NotificationPreference, Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { QueueService } from "../queue/queue.service";
+import { MAIL_PROVIDER, MailProvider } from "./mail-provider";
+import { MockMailProvider } from "./mock-mail.provider";
 
 const DEFAULT_REMINDER_TYPES = [
   "DAILY_TASK",
@@ -27,7 +31,15 @@ const REMINDER_TYPE_LABELS: Record<string, string> = {
 
 @Injectable()
 export class NotificationsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(MAIL_PROVIDER)
+    private readonly mailProvider: MailProvider = new MockMailProvider(),
+    @Optional()
+    @Inject(QueueService)
+    private readonly queueService?: QueueService
+  ) {}
 
   async getPreference(userId: string) {
     const preference = await this.ensurePreference(userId);
@@ -100,6 +112,7 @@ export class NotificationsService {
         scheduledFor
       }
     });
+    await this.enqueueEmailLog(log);
 
     return {
       log: this.serializeEmailLog(log)
@@ -175,20 +188,20 @@ export class NotificationsService {
         continue;
       }
 
-      queued.push(
-        await this.prisma.emailLog.create({
-          data: {
-            userId,
-            goalId: candidate.goalId,
-            type: candidate.type,
-            recipientEmail: user.email,
-            subject: candidate.subject,
-            content: candidate.content,
-            status: "QUEUED",
-            scheduledFor
-          }
-        })
-      );
+      const log = await this.prisma.emailLog.create({
+        data: {
+          userId,
+          goalId: candidate.goalId,
+          type: candidate.type,
+          recipientEmail: user.email,
+          subject: candidate.subject,
+          content: candidate.content,
+          status: "QUEUED",
+          scheduledFor
+        }
+      });
+      await this.enqueueEmailLog(log);
+      queued.push(log);
     }
 
     return {
@@ -219,17 +232,14 @@ export class NotificationsService {
     const processed: EmailLog[] = [];
 
     for (const log of queuedLogs) {
-      const shouldFail =
-        simulateFailure ||
-        log.recipientEmail.includes("+fail") ||
-        log.content.includes("[[mock-email-fail]]");
+      const result = await this.mailProvider.send(log, { simulateFailure });
       processed.push(
         await this.prisma.emailLog.update({
           where: { id: log.id },
-          data: shouldFail
+          data: result.status === "FAILED"
             ? {
                 status: "FAILED",
-                error: "Mock email provider failed",
+                error: result.error ?? "Mail provider failed",
                 sentAt: null
               }
             : {
@@ -266,6 +276,18 @@ export class NotificationsService {
         timezone: "Asia/Shanghai"
       }
     });
+  }
+
+  private async enqueueEmailLog(log: EmailLog) {
+    try {
+      await this.queueService?.enqueueEmailLog({
+        emailLogId: log.id,
+        userId: log.userId,
+        type: log.type
+      });
+    } catch {
+      // Queue enqueue failure must not prevent persisting the email log.
+    }
   }
 
   private buildDueEmailCandidates(

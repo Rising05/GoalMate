@@ -863,7 +863,10 @@ MVP 已落地的 AI Provider 和队列基础版：
 - DeepSeek provider 调用 `https://api.deepseek.com/chat/completions`，默认模型为 `deepseek-chat`，可用 `DEEPSEEK_MODEL` 覆盖；返回内容要求为计划 JSON，并解析为现有 `Plan/Milestone/WeeklyPlan/DailyTask` 数据结构。
 - 新增 BullMQ 队列基础服务，依赖 Redis，配置 `BULLMQ_ENABLED=true` 后可向 `ai-jobs` 和 `email` 队列入队；默认关闭时返回明确 disabled 状态，不破坏当前同步 Mock MVP 链路。
 - 新增 `GET /ai-jobs/:id`，前端可按 job id 查询自己的 AI 任务状态；跨用户读取返回不存在。
-- 2026-06-11 已补充 AI job provider payload、job 状态权限隔离和 QueueService 默认关闭测试；`npm run test:integration` 通过 34/34。
+- 计划生成和重规划创建 `ai_jobs` 后会尝试写入 BullMQ `ai-jobs` 队列，并把队列结果写入 job payload；队列不可用不会破坏当前同步生成链路。
+- 打卡评分新增 `ScoringProvider` 抽象，默认使用 `MockScoringProvider`；评分创建 `CHECKIN_SCORING` job 后会尝试写入 BullMQ `ai-jobs` 队列，并在 payload 中保留 provider 与 queue 元数据。
+- 邮件提醒新增 `MailProvider` 抽象，默认使用 `MockMailProvider`；邮件日志创建后会尝试写入 BullMQ `email` 队列，邮件处理通过 provider 返回发送成功或失败。
+- 2026-06-11 已补充 AI job provider payload、job 状态权限隔离、评分 provider/queue payload、MailProvider 注入、QueueService 默认关闭和 Redis 实际入队测试；`npm run test:integration` 通过 36/36。
 
 ## 16. API 边界
 
@@ -1007,13 +1010,13 @@ MVP 已落地的 AI Provider 和队列基础版：
 
 - 搭建 NestJS 项目。
 - 设计 MySQL schema。
-- 已接入 Redis/BullMQ 基础服务；默认关闭，设置 `BULLMQ_ENABLED=true` 后可入队 `ai-jobs` 和 `email` 队列。
+- 已接入 Redis/BullMQ 基础服务；默认关闭，设置 `BULLMQ_ENABLED=true` 后计划生成、打卡评分和邮件日志可入队 `ai-jobs` / `email` 队列。
 - 实现认证和权限。
 - 实现目标、计划、任务模型。
 - 已实现 AI Provider 抽象层，计划生成可在 Mock 与 DeepSeek provider 间切换。
 - 已接入 DeepSeek provider 配置入口；无 `DEEPSEEK_API_KEY` 时自动 fallback 到 Mock。
-- 实现计划生成异步任务。
-- 实现打卡评分异步任务。
+- 已实现计划生成异步任务记录、重试、状态查询和队列入队元数据。
+- 已实现打卡评分异步任务记录、Mock ScoringProvider 和队列入队元数据。
 - 实现评分申诉复评。
 - 实现偏差检测规则。
 - 实现救援任务生成。
@@ -1021,7 +1024,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 实现奖励愿景板接口。
 - 实现热力图聚合接口。
 - 实现健康报告和时间线。
-- 实现邮件提醒任务。
+- 已实现邮件提醒任务、MailProvider 抽象、邮件日志和队列入队元数据。
 - 实现会员额度限制。
 - 实现后台管理接口。
 - 实现审计日志。
@@ -1046,6 +1049,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 已在健康报告增加近 7 天救援成功次数、救援任务完成率、普通任务完成率、救援后次日是否回到正常计划。
 - 已新增每日健康快照表 `health_snapshots`，保存 `healthScore`、`deviationEventId`、completion metrics、rescue metrics 和 `riskLevel`，并预留 `GET /goals/:id/health-snapshots` 趋势接口。
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration` 和 `npm run build` 验证阶段 2/3 后端、前端类型和构建。
+- 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（36/36）和 `npm run build` 验证 provider/queue 增量。
 
 ## 21. 验收标准
 

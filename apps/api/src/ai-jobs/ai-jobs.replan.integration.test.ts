@@ -75,6 +75,10 @@ describe("AiJobsService requestGoalReplan integration", () => {
     assert.equal(result.job.status, "SUCCEEDED");
     assert.equal(result.job.attempts, 3);
     assert.equal((result.job.payload as { provider?: string }).provider, "mock");
+    assert.equal(
+      ((result.job.payload as { queue?: { queueName?: string } }).queue)?.queueName,
+      "ai-jobs"
+    );
     assert.equal(provider.calls, 3);
     assert.equal(result.goal.status, "WAITING_CONFIRMATION");
     assert.ok(result.plan);

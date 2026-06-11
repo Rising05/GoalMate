@@ -2,18 +2,24 @@ import {
   BadRequestException,
   Inject,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from "@nestjs/common";
 import {
   AiScore,
+  AiJob,
   Checkin,
   DailyTask,
   DeviationEvent,
   Goal,
   GoalStatus,
+  Prisma,
   WeeklyPlan
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { QueueService } from "../queue/queue.service";
+import { MockScoringProvider } from "./mock-scoring.provider";
+import { SCORING_PROVIDER, ScoringProvider } from "./scoring-provider";
 
 type TaskWithGoalAndCheckins = DailyTask & {
   goal: Goal;
@@ -84,7 +90,15 @@ const CHECKIN_SCORE_APPEAL = "CHECKIN_SCORE_APPEAL";
 
 @Injectable()
 export class DailyTasksService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(SCORING_PROVIDER)
+    private readonly scoringProvider: ScoringProvider = new MockScoringProvider(),
+    @Optional()
+    @Inject(QueueService)
+    private readonly queueService?: QueueService
+  ) {}
 
   async getTodayTasks(userId: string, goalId?: string) {
     const today = this.toDateKey(new Date());
@@ -368,7 +382,11 @@ export class DailyTasksService {
     }
 
     const investedMinutes = payload.investedMinutes ?? task.plannedMinutes ?? 0;
-    const score = this.getMockScore(payload.content, investedMinutes, task);
+    const score = await this.scoringProvider.score({
+      content: payload.content,
+      investedMinutes,
+      task
+    });
     const { completedTask, checkin, job } = await this.prisma.$transaction(async (tx) => {
       await tx.dailyTask.update({
         where: { id: task.id },
@@ -397,7 +415,7 @@ export class DailyTasksService {
             dailyTaskId: task.id,
             taskType: task.taskType,
             deviationEventId: task.deviationEventId,
-            provider: "mock"
+            provider: this.scoringProvider.name
           }
         }
       });
@@ -416,8 +434,8 @@ export class DailyTasksService {
         data: {
           checkinId: createdCheckin.id,
           totalScore: score.totalScore,
-          dimensions: score.dimensions,
-          evidence: score.evidence,
+          dimensions: this.toJson(score.dimensions),
+          evidence: this.toJson(score.evidence),
           summary: score.summary,
           suggestion: score.suggestion
         }
@@ -446,11 +464,12 @@ export class DailyTasksService {
         job: succeededJob
       };
     });
+    const queuedJob = await this.attachQueueMetadata(job);
 
     return {
       task: this.serializeTask(completedTask),
       checkin: this.serializeCheckin(checkin),
-      job: this.serializeAiJob(job)
+      job: this.serializeAiJob(queuedJob)
     };
   }
 
@@ -550,6 +569,47 @@ export class DailyTasksService {
       checkin: this.serializeCheckin(updatedCheckin),
       job: this.serializeAiJob(job)
     };
+  }
+
+  private async attachQueueMetadata(job: AiJob) {
+    const payload = this.jsonObject(job.payload);
+
+    try {
+      const queue = await this.queueService?.enqueueAiJob({
+        jobId: job.id,
+        type: job.type,
+        goalId: job.goalId,
+        userId: job.userId
+      });
+
+      return this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          payload: this.toJson({
+            ...payload,
+            queue: queue ?? {
+              queued: false,
+              queueName: "ai-jobs",
+              reason: "Queue service is not configured."
+            }
+          })
+        }
+      });
+    } catch (error) {
+      return this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          payload: this.toJson({
+            ...payload,
+            queue: {
+              queued: false,
+              queueName: "ai-jobs",
+              error: error instanceof Error ? error.message : "Queue enqueue failed"
+            }
+          })
+        }
+      });
+    }
   }
 
   private taskInclude() {
@@ -678,51 +738,14 @@ export class DailyTasksService {
     return value.trim().slice(0, maxLength);
   }
 
-  private getMockScore(
-    content: string,
-    investedMinutes: number,
-    task: TaskWithGoalAndCheckins
-  ) {
-    const contentScore = Math.min(20, Math.floor(content.length / 6));
-    const timeScore = Math.min(20, Math.floor(investedMinutes / 5));
-    const plannedMinutes = task.plannedMinutes ?? investedMinutes;
-    const timeMatch = plannedMinutes
-      ? Math.max(60, 100 - Math.abs(plannedMinutes - investedMinutes))
-      : 82;
-    const totalScore = Math.max(60, Math.min(98, 62 + contentScore + timeScore));
+  private jsonObject(value: unknown) {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
 
-    return {
-      totalScore,
-      dimensions: {
-        completion: totalScore,
-        timeMatch,
-        evidence: Math.max(60, totalScore - 8),
-        reflection: Math.max(60, totalScore - 4)
-      },
-      evidence: {
-        source: "mock",
-        dailyTaskId: task.id,
-        taskType: task.taskType,
-        deviationEventId: task.deviationEventId,
-        rescueTriggerCode: task.rescueTriggerCode,
-        rescueRiskLevel: task.rescueRiskLevel,
-        plannedMinutes,
-        investedMinutes,
-        contentLength: content.length
-      },
-      summary:
-        task.taskType === RESCUE_TASK_TYPE
-          ? `已完成救援任务「${task.title}」，补救动作和复盘已进入成长记录。`
-          : `已完成「${task.title}」，本次复盘内容和投入时间已记录。`,
-      suggestion:
-        task.taskType === RESCUE_TASK_TYPE
-          ? totalScore >= 88
-            ? "补救效果较好，明天可以回到原计划节奏。"
-            : "补救链路已经恢复，明天继续保留一个更小的起步动作。"
-          : totalScore >= 88
-            ? "今天执行质量较高，明天可以继续按原计划推进。"
-            : "明天优先补充更具体的完成证据，并尽量贴近计划投入时间。"
-    };
+  private toJson(value: unknown) {
+    return value as Prisma.InputJsonValue;
   }
 
   private getMockAppealResult(

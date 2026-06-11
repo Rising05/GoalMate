@@ -29,8 +29,20 @@ describe("DailyTasksService score appeal integration", () => {
       content: "完成内容：做了一个小练习。",
       investedMinutes: 10
     });
+    const scoringJob = await prisma.aiJob.findUniqueOrThrow({
+      where: { id: completed.job.id }
+    });
     const originalScore = completed.checkin.aiScore!.totalScore;
 
+    assert.equal(
+      (scoringJob.payload as { provider?: string }).provider,
+      "mock-scorer"
+    );
+    assert.equal(
+      ((scoringJob.payload as { queue?: { queueName?: string } }).queue)
+        ?.queueName,
+      "ai-jobs"
+    );
     const result = await dailyTasksService.appealCheckinScore(
       user.id,
       completed.checkin.id,
