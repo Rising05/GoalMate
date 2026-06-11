@@ -26,6 +26,15 @@ The MVP now covers the core GoalPilot AI loop:
 2. Daily tasks, text check-ins, mock AI scoring, score appeals, deviation detection, rescue tasks, heatmap, health report, and growth timeline.
 3. Goal settlement, failure reports, restart flow, reward board, notification preferences/email logs, membership quota checks, and admin audit interfaces.
 4. Health report rescue metrics and daily `health_snapshots` for future trend charts.
+5. AI provider abstraction with Mock default, optional DeepSeek provider, AI job status lookup, and BullMQ/Redis queue foundation.
+
+Useful optional environment variables for the API:
+
+- `AI_PROVIDER=deepseek`
+- `DEEPSEEK_API_KEY=...`
+- `DEEPSEEK_MODEL=deepseek-chat`
+- `BULLMQ_ENABLED=true`
+- `REDIS_URL=redis://127.0.0.1:6379`
 
 Core validation commands:
 

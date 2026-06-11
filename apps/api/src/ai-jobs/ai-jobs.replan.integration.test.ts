@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiJobsService } from "./ai-jobs.service";
@@ -74,9 +74,27 @@ describe("AiJobsService requestGoalReplan integration", () => {
 
     assert.equal(result.job.status, "SUCCEEDED");
     assert.equal(result.job.attempts, 3);
+    assert.equal((result.job.payload as { provider?: string }).provider, "mock");
     assert.equal(provider.calls, 3);
     assert.equal(result.goal.status, "WAITING_CONFIRMATION");
     assert.ok(result.plan);
+  });
+
+  it("returns AI job status only to the owning user", async () => {
+    const user = await createUser("job-status-owner");
+    const otherUser = await createUser("job-status-other");
+    const goal = await createDraftGoal(user.id, "任务状态查询目标");
+    const result = await aiJobsService.generateGoalPlan(user.id, goal.id);
+
+    const ownJob = await aiJobsService.getJob(user.id, result.job.id);
+
+    assert.equal(ownJob.job.id, result.job.id);
+    assert.equal(ownJob.job.status, "SUCCEEDED");
+    assert.equal((ownJob.job.payload as { provider?: string }).provider, "mock");
+    await assert.rejects(
+      () => aiJobsService.getJob(otherUser.id, result.job.id),
+      NotFoundException
+    );
   });
 
   it("marks AI plan generation as failed after max retries", async () => {

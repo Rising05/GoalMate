@@ -6,6 +6,7 @@ import { GoalsModule } from "./goals/goals.module";
 import { HealthController } from "./health.controller";
 import { NotificationsModule } from "./notifications/notifications.module";
 import { PrismaModule } from "./prisma/prisma.module";
+import { QueueModule } from "./queue/queue.module";
 import { RewardsModule } from "./rewards/rewards.module";
 
 @Module({
@@ -15,6 +16,7 @@ import { RewardsModule } from "./rewards/rewards.module";
     GoalsModule,
     DailyTasksModule,
     RewardsModule,
+    QueueModule,
     NotificationsModule,
     AdminModule
   ],

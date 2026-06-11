@@ -7,6 +7,7 @@ import {
 import { AiJob, DailyTask, Goal, Milestone, Plan, WeeklyPlan } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { GeneratedGoalPlan, MockPlanProvider } from "./mock-plan.provider";
+import { PLAN_PROVIDER, PlanProvider } from "./plan-provider";
 
 const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
 const GOAL_PLAN_REPLAN = "GOAL_PLAN_REPLAN";
@@ -25,8 +26,8 @@ export class AiJobsService {
   constructor(
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
-    @Inject(MockPlanProvider)
-    private readonly mockPlanProvider: MockPlanProvider
+    @Inject(PLAN_PROVIDER)
+    private readonly planProvider: PlanProvider = new MockPlanProvider()
   ) {}
 
   async generateGoalPlan(userId: string, goalId: string) {
@@ -55,7 +56,7 @@ export class AiJobsService {
           goalId,
           title: goal.title,
           description: goal.description,
-          provider: "mock"
+          provider: this.planProvider.name
         }
       }
     });
@@ -158,7 +159,7 @@ export class AiJobsService {
           constraints: payload.constraints,
           currentBaseline: payload.currentBaseline,
           dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
-          provider: "mock"
+          provider: this.planProvider.name
         }
       }
     });
@@ -282,6 +283,23 @@ export class AiJobsService {
     };
   }
 
+  async getJob(userId: string, id: string) {
+    const job = await this.prisma.aiJob.findFirst({
+      where: {
+        id,
+        userId
+      }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    return {
+      job: this.serializeAiJob(job)
+    };
+  }
+
   private parseReplanPayload(input: unknown) {
     if (!input || typeof input !== "object") {
       throw new BadRequestException("请求参数不正确");
@@ -336,7 +354,7 @@ export class AiJobsService {
       });
 
       try {
-        return this.mockPlanProvider.generate(goal);
+        return await this.planProvider.generate(goal);
       } catch (error) {
         lastError = error;
 

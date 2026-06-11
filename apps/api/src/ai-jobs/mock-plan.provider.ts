@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { Goal } from "@prisma/client";
+import { PlanProvider } from "./plan-provider";
 
 export interface GeneratedMilestone {
   title: string;
@@ -31,7 +32,9 @@ export interface GeneratedGoalPlan {
 }
 
 @Injectable()
-export class MockPlanProvider {
+export class MockPlanProvider implements PlanProvider {
+  readonly name = "mock";
+
   generate(goal: Goal): GeneratedGoalPlan {
     const start = startOfDay(goal.startDate);
     const end = startOfDay(goal.endDate);

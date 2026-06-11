@@ -829,6 +829,22 @@ export async function fetchGoalHealthSnapshots(token: string, goalId: string) {
   return data as { goalId: string; snapshots: HealthSnapshot[] };
 }
 
+export async function fetchAiJob(token: string, jobId: string) {
+  const response = await fetch(`${API_BASE_URL}/ai-jobs/${jobId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ job: AiJob }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "AI 任务状态加载失败"));
+  }
+
+  return data as { job: AiJob };
+}
+
 export async function settleGoal(token: string, goalId: string) {
   const response = await fetch(`${API_BASE_URL}/goals/${goalId}/settle`, {
     method: "POST",

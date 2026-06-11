@@ -856,6 +856,15 @@ AI 任务包括：
 - 终止后提示用户“生成失败”或“评分失败”。
 - 后台记录异常任务，便于管理员排查。
 
+MVP 已落地的 AI Provider 和队列基础版：
+
+- 后端新增 `PlanProvider` 抽象，`AiJobsService` 通过 provider 生成计划，重试和失败终止逻辑继续复用 `ai_jobs` 状态机。
+- 默认 provider 为 Mock；当 `AI_PROVIDER=deepseek` 且配置 `DEEPSEEK_API_KEY` 时，Nest provider factory 会选择 DeepSeek provider。无 API key 时自动 fallback 到 Mock，保证本地和测试环境稳定可跑。
+- DeepSeek provider 调用 `https://api.deepseek.com/chat/completions`，默认模型为 `deepseek-chat`，可用 `DEEPSEEK_MODEL` 覆盖；返回内容要求为计划 JSON，并解析为现有 `Plan/Milestone/WeeklyPlan/DailyTask` 数据结构。
+- 新增 BullMQ 队列基础服务，依赖 Redis，配置 `BULLMQ_ENABLED=true` 后可向 `ai-jobs` 和 `email` 队列入队；默认关闭时返回明确 disabled 状态，不破坏当前同步 Mock MVP 链路。
+- 新增 `GET /ai-jobs/:id`，前端可按 job id 查询自己的 AI 任务状态；跨用户读取返回不存在。
+- 2026-06-11 已补充 AI job provider payload、job 状态权限隔离和 QueueService 默认关闭测试；`npm run test:integration` 通过 34/34。
+
 ## 16. API 边界
 
 前端职责：
@@ -998,11 +1007,11 @@ AI 任务包括：
 
 - 搭建 NestJS 项目。
 - 设计 MySQL schema。
-- 接入 Redis 和 BullMQ。
+- 已接入 Redis/BullMQ 基础服务；默认关闭，设置 `BULLMQ_ENABLED=true` 后可入队 `ai-jobs` 和 `email` 队列。
 - 实现认证和权限。
 - 实现目标、计划、任务模型。
-- 实现 AI Provider 抽象层。
-- 接入 DeepSeek Flash。
+- 已实现 AI Provider 抽象层，计划生成可在 Mock 与 DeepSeek provider 间切换。
+- 已接入 DeepSeek provider 配置入口；无 `DEEPSEEK_API_KEY` 时自动 fallback 到 Mock。
 - 实现计划生成异步任务。
 - 实现打卡评分异步任务。
 - 实现评分申诉复评。
