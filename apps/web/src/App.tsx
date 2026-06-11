@@ -49,6 +49,8 @@ import {
   createPreviewEmailLog,
   createRewardCard,
   createGoal,
+  deleteCurrentAccount,
+  deleteGoal,
   deleteRewardCard,
   enqueueDueEmailLogs,
   fetchAdminAiJobs,
@@ -1124,6 +1126,62 @@ export function App() {
     }
   }
 
+  async function handleDeleteSelectedGoal() {
+    if (!session || !selectedGoal) {
+      setGoalMessage("请先登录并选择目标。");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `确认删除目标「${selectedGoal.title}」及其任务、复盘、评分、偏差、奖励和健康快照数据？`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await deleteGoal(session.token, selectedGoal.id);
+      setCreatedGoal(null);
+      setGeneratedPlan(null);
+      setTodayTasks([]);
+      setActivityDays([]);
+      setTimelineDays([]);
+      setGoalHealth(null);
+      setRewardBoard(null);
+      setFailureReport(null);
+      setSelectedGoalId(null);
+      await refreshGoals(session.token);
+      setGoalMessage("目标及关联数据已删除。");
+      setActivePage("create");
+    } catch (error) {
+      setGoalMessage(error instanceof Error ? error.message : "目标删除失败");
+    }
+  }
+
+  async function handleDeleteCurrentAccount() {
+    if (!session) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "确认删除当前账号及全部目标、任务、复盘、奖励、提醒、会员和后台关联数据？此操作不可恢复。"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await deleteCurrentAccount(session.token);
+      setSession(null);
+      setActivePage("account");
+      setGoalMessage("账号已删除。");
+    } catch (error) {
+      setNotificationMessage(error instanceof Error ? error.message : "账号删除失败");
+    }
+  }
+
   function handleRewardImageUpload(file: File | null) {
     if (!file) {
       return;
@@ -2164,6 +2222,14 @@ export function App() {
                       onClick={() => void handleSettleSelectedGoal()}
                     >
                       {isSettlingGoal ? "结算中" : "结算状态"}
+                      <ShieldCheck size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      onClick={() => void handleDeleteSelectedGoal()}
+                    >
+                      删除目标
                       <ShieldCheck size={16} aria-hidden="true" />
                     </button>
                     {selectedGoal.status === "FAILED" ? (
@@ -3570,6 +3636,16 @@ export function App() {
                         </strong>
                       </div>
                     ))}
+                  </div>
+                  <div className="form-actions">
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      onClick={() => void handleDeleteCurrentAccount()}
+                    >
+                      删除账号
+                      <ShieldCheck size={16} aria-hidden="true" />
+                    </button>
                   </div>
                 </div>
               ) : (

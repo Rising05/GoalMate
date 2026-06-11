@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Inject, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Headers, Inject, Post } from "@nestjs/common";
 import { AuthService } from "./auth.service";
 
 @Controller("auth")
@@ -18,5 +18,10 @@ export class AuthController {
   @Get("me")
   me(@Headers("authorization") authorization?: string) {
     return this.authService.getCurrentUser(authorization);
+  }
+
+  @Delete("me")
+  deleteMe(@Headers("authorization") authorization?: string) {
+    return this.authService.deleteCurrentUser(authorization);
   }
 }

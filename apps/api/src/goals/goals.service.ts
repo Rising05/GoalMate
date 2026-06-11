@@ -174,6 +174,32 @@ export class GoalsService {
     };
   }
 
+  async deleteGoal(userId: string, id: string) {
+    const goal = await this.getOwnedGoal(userId, id);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.emailLog.updateMany({
+        where: {
+          userId,
+          goalId: goal.id
+        },
+        data: {
+          goalId: null
+        }
+      });
+
+      await tx.goal.delete({
+        where: {
+          id: goal.id
+        }
+      });
+    });
+
+    return {
+      deletedGoalId: goal.id
+    };
+  }
+
   async getGoalHealth(userId: string, id: string) {
     const context = await this.getGoalHealthContext(userId, id);
     const {

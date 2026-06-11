@@ -73,6 +73,52 @@ describe("AuthService quota integration", () => {
     assert.equal(current.user.quota.replansThisWeek.used, 1);
     assert.equal(current.user.quota.scoreAppealsThisWeek.used, 0);
   });
+
+  it("deletes the current account and cascades owned data", async () => {
+    const suffix = `delete-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const registered = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "Delete User"
+    });
+    const goal = await prisma.goal.create({
+      data: {
+        userId: registered.user.id,
+        title: "账号删除目标",
+        description: "用于验证账号删除级联。",
+        category: "STUDY",
+        status: "ACTIVE",
+        startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        endDate: new Date("2026-06-20T00:00:00.000+08:00"),
+        toleranceDaysAllowed: 1
+      }
+    });
+    await prisma.dailyTask.create({
+      data: {
+        goalId: goal.id,
+        taskDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        title: "账号删除任务",
+        description: "用于验证账号删除。",
+        plannedMinutes: 20
+      }
+    });
+
+    const result = await authService.deleteCurrentUser(
+      `Bearer ${registered.token}`
+    );
+    const [storedUser, goalCount, taskCount, membershipCount] = await Promise.all([
+      prisma.user.findUnique({ where: { id: registered.user.id } }),
+      prisma.goal.count({ where: { userId: registered.user.id } }),
+      prisma.dailyTask.count({ where: { goalId: goal.id } }),
+      prisma.membership.count({ where: { userId: registered.user.id } })
+    ]);
+
+    assert.equal(result.deletedUserId, registered.user.id);
+    assert.equal(storedUser, null);
+    assert.equal(goalCount, 0);
+    assert.equal(taskCount, 0);
+    assert.equal(membershipCount, 0);
+  });
 });
 
 async function cleanupTestUsers() {

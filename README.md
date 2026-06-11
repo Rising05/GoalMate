@@ -27,6 +27,7 @@ The MVP now covers the core GoalPilot AI loop:
 3. Goal settlement, failure reports, restart flow, reward board, notification preferences/email logs, membership quota checks, AI usage statistics, and admin audit interfaces.
 4. Health report rescue metrics and daily `health_snapshots` for future trend charts.
 5. AI provider abstraction with Mock default, optional DeepSeek provider, AI job status lookup, scoring/mail provider abstractions, and BullMQ/Redis queue metadata for plan, scoring, and email jobs.
+6. Privacy deletion endpoints for owned goals and current account data.
 
 Useful optional environment variables for the API:
 

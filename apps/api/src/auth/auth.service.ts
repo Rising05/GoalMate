@@ -106,6 +106,30 @@ export class AuthService {
     };
   }
 
+  async deleteCurrentUser(authorization?: string) {
+    const token = this.extractBearerToken(authorization);
+    const session = this.sessionTokenService.verify(token);
+    const user = await this.prisma.user.findUnique({
+      where: { id: session.sub },
+      select: {
+        id: true,
+        status: true
+      }
+    });
+
+    if (!user || user.status !== "ACTIVE") {
+      throw new UnauthorizedException("登录状态已失效");
+    }
+
+    await this.prisma.user.delete({
+      where: { id: user.id }
+    });
+
+    return {
+      deletedUserId: user.id
+    };
+  }
+
   private async buildAuthResponse(user: {
     id: string;
     email: string;

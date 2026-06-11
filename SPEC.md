@@ -651,6 +651,13 @@ MVP 需要重视私人目标、复盘内容和奖励愿景板数据。
 - 超级管理员查看原文需审计。
 - 记录关键操作审计日志。
 
+MVP 已落地的隐私删除能力：
+
+- `DELETE /goals/:id` 允许用户删除自己的目标，并级联删除目标下任务、复盘、评分、偏差事件、救援任务、奖励卡片、失败报告和健康快照；与目标相关但不由外键级联的邮件日志会清空 `goalId`，保留投递审计历史。
+- `DELETE /auth/me` 允许当前登录用户删除账号，并通过 Prisma cascade 删除用户下目标、会员、提醒偏好、邮件日志、AI jobs、申诉、管理员身份和审计记录等关联数据。
+- 前端目标驾驶舱提供“删除目标”入口，账号页提供“删除账号”入口，均需要浏览器确认。
+- 2026-06-12 已补充 `GoalsService privacy deletion integration` 和 `AuthService quota integration` 中的账号删除测试，验证权限隔离、目标级联删除和账号级联删除。
+
 ## 12. 技术架构
 
 ### 12.1 技术选型
@@ -1059,6 +1066,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration` 和 `npm run build` 验证阶段 2/3 后端、前端类型和构建。
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（36/36）和 `npm run build` 验证 provider/queue 增量。
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（37/37）和 `npm run build` 验证会员 quota/AI usage 增量。
+- 2026-06-12 已通过 `npm run typecheck`、`npm run test:integration`（40/40）和 `npm run build` 验证隐私删除接口和前端入口。
 
 ## 21. 验收标准
 

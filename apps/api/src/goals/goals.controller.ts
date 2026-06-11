@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Inject,
   Param,
@@ -35,6 +36,11 @@ export class GoalsController {
   @Get(":id")
   getById(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.goalsService.getGoalById(request.user!.id, id);
+  }
+
+  @Delete(":id")
+  deleteGoal(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
+    return this.goalsService.deleteGoal(request.user!.id, id);
   }
 
   @Get(":id/health")

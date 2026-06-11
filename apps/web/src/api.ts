@@ -698,6 +698,23 @@ export async function authenticate(
   return data as AuthResponse;
 }
 
+export async function deleteCurrentAccount(token: string) {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ deletedUserId: string }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "账号删除失败"));
+  }
+
+  return data as { deletedUserId: string };
+}
+
 export async function createGoal(token: string, payload: CreateGoalInput) {
   const response = await fetch(`${API_BASE_URL}/goals`, {
     method: "POST",
@@ -731,6 +748,23 @@ export async function listGoals(token: string) {
   }
 
   return data as { goals: Goal[] };
+}
+
+export async function deleteGoal(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ deletedGoalId: string }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标删除失败"));
+  }
+
+  return data as { deletedGoalId: string };
 }
 
 export async function generateGoalPlan(token: string, goalId: string) {
