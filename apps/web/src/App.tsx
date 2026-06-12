@@ -78,6 +78,7 @@ import {
   processQueuedEmailLogs,
   requestGoalReplan,
   restartGoal,
+  retryFailedEmailLogs,
   settleGoal,
   updateAdminMembership,
   updateNotificationPreference,
@@ -1981,6 +1982,32 @@ export function App() {
       setNotificationMessage(
         error instanceof Error ? error.message : "邮件队列处理失败"
       );
+    }
+  }
+
+  async function handleRetryFailedEmailLogs() {
+    if (!session) {
+      setNotificationMessage("请先登录后再重试失败邮件。");
+      return;
+    }
+
+    setIsSavingNotificationPreference(true);
+
+    try {
+      const result = await retryFailedEmailLogs(session.token);
+      const logsResponse = await fetchEmailLogs(session.token);
+      setEmailLogs(logsResponse.logs);
+      setNotificationMessage(
+        result.retried.length
+          ? `已重新排队 ${result.retried.length} 条失败邮件。`
+          : result.skipped[0] ?? "暂无可重试的失败邮件。"
+      );
+    } catch (error) {
+      setNotificationMessage(
+        error instanceof Error ? error.message : "失败邮件重试失败"
+      );
+    } finally {
+      setIsSavingNotificationPreference(false);
     }
   }
 
@@ -3959,6 +3986,13 @@ export function App() {
                       >
                         处理发送队列
                       </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => void handleRetryFailedEmailLogs()}
+                      >
+                        重试失败邮件
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -3973,7 +4007,9 @@ export function App() {
                   <div className="settings-list">
                     {emailLogs.slice(0, 5).map((log) => (
                       <div key={log.id}>
-                        <span>{log.subject}</span>
+                        <span>
+                          {log.subject} · 尝试 {log.attempts} 次
+                        </span>
                         <strong>{log.status}</strong>
                       </div>
                     ))}

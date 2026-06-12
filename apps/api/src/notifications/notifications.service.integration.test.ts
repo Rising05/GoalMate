@@ -101,6 +101,14 @@ describe("NotificationsService integration", () => {
     });
 
     assert.equal(first.queued.length, 4);
+    assert.ok(first.queued.some((log) => log.content.includes("鼓励：")));
+    assert.ok(
+      first.queued.some(
+        (log) =>
+          log.type === "MISSED_CHECKIN" &&
+          log.content.includes("先做10分钟，也算重新开始。")
+      )
+    );
     assert.equal(second.queued.length, 0);
     assert.ok(second.skipped.length >= 4);
     assert.equal(processed.sent, 4);
@@ -125,7 +133,35 @@ describe("NotificationsService integration", () => {
     assert.equal(processed.sent, 0);
     assert.equal(processed.failed, 1);
     assert.equal(logs.logs[0].status, "FAILED");
+    assert.equal(logs.logs[0].attempts, 1);
     assert.equal(logs.logs[0].error, "Mock email provider failed");
+  });
+
+  it("retries failed email logs and records the next attempt", async () => {
+    const user = await createUser("retry");
+    await notificationsService.createPreviewEmailLog(user.id, {
+      type: "DAILY_TASK",
+      scheduledFor: "2026-06-11T09:00:00.000+08:00"
+    });
+    await notificationsService.processQueuedEmailLogs(user.id, {
+      now: "2026-06-11T10:00:00.000+08:00",
+      simulateFailure: true
+    });
+
+    const retried = await notificationsService.retryFailedEmailLogs(user.id, {
+      now: "2026-06-11T10:05:00.000+08:00"
+    });
+    const processed = await notificationsService.processQueuedEmailLogs(user.id, {
+      now: "2026-06-11T10:06:00.000+08:00"
+    });
+
+    assert.equal(retried.retried.length, 1);
+    assert.equal(retried.retried[0].status, "QUEUED");
+    assert.equal(retried.retried[0].attempts, 1);
+    assert.equal(processed.sent, 1);
+    assert.equal(processed.processed[0].status, "SENT");
+    assert.equal(processed.processed[0].attempts, 2);
+    assert.equal(processed.processed[0].error, null);
   });
 
   it("sends queued logs through the configured mail provider", async () => {

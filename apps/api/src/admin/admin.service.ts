@@ -609,6 +609,7 @@ export class AdminService {
       recipientEmail: log.recipientEmail,
       subject: log.subject,
       status: log.status,
+      attempts: log.attempts,
       error: log.error,
       scheduledFor: log.scheduledFor?.toISOString() ?? null,
       sentAt: log.sentAt?.toISOString() ?? null,

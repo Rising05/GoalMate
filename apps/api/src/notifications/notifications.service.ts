@@ -28,6 +28,7 @@ const REMINDER_TYPE_LABELS: Record<string, string> = {
   FAILURE_REVIEW: "失败复盘提醒",
   MEMBERSHIP_EXPIRY: "会员到期提醒"
 };
+const MAX_EMAIL_ATTEMPTS = 3;
 
 @Injectable()
 export class NotificationsService {
@@ -222,6 +223,9 @@ export class NotificationsService {
       where: {
         userId,
         status: "QUEUED",
+        attempts: {
+          lt: MAX_EMAIL_ATTEMPTS
+        },
         scheduledFor: {
           lte: now
         }
@@ -239,11 +243,17 @@ export class NotificationsService {
           data: result.status === "FAILED"
             ? {
                 status: "FAILED",
+                attempts: {
+                  increment: 1
+                },
                 error: result.error ?? "Mail provider failed",
                 sentAt: null
               }
             : {
                 status: "SENT",
+                attempts: {
+                  increment: 1
+                },
                 error: null,
                 sentAt: now
               }
@@ -255,6 +265,45 @@ export class NotificationsService {
       processed: processed.map((log) => this.serializeEmailLog(log)),
       sent: processed.filter((log) => log.status === "SENT").length,
       failed: processed.filter((log) => log.status === "FAILED").length
+    };
+  }
+
+  async retryFailedEmailLogs(userId: string, input: unknown = {}) {
+    const now = this.parseNow(input);
+    const failedLogs = await this.prisma.emailLog.findMany({
+      where: {
+        userId,
+        status: "FAILED",
+        attempts: {
+          lt: MAX_EMAIL_ATTEMPTS
+        }
+      },
+      orderBy: {
+        updatedAt: "asc"
+      },
+      take: 20
+    });
+    const retried: EmailLog[] = [];
+
+    for (const log of failedLogs) {
+      const retryLog = await this.prisma.emailLog.update({
+        where: {
+          id: log.id
+        },
+        data: {
+          status: "QUEUED",
+          error: null,
+          scheduledFor: now,
+          sentAt: null
+        }
+      });
+      await this.enqueueEmailLog(retryLog);
+      retried.push(retryLog);
+    }
+
+    return {
+      retried: retried.map((log) => this.serializeEmailLog(log)),
+      skipped: failedLogs.length === 0 ? ["暂无可重试的失败邮件"] : []
     };
   }
 
@@ -322,7 +371,11 @@ export class NotificationsService {
           content: this.buildReminderContent(
             "DAILY_TASK",
             preference,
-            `目标「${goal.title}」今天还有 ${pendingTasks.length} 个任务待完成。`
+            `目标「${goal.title}」今天还有 ${pendingTasks.length} 个任务待完成。`,
+            this.buildEncouragement("DAILY_TASK", {
+              pendingTaskCount: pendingTasks.length,
+              doneTaskCount: doneTasks.length
+            })
           )
         });
       }
@@ -339,7 +392,11 @@ export class NotificationsService {
           content: this.buildReminderContent(
             "MISSED_CHECKIN",
             preference,
-            `目标「${goal.title}」今天还没有完成记录，可先完成一个最小任务。`
+            `目标「${goal.title}」今天还没有完成记录，可先完成一个最小任务。`,
+            this.buildEncouragement("MISSED_CHECKIN", {
+              pendingTaskCount: pendingTasks.length,
+              doneTaskCount: doneTasks.length
+            })
           )
         });
       }
@@ -356,7 +413,8 @@ export class NotificationsService {
           content: this.buildReminderContent(
             "TOLERANCE_RISK",
             preference,
-            `目标「${goal.title}」已使用 ${goal.toleranceDaysUsed}/${goal.toleranceDaysAllowed} 次容错。`
+            `目标「${goal.title}」已使用 ${goal.toleranceDaysUsed}/${goal.toleranceDaysAllowed} 次容错。`,
+            "今天只守住一个最小动作。"
           )
         });
       }
@@ -369,7 +427,8 @@ export class NotificationsService {
           content: this.buildReminderContent(
             "MILESTONE",
             preference,
-            `目标「${goal.title}」今天有 ${goal.milestones.length} 个阶段里程碑需要关注。`
+            `目标「${goal.title}」今天有 ${goal.milestones.length} 个阶段里程碑需要关注。`,
+            "先检查进度，再决定下一步。"
           )
         });
       }
@@ -384,7 +443,8 @@ export class NotificationsService {
           content: this.buildReminderContent(
             "FAILURE_REVIEW",
             preference,
-            `目标「${goal.title}」已有失败复盘，可根据建议重新开启一个更小的新目标。`
+            `目标「${goal.title}」已有失败复盘，可根据建议重新开启一个更小的新目标。`,
+            "复盘是下一次开始的材料。"
           )
         });
       }
@@ -407,7 +467,8 @@ export class NotificationsService {
           content: this.buildReminderContent(
             "MEMBERSHIP_EXPIRY",
             preference,
-            `PRO 会员将在 ${daysUntilExpiry} 天后到期。`
+            `PRO 会员将在 ${daysUntilExpiry} 天后到期。`,
+            "重要分析建议提前保存。"
           )
         });
       }
@@ -435,9 +496,33 @@ export class NotificationsService {
   private buildReminderContent(
     type: string,
     preference: NotificationPreference,
-    detail: string
+    detail: string,
+    encouragement?: string
   ) {
-    return `${REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒"}：${detail} 当前提醒时间为北京时间 ${preference.reminderTime}。`;
+    const encouragementText = encouragement ? ` 鼓励：${encouragement}` : "";
+    return `${REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒"}：${detail}${encouragementText} 当前提醒时间为北京时间 ${preference.reminderTime}。`;
+  }
+
+  private buildEncouragement(
+    type: string,
+    progress: {
+      pendingTaskCount: number;
+      doneTaskCount: number;
+    }
+  ) {
+    if (type === "MISSED_CHECKIN") {
+      return "先做10分钟，也算重新开始。";
+    }
+
+    if (progress.doneTaskCount > 0) {
+      return "已完成一部分，继续收尾。";
+    }
+
+    if (progress.pendingTaskCount <= 1) {
+      return "先完成这一项就够了。";
+    }
+
+    return "从最小的一项开始。";
   }
 
   private parsePreferencePayload(input: unknown) {
@@ -585,6 +670,7 @@ export class NotificationsService {
       subject: log.subject,
       content: log.content,
       status: log.status,
+      attempts: log.attempts,
       error: log.error,
       scheduledFor: log.scheduledFor?.toISOString() ?? null,
       sentAt: log.sentAt?.toISOString() ?? null,

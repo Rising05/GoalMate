@@ -158,6 +158,7 @@ model EmailLog {
   subject        String
   content        String    @db.Text
   status         String    @default("QUEUED")
+  attempts       Int       @default(0)
   error          String?   @db.Text
   scheduledFor   DateTime?
   sentAt         DateTime?

@@ -60,4 +60,12 @@ export class NotificationsController {
   ) {
     return this.notificationsService.processQueuedEmailLogs(request.user!.id, body);
   }
+
+  @Post("email-logs/retry-failed")
+  retryFailedEmailLogs(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.notificationsService.retryFailedEmailLogs(request.user!.id, body);
+  }
 }

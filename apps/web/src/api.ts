@@ -528,6 +528,7 @@ export interface EmailLog {
   subject: string;
   content: string;
   status: string;
+  attempts: number;
   error: string | null;
   scheduledFor: string | null;
   sentAt: string | null;
@@ -1133,6 +1134,27 @@ export async function processQueuedEmailLogs(token: string) {
   }
 
   return data as { processed: EmailLog[]; sent: number; failed: number };
+}
+
+export async function retryFailedEmailLogs(token: string) {
+  const response = await fetch(`${API_BASE_URL}/notifications/email-logs/retry-failed`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({})
+  });
+
+  const data = await parseJson<{ retried: EmailLog[]; skipped: string[] }>(
+    response
+  );
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "失败邮件重试失败"));
+  }
+
+  return data as { retried: EmailLog[]; skipped: string[] };
 }
 
 export async function fetchAdminOverview(token: string) {
