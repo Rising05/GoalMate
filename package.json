@@ -13,9 +13,13 @@
     "dev:api": "npm run start:dev -w @goalmate/api",
     "build": "npm run build -w @goalmate/shared && npm run build -w @goalmate/api && npm run build -w @goalmate/web",
     "typecheck": "npm run typecheck -w @goalmate/shared && npm run typecheck -w @goalmate/api && npm run typecheck -w @goalmate/web",
-    "test:integration": "npm run test:integration -w @goalmate/api"
+    "test:integration": "npm run test:integration -w @goalmate/api",
+    "test:e2e": "playwright test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
   }
 }

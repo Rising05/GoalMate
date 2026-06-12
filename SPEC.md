@@ -1069,6 +1069,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（36/36）和 `npm run build` 验证 provider/queue 增量。
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（37/37）和 `npm run build` 验证会员 quota/AI usage 增量。
 - 2026-06-12 已通过 `npm run typecheck`、`npm run test:integration`（40/40）和 `npm run build` 验证隐私删除接口和前端入口。
+- 2026-06-12 已新增 Playwright E2E 核心闭环测试，覆盖新用户注册、创建目标、生成计划、确认计划、完成普通任务、生成并完成救援任务、查看热力图、查看成长时间线，并通过 API 断言健康报告和 `deviationEventId` 时间线数据。
 
 ## 21. 验收标准
 

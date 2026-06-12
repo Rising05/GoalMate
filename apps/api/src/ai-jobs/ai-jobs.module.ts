@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthModule } from "../auth/auth.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { QueueModule } from "../queue/queue.module";
 import { AiJobsController } from "./ai-jobs.controller";
@@ -8,7 +9,7 @@ import { MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER } from "./plan-provider";
 
 @Module({
-  imports: [PrismaModule, QueueModule],
+  imports: [AuthModule, PrismaModule, QueueModule],
   controllers: [AiJobsController],
   providers: [
     AiJobsService,
