@@ -42,7 +42,7 @@ export class DeepSeekPlanProvider implements PlanProvider {
           {
             role: "system",
             content:
-              "You generate GoalPilot MVP plans. Return only valid JSON with summary, milestones, weeklyPlans, and dailyTasks. Use ISO date strings."
+              "You generate GoalPilot study plans. Return only valid JSON with summary, milestones, weeklyPlans, and dailyTasks. Use ISO date strings. Each daily task may include studyTaskType, subject, materialRef, chapterRef, questionCount, targetAccuracy, evidenceRequired, and priority."
           },
           {
             role: "user",
@@ -53,6 +53,17 @@ export class DeepSeekPlanProvider implements PlanProvider {
               startDate: goal.startDate.toISOString(),
               endDate: goal.endDate.toISOString(),
               dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes,
+              examName: goal.examName,
+              targetScore: goal.targetScore,
+              currentScore: goal.currentScore,
+              examDate: goal.examDate?.toISOString(),
+              subjects: goal.subjects,
+              materials: goal.materials,
+              chapters: goal.chapters,
+              weaknesses: goal.weaknesses,
+              studyDaysPerWeek: goal.studyDaysPerWeek,
+              dailyStudyMinutes: goal.dailyStudyMinutes,
+              mockExamFrequency: goal.mockExamFrequency,
               currentBaseline: goal.currentBaseline,
               constraints: goal.constraints,
               finalReward: goal.finalReward
@@ -149,7 +160,15 @@ export class DeepSeekPlanProvider implements PlanProvider {
         item.description,
         `weeklyPlans[${weekIndex}].dailyTasks[${taskIndex}].description`
       ),
-      plannedMinutes: this.optionalInteger(item.plannedMinutes)
+      plannedMinutes: this.optionalInteger(item.plannedMinutes),
+      studyTaskType: this.optionalString(item.studyTaskType),
+      subject: this.optionalString(item.subject),
+      materialRef: this.optionalString(item.materialRef),
+      chapterRef: this.optionalString(item.chapterRef),
+      questionCount: this.optionalInteger(item.questionCount),
+      targetAccuracy: this.optionalInteger(item.targetAccuracy),
+      evidenceRequired: this.optionalBoolean(item.evidenceRequired),
+      priority: this.optionalInteger(item.priority)
     };
   }
 
@@ -185,6 +204,10 @@ export class DeepSeekPlanProvider implements PlanProvider {
     const numberValue = Number(value);
 
     return Number.isInteger(numberValue) ? numberValue : undefined;
+  }
+
+  private optionalBoolean(value: unknown) {
+    return typeof value === "boolean" ? value : undefined;
   }
 
   private parseDate(value: unknown, field: string) {

@@ -25,6 +25,17 @@ interface CreateGoalPayload {
   startDate: Date;
   endDate: Date;
   dailyTimeBudgetMinutes?: number;
+  examName?: string;
+  targetScore?: string;
+  currentScore?: string;
+  examDate?: Date;
+  subjects?: string[];
+  materials?: string[];
+  chapters?: string[];
+  weaknesses?: string[];
+  studyDaysPerWeek?: number;
+  dailyStudyMinutes?: number;
+  mockExamFrequency?: string;
   toleranceDaysAllowed: number;
   currentBaseline?: string;
   constraints?: string;
@@ -45,7 +56,18 @@ const CATEGORY_MAP: Record<string, GoalCategory> = {
   career: "CAREER",
   fitness: "FITNESS",
   habit: "HABIT",
-  custom: "CUSTOM"
+  custom: "CUSTOM",
+  postgrad_exam: "POSTGRAD_EXAM",
+  postgrad: "POSTGRAD_EXAM",
+  cet_4_6: "CET_4_6",
+  cet: "CET_4_6",
+  ielts_toefl: "IELTS_TOEFL",
+  ielts: "IELTS_TOEFL",
+  toefl: "IELTS_TOEFL",
+  gpa_improvement: "GPA_IMPROVEMENT",
+  gpa: "GPA_IMPROVEMENT",
+  certification: "CERTIFICATION",
+  custom_study: "CUSTOM_STUDY"
 };
 
 const DONE_STATUS = "DONE";
@@ -134,6 +156,17 @@ export class GoalsService {
         startDate: payload.startDate,
         endDate: payload.endDate,
         dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
+        examName: payload.examName,
+        targetScore: payload.targetScore,
+        currentScore: payload.currentScore,
+        examDate: payload.examDate,
+        subjects: payload.subjects ? this.toJson(payload.subjects) : undefined,
+        materials: payload.materials ? this.toJson(payload.materials) : undefined,
+        chapters: payload.chapters ? this.toJson(payload.chapters) : undefined,
+        weaknesses: payload.weaknesses ? this.toJson(payload.weaknesses) : undefined,
+        studyDaysPerWeek: payload.studyDaysPerWeek,
+        dailyStudyMinutes: payload.dailyStudyMinutes,
+        mockExamFrequency: payload.mockExamFrequency,
         toleranceDaysAllowed: payload.toleranceDaysAllowed,
         currentBaseline: payload.currentBaseline,
         constraints: payload.constraints,
@@ -881,9 +914,20 @@ export class GoalsService {
       body.dailyTimeBudgetMinutes,
       "每日投入时间必须是正整数"
     );
+    const dailyStudyMinutes =
+      this.parseOptionalInteger(body.dailyStudyMinutes, "每日学习时间必须是正整数") ??
+      dailyTimeBudgetMinutes;
+    const studyDaysPerWeek = this.parseOptionalInteger(
+      body.studyDaysPerWeek,
+      "每周学习天数必须是正整数"
+    );
     const toleranceDaysAllowed =
       this.parseOptionalInteger(body.toleranceDaysAllowed, "容错次数必须是非负整数") ??
       0;
+    const examDate =
+      typeof body.examDate === "string" && body.examDate
+        ? this.parseDate(body.examDate, "考试日期不正确")
+        : undefined;
 
     if (!description) {
       throw new BadRequestException("请输入目标描述");
@@ -901,6 +945,17 @@ export class GoalsService {
       throw new BadRequestException("每日投入时间必须大于 0");
     }
 
+    if (dailyStudyMinutes !== undefined && dailyStudyMinutes <= 0) {
+      throw new BadRequestException("每日学习时间必须大于 0");
+    }
+
+    if (
+      studyDaysPerWeek !== undefined &&
+      (studyDaysPerWeek < 1 || studyDaysPerWeek > 7)
+    ) {
+      throw new BadRequestException("每周学习天数必须在 1 到 7 天之间");
+    }
+
     if (toleranceDaysAllowed < 0 || toleranceDaysAllowed > 366) {
       throw new BadRequestException("容错次数范围应为 0 到 366");
     }
@@ -912,6 +967,17 @@ export class GoalsService {
       startDate,
       endDate,
       dailyTimeBudgetMinutes,
+      examName: this.cleanText(body.examName, 120) || undefined,
+      targetScore: this.cleanText(body.targetScore, 80) || undefined,
+      currentScore: this.cleanText(body.currentScore, 80) || undefined,
+      examDate,
+      subjects: this.parseStringList(body.subjects),
+      materials: this.parseStringList(body.materials),
+      chapters: this.parseStringList(body.chapters),
+      weaknesses: this.parseStringList(body.weaknesses),
+      studyDaysPerWeek,
+      dailyStudyMinutes,
+      mockExamFrequency: this.cleanText(body.mockExamFrequency, 120) || undefined,
       toleranceDaysAllowed,
       currentBaseline: this.cleanText(body.currentBaseline, 1000) || undefined,
       constraints: this.cleanText(body.constraints, 1000) || undefined,
@@ -925,6 +991,20 @@ export class GoalsService {
     }
 
     return value.trim().slice(0, maxLength);
+  }
+
+  private parseStringList(value: unknown) {
+    const source = Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? value.split(/[,，\n]/)
+        : [];
+    const list = source
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter(Boolean)
+      .slice(0, 50);
+
+    return list.length ? list : undefined;
   }
 
   private deriveTitle(description: string) {
@@ -1583,6 +1663,17 @@ export class GoalsService {
       toleranceDaysAllowed: goal.toleranceDaysAllowed,
       toleranceDaysUsed: goal.toleranceDaysUsed,
       dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes,
+      examName: goal.examName,
+      targetScore: goal.targetScore,
+      currentScore: goal.currentScore,
+      examDate: goal.examDate?.toISOString() ?? null,
+      subjects: this.jsonArray(goal.subjects),
+      materials: this.jsonArray(goal.materials),
+      chapters: this.jsonArray(goal.chapters),
+      weaknesses: this.jsonArray(goal.weaknesses),
+      studyDaysPerWeek: goal.studyDaysPerWeek,
+      dailyStudyMinutes: goal.dailyStudyMinutes,
+      mockExamFrequency: goal.mockExamFrequency,
       currentBaseline: goal.currentBaseline,
       constraints: goal.constraints,
       finalReward: goal.finalReward,
@@ -1656,6 +1747,14 @@ export class GoalsService {
       description: task.description,
       plannedMinutes: task.plannedMinutes,
       estimatedMinutes: task.plannedMinutes ?? 0,
+      studyTaskType: task.studyTaskType,
+      subject: task.subject,
+      materialRef: task.materialRef,
+      chapterRef: task.chapterRef,
+      questionCount: task.questionCount,
+      targetAccuracy: task.targetAccuracy,
+      evidenceRequired: task.evidenceRequired,
+      priority: task.priority,
       taskType: task.taskType,
       rescueReason: task.rescueReason,
       rescueTriggerCode: task.rescueTriggerCode,

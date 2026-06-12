@@ -1514,6 +1514,15 @@ API 要求：
 - 前端目标创建表单升级为学习目标表单。
 - 补后端模型、迁移、集成测试和 E2E。
 
+当前实现进度：
+
+- 已新增 `20260612011721_add_study_goal_task_fields` Prisma migration，扩展 `GoalCategory` 学习 / 备考枚举和 `goals` 学习目标字段。
+- 已扩展 `daily_tasks` 学习任务字段：`studyTaskType`、`subject`、`materialRef`、`chapterRef`、`questionCount`、`targetAccuracy`、`evidenceRequired`、`priority`。
+- `POST /goals` 已支持考研、四六级、雅思 / 托福、绩点提升、职业证书、自定义学习目标字段输入，并兼容逗号、换行或数组形式的科目 / 资料 / 章节 / 薄弱项。
+- Mock Plan Provider 已能为学习目标生成带科目、章节、任务类型、题量、目标正确率和证据要求的细粒度学习任务。
+- DeepSeek Plan Provider prompt 和解析 schema 已预留学习任务字段。
+- 计划确认页和今日任务页已基础展示学习任务 meta。
+
 阶段 B：打卡证据和 AI 分析付费点。
 
 - 打卡支持勾选、时长、文字、图片、错题 / 笔记链接、题量、正确率。

@@ -31,6 +31,12 @@ enum GoalCategory {
   FITNESS
   HABIT
   CUSTOM
+  POSTGRAD_EXAM
+  CET_4_6
+  IELTS_TOEFL
+  GPA_IMPROVEMENT
+  CERTIFICATION
+  CUSTOM_STUDY
 }
 
 enum GoalStatus {
@@ -73,14 +79,14 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  membership Membership?
-  goals      Goal[]
-  aiJobs     AiJob[]
+  membership             Membership?
+  goals                  Goal[]
+  aiJobs                 AiJob[]
   notificationPreference NotificationPreference?
-  emailLogs   EmailLog[]
-  scoreAppeals ScoreAppeal[]
-  adminProfile AdminUser?
-  auditLogs AuditLog[]
+  emailLogs              EmailLog[]
+  scoreAppeals           ScoreAppeal[]
+  adminProfile           AdminUser?
+  auditLogs              AuditLog[]
 
   @@map("users")
 }
@@ -144,19 +150,19 @@ model NotificationPreference {
 }
 
 model EmailLog {
-  id            String   @id @default(cuid())
-  userId        String
-  goalId        String?
-  type          String
+  id             String    @id @default(cuid())
+  userId         String
+  goalId         String?
+  type           String
   recipientEmail String
-  subject       String
-  content       String   @db.Text
-  status        String   @default("QUEUED")
-  error         String?  @db.Text
-  scheduledFor  DateTime?
-  sentAt        DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  subject        String
+  content        String    @db.Text
+  status         String    @default("QUEUED")
+  error          String?   @db.Text
+  scheduledFor   DateTime?
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -192,6 +198,17 @@ model Goal {
   toleranceDaysAllowed   Int          @default(0)
   toleranceDaysUsed      Int          @default(0)
   dailyTimeBudgetMinutes Int?
+  examName               String?
+  targetScore            String?
+  currentScore           String?
+  examDate               DateTime?
+  subjects               Json?
+  materials              Json?
+  chapters               Json?
+  weaknesses             Json?
+  studyDaysPerWeek       Int?
+  dailyStudyMinutes      Int?
+  mockExamFrequency      String?
   currentBaseline        String?      @db.Text
   constraints            String?      @db.Text
   finalReward            String?      @db.Text
@@ -214,16 +231,16 @@ model Goal {
 }
 
 model FailureReport {
-  id                 String   @id @default(cuid())
-  goalId             String   @unique
-  reasonAnalysis     String   @db.Text
+  id                   String   @id @default(cuid())
+  goalId               String   @unique
+  reasonAnalysis       String   @db.Text
   brokenStreakTimeline Json
-  lowScoreTasks      Json
-  keyDeviationNodes  Json
-  suggestion         String   @db.Text
-  restartGoalDraft   Json
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  lowScoreTasks        Json
+  keyDeviationNodes    Json
+  suggestion           String   @db.Text
+  restartGoalDraft     Json
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
 
@@ -312,6 +329,14 @@ model DailyTask {
   title             String
   description       String   @db.Text
   plannedMinutes    Int?
+  studyTaskType     String?
+  subject           String?
+  materialRef       String?  @db.Text
+  chapterRef        String?  @db.Text
+  questionCount     Int?
+  targetAccuracy    Int?
+  evidenceRequired  Boolean  @default(false)
+  priority          Int?
   taskType          String   @default("NORMAL")
   rescueReason      String?  @db.Text
   rescueTriggerCode String?
@@ -327,6 +352,8 @@ model DailyTask {
 
   @@index([goalId, taskDate])
   @@index([goalId, taskType, status])
+  @@index([goalId, studyTaskType])
+  @@index([goalId, subject])
   @@index([sourceDailyTaskId])
   @@index([deviationEventId])
   @@map("daily_tasks")
@@ -388,9 +415,9 @@ model Checkin {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  goal      Goal       @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  dailyTask DailyTask? @relation(fields: [dailyTaskId], references: [id], onDelete: SetNull)
-  aiScore   AiScore?
+  goal         Goal          @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  dailyTask    DailyTask?    @relation(fields: [dailyTaskId], references: [id], onDelete: SetNull)
+  aiScore      AiScore?
   scoreAppeals ScoreAppeal[]
 
   @@index([goalId, submittedAt])

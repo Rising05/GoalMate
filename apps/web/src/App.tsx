@@ -228,6 +228,19 @@ const aiJobStatusLabels: Record<string, string> = {
   FAILED: "失败"
 };
 
+const studyTaskTypeLabels: Record<string, string> = {
+  READING: "阅读",
+  MEMORIZATION: "背诵",
+  PRACTICE: "刷题",
+  REVIEW: "复习",
+  MOCK_EXAM: "模考",
+  WRITING: "写作",
+  LISTENING: "听力",
+  VOCABULARY: "词汇",
+  ERROR_BOOK: "错题",
+  OTHER: "其他"
+};
+
 const journeySteps = [
   {
     title: "AI 计划",
@@ -365,6 +378,28 @@ function formatActivityMonth(dateKey: string) {
     month: "long",
     year: "numeric"
   }).format(parseDateKey(dateKey));
+}
+
+function getStudyTaskMeta(task: object) {
+  const record = task as Record<string, unknown>;
+  const studyTaskType =
+    typeof record.studyTaskType === "string" ? record.studyTaskType : "";
+  const subject = typeof record.subject === "string" ? record.subject : "";
+  const chapterRef = typeof record.chapterRef === "string" ? record.chapterRef : "";
+  const questionCount =
+    typeof record.questionCount === "number" ? record.questionCount : null;
+  const targetAccuracy =
+    typeof record.targetAccuracy === "number" ? record.targetAccuracy : null;
+  const evidenceRequired = record.evidenceRequired === true;
+
+  return [
+    studyTaskType ? studyTaskTypeLabels[studyTaskType] ?? studyTaskType : "",
+    subject,
+    chapterRef,
+    questionCount ? `${questionCount} 题` : "",
+    targetAccuracy ? `目标正确率 ${targetAccuracy}%` : "",
+    evidenceRequired ? "需证据" : ""
+  ].filter(Boolean);
 }
 
 function getTimelineBadge(item: TimelineItem) {
@@ -2610,6 +2645,13 @@ export function App() {
                                 <span>{formatDate(task.taskDate)}</span>
                                 <strong>{task.title}</strong>
                                 <p>{task.description}</p>
+                                {getStudyTaskMeta(task).length ? (
+                                  <div className="daily-task-chips">
+                                    {getStudyTaskMeta(task).map((meta) => (
+                                      <span key={meta}>{meta}</span>
+                                    ))}
+                                  </div>
+                                ) : null}
                                 <em>
                                   {task.plannedMinutes
                                     ? `${task.plannedMinutes} 分钟`
@@ -2844,6 +2886,13 @@ export function App() {
                             : "待完成"}
                       </p>
                       <p className="task-description">{task.description}</p>
+                      {getStudyTaskMeta(task).length ? (
+                        <div className="daily-task-chips">
+                          {getStudyTaskMeta(task).map((meta) => (
+                            <span key={meta}>{meta}</span>
+                          ))}
+                        </div>
+                      ) : null}
                       {task.taskType === "RESCUE" && task.rescueReason ? (
                         <p className="task-rescue-reason">
                           触发原因：{task.rescueReason}

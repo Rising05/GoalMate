@@ -67,10 +67,22 @@ export class AiJobsService {
         status: "QUEUED",
         payload: {
           goalId,
-          title: goal.title,
-          description: goal.description,
-          provider: this.planProvider.name
-        }
+            title: goal.title,
+            description: goal.description,
+            category: goal.category,
+            examName: goal.examName,
+            targetScore: goal.targetScore,
+            currentScore: goal.currentScore,
+            examDate: goal.examDate?.toISOString() ?? null,
+            subjects: goal.subjects,
+            materials: goal.materials,
+            chapters: goal.chapters,
+            weaknesses: goal.weaknesses,
+            studyDaysPerWeek: goal.studyDaysPerWeek,
+            dailyStudyMinutes: goal.dailyStudyMinutes,
+            mockExamFrequency: goal.mockExamFrequency,
+            provider: this.planProvider.name
+          }
       }
     });
     const job = await this.attachQueueMetadata(createdJob);
@@ -537,7 +549,15 @@ export class AiJobsService {
             taskDate: task.taskDate,
             title: task.title,
             description: task.description,
-            plannedMinutes: task.plannedMinutes
+            plannedMinutes: task.plannedMinutes,
+            studyTaskType: task.studyTaskType,
+            subject: task.subject,
+            materialRef: task.materialRef,
+            chapterRef: task.chapterRef,
+            questionCount: task.questionCount,
+            targetAccuracy: task.targetAccuracy,
+            evidenceRequired: task.evidenceRequired ?? false,
+            priority: task.priority
           }))
         });
       }
@@ -604,6 +624,17 @@ export class AiJobsService {
       toleranceDaysAllowed: goal.toleranceDaysAllowed,
       toleranceDaysUsed: goal.toleranceDaysUsed,
       dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes,
+      examName: goal.examName,
+      targetScore: goal.targetScore,
+      currentScore: goal.currentScore,
+      examDate: goal.examDate?.toISOString() ?? null,
+      subjects: this.jsonArray(goal.subjects),
+      materials: this.jsonArray(goal.materials),
+      chapters: this.jsonArray(goal.chapters),
+      weaknesses: this.jsonArray(goal.weaknesses),
+      studyDaysPerWeek: goal.studyDaysPerWeek,
+      dailyStudyMinutes: goal.dailyStudyMinutes,
+      mockExamFrequency: goal.mockExamFrequency,
       currentBaseline: goal.currentBaseline,
       constraints: goal.constraints,
       finalReward: goal.finalReward,
@@ -663,9 +694,21 @@ export class AiJobsService {
           title: task.title,
           description: task.description,
           plannedMinutes: task.plannedMinutes,
+          studyTaskType: task.studyTaskType,
+          subject: task.subject,
+          materialRef: task.materialRef,
+          chapterRef: task.chapterRef,
+          questionCount: task.questionCount,
+          targetAccuracy: task.targetAccuracy,
+          evidenceRequired: task.evidenceRequired,
+          priority: task.priority,
           status: task.status
         }))
       }))
     };
+  }
+
+  private jsonArray(value: unknown) {
+    return Array.isArray(value) ? value : [];
   }
 }
