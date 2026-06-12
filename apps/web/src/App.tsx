@@ -34,6 +34,7 @@ import {
   Goal,
   GoalHealth,
   GoalPlan,
+  NotificationChannel,
   NotificationPreference,
   RewardBoard,
   RewardCard,
@@ -44,7 +45,9 @@ import {
   TimelineDay,
   TimelineItem,
   TodayDailyTask,
+  WechatBinding,
   appealCheckinScore,
+  bindWechat,
   confirmGoalPlan,
   completeDailyTask,
   createPreviewEmailLog,
@@ -72,6 +75,7 @@ import {
   fetchTaskActivity,
   fetchTaskTimeline,
   fetchTodayTasks,
+  fetchWechatBinding,
   generateGoalPlan,
   generateRescueTask,
   listGoals,
@@ -80,6 +84,7 @@ import {
   restartGoal,
   retryFailedEmailLogs,
   settleGoal,
+  unbindWechat,
   updateAdminMembership,
   updateNotificationPreference,
   updateRewardCard,
@@ -570,6 +575,7 @@ export function App() {
   const [failureReport, setFailureReport] = useState<FailureReport | null>(null);
   const [notificationPreference, setNotificationPreference] =
     useState<NotificationPreference | null>(null);
+  const [wechatBinding, setWechatBinding] = useState<WechatBinding | null>(null);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
@@ -633,6 +639,11 @@ export function App() {
     cardType: "TEXT" as RewardCard["cardType"],
     imageUrl: "",
     linkUrl: ""
+  });
+  const [wechatForm, setWechatForm] = useState({
+    openId: "",
+    unionId: "",
+    nickname: ""
   });
   const [adminRawForm, setAdminRawForm] = useState({
     userId: "",
@@ -851,6 +862,7 @@ export function App() {
       setRewardBoard(null);
       setFailureReport(null);
       setNotificationPreference(null);
+      setWechatBinding(null);
       setEmailLogs([]);
       setAdminOverview(null);
       setAdminUsers([]);
@@ -1850,12 +1862,19 @@ export function App() {
     }
 
     try {
-      const [preference, logsResponse] = await Promise.all([
+      const [preference, logsResponse, bindingResponse] = await Promise.all([
         fetchNotificationPreference(token),
-        fetchEmailLogs(token)
+        fetchEmailLogs(token),
+        fetchWechatBinding(token)
       ]);
       setNotificationPreference(preference);
       setEmailLogs(logsResponse.logs);
+      setWechatBinding(bindingResponse.binding);
+      setWechatForm({
+        openId: bindingResponse.binding?.openId ?? "",
+        unionId: bindingResponse.binding?.unionId ?? "",
+        nickname: bindingResponse.binding?.nickname ?? ""
+      });
       setNotificationMessage("邮件提醒偏好已加载。");
     } catch (error) {
       setNotificationMessage(
@@ -1896,6 +1915,31 @@ export function App() {
     });
   }
 
+  function toggleNotificationChannel(channel: NotificationChannel) {
+    setNotificationPreference((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const hasChannel = current.channels.includes(channel);
+      const channels = hasChannel
+        ? current.channels.filter((item) => item !== channel)
+        : [...current.channels, channel];
+
+      return {
+        ...current,
+        channels
+      };
+    });
+  }
+
+  function updateWechatField(field: keyof typeof wechatForm, value: string) {
+    setWechatForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
   async function handleSaveNotificationPreference() {
     if (!session || !notificationPreference) {
       setNotificationMessage("请先登录并加载提醒设置。");
@@ -1909,6 +1953,7 @@ export function App() {
         enabled: notificationPreference.enabled,
         reminderTime: notificationPreference.reminderTime,
         reminderTypes: notificationPreference.reminderTypes,
+        channels: notificationPreference.channels,
         timezone: notificationPreference.timezone
       });
       setNotificationPreference(saved);
@@ -1917,6 +1962,53 @@ export function App() {
       setNotificationMessage(
         error instanceof Error ? error.message : "提醒偏好保存失败"
       );
+    } finally {
+      setIsSavingNotificationPreference(false);
+    }
+  }
+
+  async function handleBindWechat() {
+    if (!session) {
+      setNotificationMessage("请先登录后再绑定微信。");
+      return;
+    }
+
+    setIsSavingNotificationPreference(true);
+
+    try {
+      const response = await bindWechat(session.token, {
+        openId: wechatForm.openId,
+        unionId: wechatForm.unionId || undefined,
+        nickname: wechatForm.nickname || undefined
+      });
+      setWechatBinding(response.binding);
+      setNotificationMessage("微信提醒账号已绑定。");
+    } catch (error) {
+      setNotificationMessage(error instanceof Error ? error.message : "微信绑定失败");
+    } finally {
+      setIsSavingNotificationPreference(false);
+    }
+  }
+
+  async function handleUnbindWechat() {
+    if (!session) {
+      setNotificationMessage("请先登录后再解绑微信。");
+      return;
+    }
+
+    setIsSavingNotificationPreference(true);
+
+    try {
+      await unbindWechat(session.token);
+      setWechatBinding(null);
+      setWechatForm({
+        openId: "",
+        unionId: "",
+        nickname: ""
+      });
+      setNotificationMessage("微信提醒账号已解绑。");
+    } catch (error) {
+      setNotificationMessage(error instanceof Error ? error.message : "微信解绑失败");
     } finally {
       setIsSavingNotificationPreference(false);
     }
@@ -3951,6 +4043,61 @@ export function App() {
                         </label>
                       ))}
                     </div>
+                    <div className="reminder-type-list">
+                      {notificationPreference.availableChannels.map((channel) => (
+                        <label className="toggle-row" key={channel.code}>
+                          <input
+                            checked={notificationPreference.channels.includes(
+                              channel.code
+                            )}
+                            type="checkbox"
+                            onChange={() => toggleNotificationChannel(channel.code)}
+                          />
+                          <span>{channel.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="settings-list">
+                      <div>
+                        <span>
+                          微信绑定{" "}
+                          {wechatBinding ? `· ${wechatBinding.openId}` : "· 未绑定"}
+                        </span>
+                        <strong>{wechatBinding?.status ?? "NONE"}</strong>
+                      </div>
+                    </div>
+                    <div className="form-grid compact">
+                      <label>
+                        <span>微信 openId</span>
+                        <input
+                          value={wechatForm.openId}
+                          onChange={(event) =>
+                            updateWechatField("openId", event.target.value)
+                          }
+                          placeholder="预留小程序 openId"
+                        />
+                      </label>
+                      <label>
+                        <span>unionId</span>
+                        <input
+                          value={wechatForm.unionId}
+                          onChange={(event) =>
+                            updateWechatField("unionId", event.target.value)
+                          }
+                          placeholder="可选"
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      <span>微信昵称</span>
+                      <input
+                        value={wechatForm.nickname}
+                        onChange={(event) =>
+                          updateWechatField("nickname", event.target.value)
+                        }
+                        placeholder="可选"
+                      />
+                    </label>
                     <div className="form-actions">
                       <button
                         className="primary-button"
@@ -3993,6 +4140,20 @@ export function App() {
                       >
                         重试失败邮件
                       </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => void handleBindWechat()}
+                      >
+                        绑定微信
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => void handleUnbindWechat()}
+                      >
+                        解绑微信
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -4008,7 +4169,7 @@ export function App() {
                     {emailLogs.slice(0, 5).map((log) => (
                       <div key={log.id}>
                         <span>
-                          {log.subject} · 尝试 {log.attempts} 次
+                          {log.channel} · {log.subject} · 尝试 {log.attempts} 次
                         </span>
                         <strong>{log.status}</strong>
                       </div>

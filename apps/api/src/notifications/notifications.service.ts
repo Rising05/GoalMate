@@ -19,6 +19,7 @@ const DEFAULT_REMINDER_TYPES = [
   "FAILURE_REVIEW",
   "MEMBERSHIP_EXPIRY"
 ] as const;
+const DEFAULT_NOTIFICATION_CHANNELS = ["EMAIL"] as const;
 
 const REMINDER_TYPE_LABELS: Record<string, string> = {
   DAILY_TASK: "每日任务提醒",
@@ -27,6 +28,11 @@ const REMINDER_TYPE_LABELS: Record<string, string> = {
   MILESTONE: "阶段里程碑提醒",
   FAILURE_REVIEW: "失败复盘提醒",
   MEMBERSHIP_EXPIRY: "会员到期提醒"
+};
+const CHANNEL_LABELS: Record<string, string> = {
+  WEB: "Web 站内",
+  EMAIL: "邮件",
+  WECHAT: "微信提醒"
 };
 const MAX_EMAIL_ATTEMPTS = 3;
 
@@ -56,12 +62,14 @@ export class NotificationsService {
         enabled: payload.enabled,
         reminderTime: payload.reminderTime,
         reminderTypes: this.toJson(payload.reminderTypes),
+        channels: this.toJson(payload.channels),
         timezone: payload.timezone
       },
       update: {
         enabled: payload.enabled,
         reminderTime: payload.reminderTime,
         reminderTypes: this.toJson(payload.reminderTypes),
+        channels: this.toJson(payload.channels),
         timezone: payload.timezone
       }
     });
@@ -78,6 +86,63 @@ export class NotificationsService {
 
     return {
       logs: logs.map((log) => this.serializeEmailLog(log))
+    };
+  }
+
+  async getWechatBinding(userId: string) {
+    const binding = await this.prisma.wechatBinding.findUnique({
+      where: { userId }
+    });
+
+    return {
+      binding: binding ? this.serializeWechatBinding(binding) : null
+    };
+  }
+
+  async bindWechat(userId: string, input: unknown) {
+    const payload = this.parseWechatBindingPayload(input);
+    const binding = await this.prisma.wechatBinding.upsert({
+      where: { userId },
+      create: {
+        userId,
+        openId: payload.openId,
+        unionId: payload.unionId,
+        nickname: payload.nickname,
+        avatarUrl: payload.avatarUrl,
+        status: "ACTIVE"
+      },
+      update: {
+        openId: payload.openId,
+        unionId: payload.unionId,
+        nickname: payload.nickname,
+        avatarUrl: payload.avatarUrl,
+        status: "ACTIVE",
+        boundAt: new Date()
+      }
+    });
+
+    return {
+      binding: this.serializeWechatBinding(binding)
+    };
+  }
+
+  async unbindWechat(userId: string) {
+    const binding = await this.prisma.wechatBinding.findUnique({
+      where: { userId }
+    });
+
+    if (!binding) {
+      return {
+        unbound: false
+      };
+    }
+
+    await this.prisma.wechatBinding.delete({
+      where: { userId }
+    });
+
+    return {
+      unbound: true
     };
   }
 
@@ -127,6 +192,7 @@ export class NotificationsService {
       where: { id: userId },
       include: {
         membership: true,
+        wechatBinding: true,
         goals: {
           where: {
             status: {
@@ -169,40 +235,52 @@ export class NotificationsService {
     }
 
     const reminderTypes = new Set(this.jsonStringArray(preference.reminderTypes));
+    const channels = this.getDeliveryChannels(preference);
     const candidates = this.buildDueEmailCandidates(user, reminderTypes, preference, now);
     const queued: EmailLog[] = [];
     const skipped: string[] = [];
 
     for (const candidate of candidates) {
-      const exists = await this.prisma.emailLog.findFirst({
-        where: {
-          userId,
-          goalId: candidate.goalId,
-          type: candidate.type,
-          scheduledFor: this.todayDateWhere(now)
-        },
-        select: { id: true }
-      });
+      for (const channel of channels) {
+        const recipient = this.getChannelRecipient(channel, user);
 
-      if (exists) {
-        skipped.push(`${candidate.type} 已存在`);
-        continue;
-      }
-
-      const log = await this.prisma.emailLog.create({
-        data: {
-          userId,
-          goalId: candidate.goalId,
-          type: candidate.type,
-          recipientEmail: user.email,
-          subject: candidate.subject,
-          content: candidate.content,
-          status: "QUEUED",
-          scheduledFor
+        if (!recipient) {
+          skipped.push(`${candidate.type} ${channel} 未绑定`);
+          continue;
         }
-      });
-      await this.enqueueEmailLog(log);
-      queued.push(log);
+
+        const exists = await this.prisma.emailLog.findFirst({
+          where: {
+            userId,
+            goalId: candidate.goalId,
+            type: candidate.type,
+            channel,
+            scheduledFor: this.todayDateWhere(now)
+          },
+          select: { id: true }
+        });
+
+        if (exists) {
+          skipped.push(`${candidate.type} ${channel} 已存在`);
+          continue;
+        }
+
+        const log = await this.prisma.emailLog.create({
+          data: {
+            userId,
+            goalId: candidate.goalId,
+            channel,
+            type: candidate.type,
+            recipientEmail: recipient,
+            subject: candidate.subject,
+            content: candidate.content,
+            status: "QUEUED",
+            scheduledFor
+          }
+        });
+        await this.enqueueEmailLog(log);
+        queued.push(log);
+      }
     }
 
     return {
@@ -222,6 +300,7 @@ export class NotificationsService {
     const queuedLogs = await this.prisma.emailLog.findMany({
       where: {
         userId,
+        channel: "EMAIL",
         status: "QUEUED",
         attempts: {
           lt: MAX_EMAIL_ATTEMPTS
@@ -273,6 +352,7 @@ export class NotificationsService {
     const failedLogs = await this.prisma.emailLog.findMany({
       where: {
         userId,
+        channel: "EMAIL",
         status: "FAILED",
         attempts: {
           lt: MAX_EMAIL_ATTEMPTS
@@ -322,12 +402,17 @@ export class NotificationsService {
         enabled: true,
         reminderTime: "09:00",
         reminderTypes: this.toJson([...DEFAULT_REMINDER_TYPES]),
+        channels: this.toJson([...DEFAULT_NOTIFICATION_CHANNELS]),
         timezone: "Asia/Shanghai"
       }
     });
   }
 
   private async enqueueEmailLog(log: EmailLog) {
+    if (log.channel !== "EMAIL") {
+      return;
+    }
+
     try {
       await this.queueService?.enqueueEmailLog({
         emailLogId: log.id,
@@ -482,6 +567,7 @@ export class NotificationsService {
       where: { id: userId },
       include: {
         membership: true,
+        wechatBinding: true,
         goals: {
           include: {
             dailyTasks: true,
@@ -539,6 +625,7 @@ export class NotificationsService {
         ? body.timezone.trim().slice(0, 80)
         : "Asia/Shanghai";
     const reminderTypes = this.parseReminderTypes(body.reminderTypes);
+    const channels = this.parseChannels(body.channels);
 
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(reminderTime)) {
       throw new BadRequestException("提醒时间必须是 HH:mm 格式");
@@ -548,10 +635,15 @@ export class NotificationsService {
       throw new BadRequestException("至少选择一种提醒类型");
     }
 
+    if (!channels.length) {
+      throw new BadRequestException("至少选择一种提醒渠道");
+    }
+
     return {
       enabled,
       reminderTime,
       reminderTypes,
+      channels,
       timezone
     };
   }
@@ -577,6 +669,82 @@ export class NotificationsService {
 
     const type = value.trim().toUpperCase();
     return type in REMINDER_TYPE_LABELS ? type : null;
+  }
+
+  private parseChannels(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [...DEFAULT_NOTIFICATION_CHANNELS];
+    }
+
+    return Array.from(
+      new Set(
+        value
+          .map((item) => (typeof item === "string" ? item.trim().toUpperCase() : ""))
+          .filter((item) => item in CHANNEL_LABELS)
+      )
+    );
+  }
+
+  private parseWechatBindingPayload(input: unknown) {
+    if (!input || typeof input !== "object") {
+      throw new BadRequestException("请求参数不正确");
+    }
+
+    const body = input as Record<string, unknown>;
+    const openId = this.cleanText(body.openId, 120);
+    const unionId = this.cleanText(body.unionId, 120) || undefined;
+    const nickname = this.cleanText(body.nickname, 80) || undefined;
+    const avatarUrl = this.cleanText(body.avatarUrl, 500) || undefined;
+
+    if (!openId || openId.length < 6) {
+      throw new BadRequestException("微信 openId 不正确");
+    }
+
+    return {
+      openId,
+      unionId,
+      nickname,
+      avatarUrl
+    };
+  }
+
+  private cleanText(value: unknown, maxLength: number) {
+    return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+  }
+
+  private getPreferenceChannels(preference: NotificationPreference) {
+    const channels = this.jsonStringArray(preference.channels).filter(
+      (channel) => channel in CHANNEL_LABELS
+    );
+
+    return channels.length ? channels : [...DEFAULT_NOTIFICATION_CHANNELS];
+  }
+
+  private getDeliveryChannels(preference: NotificationPreference) {
+    return this.getPreferenceChannels(preference).filter((channel) =>
+      ["EMAIL", "WECHAT"].includes(channel)
+    );
+  }
+
+  private getChannelRecipient(
+    channel: string,
+    user: {
+      email: string;
+      wechatBinding?: {
+        openId: string;
+        status: string;
+      } | null;
+    }
+  ) {
+    if (channel === "EMAIL") {
+      return user.email;
+    }
+
+    if (channel === "WECHAT" && user.wechatBinding?.status === "ACTIVE") {
+      return user.wechatBinding.openId;
+    }
+
+    return null;
   }
 
   private parseNow(input: unknown) {
@@ -650,12 +818,17 @@ export class NotificationsService {
       enabled: preference.enabled,
       reminderTime: preference.reminderTime,
       reminderTypes: this.jsonStringArray(preference.reminderTypes),
+      channels: this.getPreferenceChannels(preference),
       timezone: preference.timezone,
       createdAt: preference.createdAt.toISOString(),
       updatedAt: preference.updatedAt.toISOString(),
       availableTypes: DEFAULT_REMINDER_TYPES.map((type) => ({
         code: type,
         label: REMINDER_TYPE_LABELS[type]
+      })),
+      availableChannels: Object.entries(CHANNEL_LABELS).map(([code, label]) => ({
+        code,
+        label
       }))
     };
   }
@@ -665,6 +838,7 @@ export class NotificationsService {
       id: log.id,
       userId: log.userId,
       goalId: log.goalId,
+      channel: log.channel,
       type: log.type,
       recipientEmail: log.recipientEmail,
       subject: log.subject,
@@ -676,6 +850,32 @@ export class NotificationsService {
       sentAt: log.sentAt?.toISOString() ?? null,
       createdAt: log.createdAt.toISOString(),
       updatedAt: log.updatedAt.toISOString()
+    };
+  }
+
+  private serializeWechatBinding(binding: {
+    id: string;
+    userId: string;
+    openId: string;
+    unionId: string | null;
+    nickname: string | null;
+    avatarUrl: string | null;
+    status: string;
+    boundAt: Date;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: binding.id,
+      userId: binding.userId,
+      openId: binding.openId,
+      unionId: binding.unionId,
+      nickname: binding.nickname,
+      avatarUrl: binding.avatarUrl,
+      status: binding.status,
+      boundAt: binding.boundAt.toISOString(),
+      createdAt: binding.createdAt.toISOString(),
+      updatedAt: binding.updatedAt.toISOString()
     };
   }
 

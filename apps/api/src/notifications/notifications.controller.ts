@@ -1,5 +1,6 @@
 import {
   Body,
+  Delete,
   Controller,
   Get,
   Inject,
@@ -35,6 +36,24 @@ export class NotificationsController {
   @Get("email-logs")
   listEmailLogs(@Req() request: AuthenticatedRequest) {
     return this.notificationsService.listEmailLogs(request.user!.id);
+  }
+
+  @Get("wechat-binding")
+  getWechatBinding(@Req() request: AuthenticatedRequest) {
+    return this.notificationsService.getWechatBinding(request.user!.id);
+  }
+
+  @Put("wechat-binding")
+  bindWechat(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.notificationsService.bindWechat(request.user!.id, body);
+  }
+
+  @Delete("wechat-binding")
+  unbindWechat(@Req() request: AuthenticatedRequest) {
+    return this.notificationsService.unbindWechat(request.user!.id);
   }
 
   @Post("email-logs/preview")

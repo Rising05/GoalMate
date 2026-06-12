@@ -32,8 +32,10 @@ describe("NotificationsService integration", () => {
     assert.equal(preference.enabled, true);
     assert.equal(preference.reminderTime, "09:00");
     assert.equal(preference.timezone, "Asia/Shanghai");
+    assert.deepEqual(preference.channels, ["EMAIL"]);
     assert.ok(preference.reminderTypes.includes("DAILY_TASK"));
     assert.ok(preference.availableTypes.length >= 6);
+    assert.ok(preference.availableChannels.some((channel) => channel.code === "WECHAT"));
   });
 
   it("updates notification preference and validates reminder time", async () => {
@@ -43,12 +45,14 @@ describe("NotificationsService integration", () => {
       enabled: false,
       reminderTime: "21:30",
       reminderTypes: ["DAILY_TASK", "FAILURE_REVIEW"],
+      channels: ["EMAIL", "WECHAT"],
       timezone: "Asia/Shanghai"
     });
 
     assert.equal(preference.enabled, false);
     assert.equal(preference.reminderTime, "21:30");
     assert.deepEqual(preference.reminderTypes, ["DAILY_TASK", "FAILURE_REVIEW"]);
+    assert.deepEqual(preference.channels, ["EMAIL", "WECHAT"]);
     await assert.rejects(
       () =>
         notificationsService.updatePreference(user.id, {
@@ -114,7 +118,69 @@ describe("NotificationsService integration", () => {
     assert.equal(processed.sent, 4);
     assert.equal(processed.failed, 0);
     assert.ok(processed.processed.every((log) => log.status === "SENT"));
+    assert.ok(processed.processed.every((log) => log.channel === "EMAIL"));
     assert.ok(processed.processed.every((log) => log.sentAt));
+  });
+
+  it("binds WeChat and creates channel-specific reminder logs", async () => {
+    const user = await createUser("wechat");
+    await createGoalForReminders(user.id);
+    const binding = await notificationsService.bindWechat(user.id, {
+      openId: `openid-${Date.now()}`,
+      unionId: `unionid-${Date.now()}`,
+      nickname: "微信用户"
+    });
+    await notificationsService.updatePreference(user.id, {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: ["DAILY_TASK", "MISSED_CHECKIN"],
+      channels: ["EMAIL", "WECHAT"]
+    });
+
+    const queued = await notificationsService.enqueueDueEmailLogs(user.id, {
+      now: "2026-06-10T10:00:00.000+08:00"
+    });
+    const processed = await notificationsService.processQueuedEmailLogs(user.id, {
+      now: "2026-06-10T10:01:00.000+08:00"
+    });
+    const currentBinding = await notificationsService.getWechatBinding(user.id);
+    const unbound = await notificationsService.unbindWechat(user.id);
+    const afterUnbind = await notificationsService.getWechatBinding(user.id);
+
+    assert.equal(binding.binding.status, "ACTIVE");
+    assert.equal(currentBinding.binding?.openId, binding.binding.openId);
+    assert.equal(queued.queued.length, 4);
+    assert.equal(
+      queued.queued.filter((log) => log.channel === "WECHAT").length,
+      2
+    );
+    assert.ok(
+      queued.queued
+        .filter((log) => log.channel === "WECHAT")
+        .every((log) => log.recipientEmail === binding.binding.openId)
+    );
+    assert.equal(processed.sent, 2);
+    assert.ok(processed.processed.every((log) => log.channel === "EMAIL"));
+    assert.equal(unbound.unbound, true);
+    assert.equal(afterUnbind.binding, null);
+  });
+
+  it("skips WeChat reminders when the user has no binding", async () => {
+    const user = await createUser("wechat-skip");
+    await createGoalForReminders(user.id);
+    await notificationsService.updatePreference(user.id, {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: ["DAILY_TASK"],
+      channels: ["WECHAT"]
+    });
+
+    const queued = await notificationsService.enqueueDueEmailLogs(user.id, {
+      now: "2026-06-10T10:00:00.000+08:00"
+    });
+
+    assert.equal(queued.queued.length, 0);
+    assert.deepEqual(queued.skipped, ["DAILY_TASK WECHAT 未绑定"]);
   });
 
   it("records failed email delivery attempts", async () => {

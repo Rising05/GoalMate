@@ -602,7 +602,10 @@ MVP 已落地的提醒日志和重试能力：
 - `POST /notifications/email-logs/process-queue` 处理当前用户已到期的 `QUEUED` 邮件日志，通过 MailProvider 发送，成功写入 `SENT` 和 `sentAt`，失败写入 `FAILED`、`error` 并累计 `attempts`。
 - `POST /notifications/email-logs/retry-failed` 可将当前用户 `attempts < 3` 的失败邮件重新排队，后续再次处理队列时继续累计尝试次数。
 - Web 账号页已提供生成今日提醒、处理发送队列和重试失败邮件的基础操作入口，并在邮件日志中展示尝试次数。
-- 剩余风险：当前仍使用 MockMailProvider，尚未接入真实邮件服务商；失败重试为手动触发基础版，后续需要由 BullMQ worker 根据退避策略自动重试。
+- `notification_preferences.channels` 预留提醒渠道，支持 `WEB / EMAIL / WECHAT`；`email_logs.channel` 记录具体投递渠道。
+- `wechat_bindings` 预留 Web 账号与微信 openid / unionid 绑定关系；已提供绑定、解绑和查询接口。
+- 当用户同时启用 EMAIL 与 WECHAT 且已绑定微信时，提醒生成会分别写入 EMAIL 和 WECHAT 渠道日志；当前发送队列只处理 EMAIL，WECHAT 日志保留给后续微信 provider 消费。
+- 剩余风险：当前仍使用 MockMailProvider，尚未接入真实邮件服务商和微信服务商；失败重试为手动触发基础版，后续需要由 BullMQ worker 根据退避策略自动重试。
 
 ## 9. 商业化
 
@@ -1108,6 +1111,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 2026-06-12 已补充 `DailyTasksService check-in evidence integration`，验证证据持久化、正确率计算、免费版 AI 分析脱敏、Pro 详细分析解锁、非法题量校验和跨用户任务隔离。
 - 2026-06-12 已补充 `AuthService quota integration` 管理员身份返回验证；普通用户 `adminRole=null`，ACTIVE 管理员返回角色，Web 导航据此隐藏或显示后台入口。
 - 2026-06-12 已新增邮件提醒鼓励文案和失败重试基础版：`email_logs.attempts` 记录发送尝试次数，`POST /notifications/email-logs/retry-failed` 支持失败日志重新排队，账号页提供重试入口；`NotificationsService integration` 覆盖每日/未打卡提醒鼓励文案、失败记录和重试后再次发送。
+- 2026-06-12 已新增微信小程序预留数据结构和接口：`notification_preferences.channels` 支持 `WEB / EMAIL / WECHAT`，`email_logs.channel` 记录投递渠道，`wechat_bindings` 保存当前用户 openid / unionid 绑定；`NotificationsService integration` 覆盖微信绑定、解绑、EMAIL+WECHAT 双渠道提醒日志和未绑定微信时跳过。
 
 ## 21. 验收标准
 
@@ -1597,8 +1601,9 @@ API 要求：
 - 每日学习提醒、未打卡提醒、容错风险、里程碑、失败复盘和会员到期提醒均由 `enqueueDueEmailLogs` 根据当前状态生成日志；每日学习和未打卡提醒已附带根据完成进度生成的短鼓励文案。
 - 已新增 `POST /notifications/email-logs/retry-failed`，允许当前用户将 `FAILED` 且尝试次数小于 3 的邮件重新排队。
 - MockMailProvider 继续保留并支持 `simulateFailure`，用于本地和测试环境验证失败重试。
-- Web 账号页已提供失败邮件重试按钮，并展示邮件日志尝试次数。
-- 剩余风险：真实邮件服务商、自动退避重试 worker、微信提醒 provider 和提醒渠道字段仍待实现。
+- 已新增提醒渠道字段：`notification_preferences.channels` 支持 `WEB / EMAIL / WECHAT`，`email_logs.channel` 记录每条日志的投递渠道。
+- Web 账号页已提供失败邮件重试按钮、渠道开关、微信绑定表单，并展示邮件日志尝试次数和渠道。
+- 剩余风险：真实邮件服务商、真实微信提醒 provider、自动退避重试 worker 和微信订阅消息模板仍待实现。
 
 阶段 E：微信小程序轻量版。
 
@@ -1607,6 +1612,13 @@ API 要求：
 - 打卡。
 - 上传证据。
 - 简版结果展示。
+
+当前实现进度：
+
+- 已新增 `wechat_bindings` 表保存 Web 账号与微信 `openId`、可选 `unionId`、昵称和头像的绑定关系。
+- 已提供 `GET /notifications/wechat-binding`、`PUT /notifications/wechat-binding`、`DELETE /notifications/wechat-binding`，支持当前登录用户查询、绑定和解绑微信身份。
+- 提醒生成已兼容微信渠道：用户启用 `WECHAT` 且存在 ACTIVE 微信绑定时，会生成 `channel=WECHAT` 的提醒日志；未绑定时返回明确 skipped 原因。
+- 当前仍不实现真实小程序 UI、微信登录 code2session、上传 endpoint 或微信订阅消息发送，只保留后端接口和数据结构。
 
 阶段 F：导出、隐私和支付预留。
 

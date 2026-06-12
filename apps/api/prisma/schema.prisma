@@ -84,6 +84,7 @@ model User {
   aiJobs                 AiJob[]
   notificationPreference NotificationPreference?
   emailLogs              EmailLog[]
+  wechatBinding          WechatBinding?
   scoreAppeals           ScoreAppeal[]
   adminProfile           AdminUser?
   auditLogs              AuditLog[]
@@ -140,6 +141,7 @@ model NotificationPreference {
   enabled       Boolean  @default(true)
   reminderTime  String   @default("09:00")
   reminderTypes Json
+  channels      Json?
   timezone      String   @default("Asia/Shanghai")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -153,6 +155,7 @@ model EmailLog {
   id             String    @id @default(cuid())
   userId         String
   goalId         String?
+  channel        String    @default("EMAIL")
   type           String
   recipientEmail String
   subject        String
@@ -169,7 +172,26 @@ model EmailLog {
 
   @@index([userId, createdAt])
   @@index([status, type])
+  @@index([channel, status])
   @@map("email_logs")
+}
+
+model WechatBinding {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  openId    String    @unique
+  unionId   String?   @unique
+  nickname  String?
+  avatarUrl String?   @db.Text
+  status    String    @default("ACTIVE")
+  boundAt   DateTime  @default(now())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("wechat_bindings")
 }
 
 model Membership {

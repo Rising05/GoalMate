@@ -504,17 +504,24 @@ export type ReminderType =
   | "FAILURE_REVIEW"
   | "MEMBERSHIP_EXPIRY";
 
+export type NotificationChannel = "WEB" | "EMAIL" | "WECHAT";
+
 export interface NotificationPreference {
   id: string;
   userId: string;
   enabled: boolean;
   reminderTime: string;
   reminderTypes: ReminderType[];
+  channels: NotificationChannel[];
   timezone: string;
   createdAt: string;
   updatedAt: string;
   availableTypes: Array<{
     code: ReminderType;
+    label: string;
+  }>;
+  availableChannels: Array<{
+    code: NotificationChannel;
     label: string;
   }>;
 }
@@ -523,6 +530,7 @@ export interface EmailLog {
   id: string;
   userId: string;
   goalId: string | null;
+  channel: NotificationChannel;
   type: string;
   recipientEmail: string;
   subject: string;
@@ -532,6 +540,19 @@ export interface EmailLog {
   error: string | null;
   scheduledFor: string | null;
   sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WechatBinding {
+  id: string;
+  userId: string;
+  openId: string;
+  unionId: string | null;
+  nickname: string | null;
+  avatarUrl: string | null;
+  status: string;
+  boundAt: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1029,6 +1050,7 @@ export async function updateNotificationPreference(
     enabled: boolean;
     reminderTime: string;
     reminderTypes: ReminderType[];
+    channels?: NotificationChannel[];
     timezone?: string;
   }
 ) {
@@ -1048,6 +1070,66 @@ export async function updateNotificationPreference(
   }
 
   return data as NotificationPreference;
+}
+
+export async function fetchWechatBinding(token: string) {
+  const response = await fetch(`${API_BASE_URL}/notifications/wechat-binding`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ binding: WechatBinding | null }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "微信绑定状态加载失败"));
+  }
+
+  return data as { binding: WechatBinding | null };
+}
+
+export async function bindWechat(
+  token: string,
+  payload: {
+    openId: string;
+    unionId?: string;
+    nickname?: string;
+    avatarUrl?: string;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/notifications/wechat-binding`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ binding: WechatBinding }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "微信账号绑定失败"));
+  }
+
+  return data as { binding: WechatBinding };
+}
+
+export async function unbindWechat(token: string) {
+  const response = await fetch(`${API_BASE_URL}/notifications/wechat-binding`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ unbound: boolean }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "微信账号解绑失败"));
+  }
+
+  return data as { unbound: boolean };
 }
 
 export async function fetchEmailLogs(token: string) {
