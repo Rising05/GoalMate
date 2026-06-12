@@ -70,6 +70,14 @@ interface TimelineDeviationMetrics {
 interface CompleteTaskPayload {
   content: string;
   investedMinutes?: number;
+  completedSubtasks: string[];
+  actualQuestionCount?: number;
+  correctQuestionCount?: number;
+  accuracy?: number;
+  evidenceFiles: string[];
+  evidenceLinks: string[];
+  studyMood?: string;
+  difficultyLevel?: string;
 }
 
 interface ScoreAppealPayload {
@@ -104,6 +112,7 @@ export class DailyTasksService {
     const today = this.toDateKey(new Date());
     const { start, end } = this.getDateRange(today);
     const goalFilter = await this.getGoalFilter(userId, goalId);
+    const hasDetailedAiAnalysis = await this.hasDetailedAiAnalysis(userId);
     const tasks = await this.prisma.dailyTask.findMany({
       where: {
         taskDate: {
@@ -120,7 +129,7 @@ export class DailyTasksService {
 
     return {
       date: today,
-      tasks: tasks.map((task) => this.serializeTask(task))
+      tasks: tasks.map((task) => this.serializeTask(task, hasDetailedAiAnalysis))
     };
   }
 
@@ -225,6 +234,7 @@ export class DailyTasksService {
 
   async getTimeline(userId: string, goalId?: string) {
     const goalFilter = await this.getGoalFilter(userId, goalId);
+    const hasDetailedAiAnalysis = await this.hasDetailedAiAnalysis(userId);
     const [checkins, deviationEvents] = await Promise.all([
       this.prisma.checkin.findMany({
         where: {
@@ -278,10 +288,14 @@ export class DailyTasksService {
       deviationEvents.map((event) => event.sourceDailyTaskId)
     );
     const checkinItems = checkins.map((checkin) =>
-      this.serializeTimelineCheckinItem(checkin)
+      this.serializeTimelineCheckinItem(checkin, hasDetailedAiAnalysis)
     );
     const deviationItems = deviationEvents.map((event) =>
-      this.serializeTimelineDeviationItem(event, sourceTasks.get(event.sourceDailyTaskId ?? ""))
+      this.serializeTimelineDeviationItem(
+        event,
+        sourceTasks.get(event.sourceDailyTaskId ?? ""),
+        hasDetailedAiAnalysis
+      )
     );
     const items = [...checkinItems, ...deviationItems].sort(
       (left, right) =>
@@ -360,6 +374,7 @@ export class DailyTasksService {
 
   async completeTask(userId: string, taskId: string, input: unknown) {
     const payload = this.parseCompletePayload(input);
+    const hasDetailedAiAnalysis = await this.hasDetailedAiAnalysis(userId);
     const task = await this.prisma.dailyTask.findFirst({
       where: {
         id: taskId,
@@ -385,6 +400,16 @@ export class DailyTasksService {
     const score = await this.scoringProvider.score({
       content: payload.content,
       investedMinutes,
+      evidence: {
+        completedSubtasks: payload.completedSubtasks,
+        actualQuestionCount: payload.actualQuestionCount,
+        correctQuestionCount: payload.correctQuestionCount,
+        accuracy: payload.accuracy,
+        evidenceFiles: payload.evidenceFiles,
+        evidenceLinks: payload.evidenceLinks,
+        studyMood: payload.studyMood,
+        difficultyLevel: payload.difficultyLevel
+      },
       task
     });
     const { completedTask, checkin, job } = await this.prisma.$transaction(async (tx) => {
@@ -400,7 +425,21 @@ export class DailyTasksService {
           dailyTaskId: task.id,
           status: "SCORED",
           content: payload.content,
-          investedMinutes
+          investedMinutes,
+          completedSubtasks: payload.completedSubtasks.length
+            ? this.toJson(payload.completedSubtasks)
+            : undefined,
+          actualQuestionCount: payload.actualQuestionCount,
+          correctQuestionCount: payload.correctQuestionCount,
+          accuracy: payload.accuracy,
+          evidenceFiles: payload.evidenceFiles.length
+            ? this.toJson(payload.evidenceFiles)
+            : undefined,
+          evidenceLinks: payload.evidenceLinks.length
+            ? this.toJson(payload.evidenceLinks)
+            : undefined,
+          studyMood: payload.studyMood,
+          difficultyLevel: payload.difficultyLevel
         }
       });
 
@@ -415,7 +454,9 @@ export class DailyTasksService {
             dailyTaskId: task.id,
             taskType: task.taskType,
             deviationEventId: task.deviationEventId,
-            provider: this.scoringProvider.name
+            provider: this.scoringProvider.name,
+            analysisAccess: hasDetailedAiAnalysis ? "PRO" : "BASIC",
+            evidenceSummary: this.getEvidenceSummary(payload)
           }
         }
       });
@@ -467,14 +508,15 @@ export class DailyTasksService {
     const queuedJob = await this.attachQueueMetadata(job);
 
     return {
-      task: this.serializeTask(completedTask),
-      checkin: this.serializeCheckin(checkin),
+      task: this.serializeTask(completedTask, hasDetailedAiAnalysis),
+      checkin: this.serializeCheckin(checkin, hasDetailedAiAnalysis),
       job: this.serializeAiJob(queuedJob)
     };
   }
 
   async appealCheckinScore(userId: string, checkinId: string, input: unknown) {
     const payload = this.parseScoreAppealPayload(input);
+    const hasDetailedAiAnalysis = await this.hasDetailedAiAnalysis(userId);
     const checkin = await this.prisma.checkin.findFirst({
       where: {
         id: checkinId,
@@ -566,7 +608,7 @@ export class DailyTasksService {
 
     return {
       appeal: this.serializeScoreAppeal(appeal),
-      checkin: this.serializeCheckin(updatedCheckin),
+      checkin: this.serializeCheckin(updatedCheckin, hasDetailedAiAnalysis),
       job: this.serializeAiJob(job)
     };
   }
@@ -668,6 +710,23 @@ export class DailyTasksService {
       body.investedMinutes,
       "投入分钟必须是非负整数"
     );
+    const completedSubtasks = this.parseTextList(body.completedSubtasks, 20, 120);
+    const actualQuestionCount = this.parseOptionalInteger(
+      body.actualQuestionCount,
+      "实际题量必须是非负整数"
+    );
+    const correctQuestionCount = this.parseOptionalInteger(
+      body.correctQuestionCount,
+      "正确题数必须是非负整数"
+    );
+    const inputAccuracy = this.parseOptionalInteger(
+      body.accuracy,
+      "正确率必须是 0 到 100 的整数"
+    );
+    const evidenceFiles = this.parseTextList(body.evidenceFiles, 10, 500);
+    const evidenceLinks = this.parseTextList(body.evidenceLinks, 10, 500);
+    const studyMood = this.cleanText(body.studyMood, 40) || undefined;
+    const difficultyLevel = this.cleanText(body.difficultyLevel, 40) || undefined;
 
     if (!content) {
       throw new BadRequestException("请输入完成复盘");
@@ -677,9 +736,46 @@ export class DailyTasksService {
       throw new BadRequestException("投入分钟必须是非负整数");
     }
 
+    if (actualQuestionCount !== undefined && actualQuestionCount < 0) {
+      throw new BadRequestException("实际题量必须是非负整数");
+    }
+
+    if (correctQuestionCount !== undefined && correctQuestionCount < 0) {
+      throw new BadRequestException("正确题数必须是非负整数");
+    }
+
+    if (
+      actualQuestionCount !== undefined &&
+      correctQuestionCount !== undefined &&
+      correctQuestionCount > actualQuestionCount
+    ) {
+      throw new BadRequestException("正确题数不能大于实际题量");
+    }
+
+    if (
+      inputAccuracy !== undefined &&
+      (inputAccuracy < 0 || inputAccuracy > 100)
+    ) {
+      throw new BadRequestException("正确率必须是 0 到 100 的整数");
+    }
+
+    const accuracy =
+      inputAccuracy ??
+      (actualQuestionCount && correctQuestionCount !== undefined
+        ? Math.round((correctQuestionCount / actualQuestionCount) * 100)
+        : undefined);
+
     return {
       content,
-      investedMinutes
+      investedMinutes,
+      completedSubtasks,
+      actualQuestionCount,
+      correctQuestionCount,
+      accuracy,
+      evidenceFiles,
+      evidenceLinks,
+      studyMood,
+      difficultyLevel
     };
   }
 
@@ -720,6 +816,50 @@ export class DailyTasksService {
     return numberValue;
   }
 
+  private parseTextList(value: unknown, maxItems: number, maxLength: number) {
+    const rawItems = Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? value.split(/\r?\n|,/)
+        : [];
+
+    return rawItems
+      .flatMap((item) => {
+        if (typeof item !== "string") {
+          return [];
+        }
+
+        const cleaned = item.trim().slice(0, maxLength);
+        return cleaned ? [cleaned] : [];
+      })
+      .slice(0, maxItems);
+  }
+
+  private getEvidenceSummary(payload: CompleteTaskPayload) {
+    return {
+      completedSubtaskCount: payload.completedSubtasks.length,
+      actualQuestionCount: payload.actualQuestionCount,
+      correctQuestionCount: payload.correctQuestionCount,
+      accuracy: payload.accuracy,
+      evidenceFileCount: payload.evidenceFiles.length,
+      evidenceLinkCount: payload.evidenceLinks.length,
+      hasStudyMood: Boolean(payload.studyMood),
+      difficultyLevel: payload.difficultyLevel
+    };
+  }
+
+  private async hasDetailedAiAnalysis(userId: string) {
+    const membership = await this.prisma.membership.findUnique({
+      where: { userId }
+    });
+
+    return Boolean(
+      membership?.plan === "PRO" &&
+        ["ACTIVE", "MANUAL"].includes(membership.status) &&
+        (!membership.expiresAt || membership.expiresAt > new Date())
+    );
+  }
+
   private parseYear(value?: string) {
     const year = value ? Number(value) : Number(this.toDateKey(new Date()).slice(0, 4));
 
@@ -742,6 +882,14 @@ export class DailyTasksService {
     return value && typeof value === "object" && !Array.isArray(value)
       ? value as Record<string, unknown>
       : {};
+  }
+
+  private normalizeStringArray(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((item): item is string => typeof item === "string");
   }
 
   private toJson(value: unknown) {
@@ -877,7 +1025,10 @@ export class DailyTasksService {
     return `${year}-${month}-${day}`;
   }
 
-  private serializeTask(task: TaskWithGoalAndCheckins) {
+  private serializeTask(
+    task: TaskWithGoalAndCheckins,
+    hasDetailedAiAnalysis = false
+  ) {
     const latestCheckin = task.checkins[0] ?? null;
 
     return {
@@ -907,7 +1058,9 @@ export class DailyTasksService {
       rescueTriggerCode: task.rescueTriggerCode,
       rescueRiskLevel: task.rescueRiskLevel,
       status: task.status,
-      latestCheckin: latestCheckin ? this.serializeCheckin(latestCheckin) : null
+      latestCheckin: latestCheckin
+        ? this.serializeCheckin(latestCheckin, hasDetailedAiAnalysis)
+        : null
     };
   }
 
@@ -942,20 +1095,33 @@ export class DailyTasksService {
     };
   }
 
-  private serializeCheckin(checkin: Checkin & { aiScore: AiScore | null }) {
+  private serializeCheckin(
+    checkin: Checkin & { aiScore: AiScore | null },
+    hasDetailedAiAnalysis = false
+  ) {
     return {
       id: checkin.id,
       dailyTaskId: checkin.dailyTaskId,
       content: checkin.content,
       investedMinutes: checkin.investedMinutes,
+      completedSubtasks: this.normalizeStringArray(checkin.completedSubtasks),
+      actualQuestionCount: checkin.actualQuestionCount,
+      correctQuestionCount: checkin.correctQuestionCount,
+      accuracy: checkin.accuracy,
+      evidenceFiles: this.normalizeStringArray(checkin.evidenceFiles),
+      evidenceLinks: this.normalizeStringArray(checkin.evidenceLinks),
+      studyMood: checkin.studyMood,
+      difficultyLevel: checkin.difficultyLevel,
       submittedAt: checkin.submittedAt.toISOString(),
       aiScore: checkin.aiScore
         ? {
             totalScore: checkin.aiScore.totalScore,
-            dimensions: checkin.aiScore.dimensions,
-            evidence: checkin.aiScore.evidence,
-            summary: checkin.aiScore.summary,
-            suggestion: checkin.aiScore.suggestion
+            analysisLevel: hasDetailedAiAnalysis ? "PRO" : "BASIC",
+            isDetailedAnalysisUnlocked: hasDetailedAiAnalysis,
+            dimensions: hasDetailedAiAnalysis ? checkin.aiScore.dimensions : null,
+            evidence: hasDetailedAiAnalysis ? checkin.aiScore.evidence : null,
+            summary: hasDetailedAiAnalysis ? checkin.aiScore.summary : null,
+            suggestion: hasDetailedAiAnalysis ? checkin.aiScore.suggestion : null
           }
         : null
     };
@@ -989,7 +1155,10 @@ export class DailyTasksService {
     };
   }
 
-  private serializeTimelineCheckinItem(checkin: TimelineCheckin) {
+  private serializeTimelineCheckinItem(
+    checkin: TimelineCheckin,
+    hasDetailedAiAnalysis = false
+  ) {
     const task = checkin.dailyTask;
     const submittedAt = checkin.submittedAt.toISOString();
 
@@ -1031,14 +1200,16 @@ export class DailyTasksService {
       sourceTask: null,
       rescueTasks: [],
       investedMinutes: checkin.investedMinutes,
-      checkin: this.serializeCheckin(checkin),
+      checkin: this.serializeCheckin(checkin, hasDetailedAiAnalysis),
       aiScore: checkin.aiScore
         ? {
             totalScore: checkin.aiScore.totalScore,
-            dimensions: checkin.aiScore.dimensions,
-            evidence: checkin.aiScore.evidence,
-            summary: checkin.aiScore.summary,
-            suggestion: checkin.aiScore.suggestion
+            analysisLevel: hasDetailedAiAnalysis ? "PRO" : "BASIC",
+            isDetailedAnalysisUnlocked: hasDetailedAiAnalysis,
+            dimensions: hasDetailedAiAnalysis ? checkin.aiScore.dimensions : null,
+            evidence: hasDetailedAiAnalysis ? checkin.aiScore.evidence : null,
+            summary: hasDetailedAiAnalysis ? checkin.aiScore.summary : null,
+            suggestion: hasDetailedAiAnalysis ? checkin.aiScore.suggestion : null
           }
         : null
     };
@@ -1046,11 +1217,12 @@ export class DailyTasksService {
 
   private serializeTimelineDeviationItem(
     event: TimelineDeviationEvent,
-    sourceTask?: TimelineSourceTask
+    sourceTask?: TimelineSourceTask,
+    hasDetailedAiAnalysis = false
   ) {
     const detectedAt = event.detectedAt.toISOString();
     const rescueTasks = event.rescueTasks.map((task) =>
-      this.serializeTimelineRescueTask(task)
+      this.serializeTimelineRescueTask(task, hasDetailedAiAnalysis)
     );
     const completedRescueTask = rescueTasks.find((task) => task.latestCheckin?.aiScore);
     const latestScore = completedRescueTask?.latestCheckin?.aiScore ?? null;
@@ -1107,7 +1279,10 @@ export class DailyTasksService {
     };
   }
 
-  private serializeTimelineRescueTask(task: TimelineRescueTask) {
+  private serializeTimelineRescueTask(
+    task: TimelineRescueTask,
+    hasDetailedAiAnalysis = false
+  ) {
     const latestCheckin = task.checkins[0] ?? null;
 
     return {
@@ -1134,7 +1309,9 @@ export class DailyTasksService {
       rescueRiskLevel: task.rescueRiskLevel,
       createdAt: task.createdAt.toISOString(),
       completedAt: latestCheckin?.submittedAt.toISOString() ?? null,
-      latestCheckin: latestCheckin ? this.serializeCheckin(latestCheckin) : null
+      latestCheckin: latestCheckin
+        ? this.serializeCheckin(latestCheckin, hasDetailedAiAnalysis)
+        : null
     };
   }
 

@@ -302,6 +302,14 @@ export class AdminService {
           taskTitle: checkin.dailyTask?.title ?? null,
           content: checkin.content,
           investedMinutes: checkin.investedMinutes,
+          completedSubtasks: checkin.completedSubtasks,
+          actualQuestionCount: checkin.actualQuestionCount,
+          correctQuestionCount: checkin.correctQuestionCount,
+          accuracy: checkin.accuracy,
+          evidenceFiles: checkin.evidenceFiles,
+          evidenceLinks: checkin.evidenceLinks,
+          studyMood: checkin.studyMood,
+          difficultyLevel: checkin.difficultyLevel,
           submittedAt: checkin.submittedAt.toISOString(),
           aiScore: checkin.aiScore
             ? {

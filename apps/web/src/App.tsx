@@ -402,6 +402,13 @@ function getStudyTaskMeta(task: object) {
   ].filter(Boolean);
 }
 
+function splitFormList(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function getTimelineBadge(item: TimelineItem) {
   if (item.kind === "DEVIATION") {
     return riskLevelLabels[item.rescueRiskLevel ?? "stable"] ?? "偏差";
@@ -603,7 +610,14 @@ export function App() {
     investedMinutes: "",
     completedContent: "",
     blockers: "",
-    tomorrowAdjustment: ""
+    tomorrowAdjustment: "",
+    completedSubtasks: "",
+    actualQuestionCount: "",
+    correctQuestionCount: "",
+    evidenceFiles: "",
+    evidenceLinks: "",
+    studyMood: "",
+    difficultyLevel: ""
   });
   const [appealForm, setAppealForm] = useState({
     reason: "",
@@ -639,8 +653,14 @@ export function App() {
     useState("完成 AI 操作后可查看最近任务状态。");
   const [isRefreshingAiJob, setIsRefreshingAiJob] = useState(false);
 
+  const isAdminUser = Boolean(session?.user.adminRole);
+  const visibleNavItems = isAdminUser
+    ? navItems
+    : navItems.filter((item) => item.id !== "admin");
   const activeNavItem =
-    navItems.find((item) => item.id === activePage) ?? navItems[0];
+    visibleNavItems.find((item) => item.id === activePage) ??
+    visibleNavItems.find((item) => item.id === "account") ??
+    visibleNavItems[0];
   const selectedGoal =
     goals.find((goal) => goal.id === selectedGoalId) ??
     (createdGoal?.id === selectedGoalId ? createdGoal : null);
@@ -886,12 +906,19 @@ export function App() {
   }, [activePage, session]);
 
   useEffect(() => {
-    if (!session || activePage !== "admin") {
+    if (!session || activePage !== "admin" || !isAdminUser) {
       return;
     }
 
     void loadAdminDashboard(session.token);
-  }, [activePage, session]);
+  }, [activePage, session, isAdminUser]);
+
+  useEffect(() => {
+    if (activePage === "admin" && !isAdminUser) {
+      setActivePage("account");
+      setAdminMessage("只有管理员账号可以访问后台管理。");
+    }
+  }, [activePage, isAdminUser]);
 
   useEffect(() => {
     if (!session) {
@@ -1277,7 +1304,14 @@ export function App() {
       investedMinutes: task.plannedMinutes ? String(task.plannedMinutes) : "",
       completedContent: "",
       blockers: "",
-      tomorrowAdjustment: ""
+      tomorrowAdjustment: "",
+      completedSubtasks: task.title,
+      actualQuestionCount: task.questionCount ? String(task.questionCount) : "",
+      correctQuestionCount: "",
+      evidenceFiles: "",
+      evidenceLinks: "",
+      studyMood: "",
+      difficultyLevel: ""
     });
   }
 
@@ -1368,6 +1402,15 @@ export function App() {
     const investedMinutes = completionForm.investedMinutes
       ? Number(completionForm.investedMinutes)
       : completionTask.plannedMinutes ?? undefined;
+    const actualQuestionCount = completionForm.actualQuestionCount
+      ? Number(completionForm.actualQuestionCount)
+      : undefined;
+    const correctQuestionCount = completionForm.correctQuestionCount
+      ? Number(completionForm.correctQuestionCount)
+      : undefined;
+    const completedSubtasks = splitFormList(completionForm.completedSubtasks);
+    const evidenceFiles = splitFormList(completionForm.evidenceFiles);
+    const evidenceLinks = splitFormList(completionForm.evidenceLinks);
     const content = [
       `完成内容：${completedContent}`,
       completionForm.blockers.trim()
@@ -1386,7 +1429,14 @@ export function App() {
     try {
       const response = await completeDailyTask(session.token, completionTask.id, {
         content,
-        investedMinutes
+        investedMinutes,
+        completedSubtasks,
+        actualQuestionCount,
+        correctQuestionCount,
+        evidenceFiles,
+        evidenceLinks,
+        studyMood: completionForm.studyMood.trim() || undefined,
+        difficultyLevel: completionForm.difficultyLevel.trim() || undefined
       });
       setDailyTaskMessage("任务已完成，热力图已更新。");
       setCompletionResult(response);
@@ -3936,6 +3986,15 @@ export function App() {
           </div>
         );
       case "admin":
+        if (!isAdminUser) {
+          return (
+            <div className="empty-state">
+              <h2>后台管理仅管理员可见</h2>
+              <p>普通用户账号不会显示后台入口，也不能访问后台数据。</p>
+            </div>
+          );
+        }
+
         return (
           <div className="content-grid admin-grid">
             <section className="panel main-panel">
@@ -4294,7 +4353,7 @@ export function App() {
           </button>
 
           <nav className="label-nav">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
               return (
                 <button
@@ -4389,23 +4448,68 @@ export function App() {
                   <strong>完成内容</strong>
                   <span>{completionResult.checkin.content}</span>
                 </div>
+                <div className="checkin-evidence-summary">
+                  {completionResult.checkin.completedSubtasks.length ? (
+                    <span>
+                      子项 {completionResult.checkin.completedSubtasks.join("、")}
+                    </span>
+                  ) : null}
+                  {completionResult.checkin.actualQuestionCount !== null ? (
+                    <span>
+                      题量 {completionResult.checkin.actualQuestionCount}
+                      {completionResult.checkin.correctQuestionCount !== null
+                        ? ` / 正确 ${completionResult.checkin.correctQuestionCount}`
+                        : ""}
+                    </span>
+                  ) : null}
+                  {completionResult.checkin.accuracy !== null ? (
+                    <span>正确率 {completionResult.checkin.accuracy}%</span>
+                  ) : null}
+                  {completionResult.checkin.evidenceLinks.length ? (
+                    <span>
+                      证据链接 {completionResult.checkin.evidenceLinks.length} 条
+                    </span>
+                  ) : null}
+                  {completionResult.checkin.evidenceFiles.length ? (
+                    <span>
+                      图片/文件 {completionResult.checkin.evidenceFiles.length} 条
+                    </span>
+                  ) : null}
+                  {completionResult.checkin.studyMood ? (
+                    <span>状态 {completionResult.checkin.studyMood}</span>
+                  ) : null}
+                  {completionResult.checkin.difficultyLevel ? (
+                    <span>难度 {completionResult.checkin.difficultyLevel}</span>
+                  ) : null}
+                </div>
                 {completionResult.checkin.aiScore ? (
                   <>
-                    <div className="score-dimensions">
-                      {Object.entries(
-                        completionResult.checkin.aiScore.dimensions ?? {}
-                      ).map(([label, value]) => (
-                        <span key={label}>
-                          {label} <strong>{value}</strong>
+                    {completionResult.checkin.aiScore.isDetailedAnalysisUnlocked ? (
+                      <>
+                        <div className="score-dimensions">
+                          {Object.entries(
+                            completionResult.checkin.aiScore.dimensions ?? {}
+                          ).map(([label, value]) => (
+                            <span key={label}>
+                              {label} <strong>{value}</strong>
+                            </span>
+                          ))}
+                        </div>
+                        <div className="reflection-note">
+                          <strong>AI 总结</strong>
+                          <span>{completionResult.checkin.aiScore.summary}</span>
+                          <strong>明日建议</strong>
+                          <span>{completionResult.checkin.aiScore.suggestion}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="reflection-note locked-analysis">
+                        <strong>详细 AI 分析</strong>
+                        <span>
+                          免费版已记录基础评分。Pro 可查看维度评分、证据分析和明日建议。
                         </span>
-                      ))}
-                    </div>
-	                    <div className="reflection-note">
-	                      <strong>AI 总结</strong>
-	                      <span>{completionResult.checkin.aiScore.summary}</span>
-	                      <strong>明日建议</strong>
-	                      <span>{completionResult.checkin.aiScore.suggestion}</span>
-	                    </div>
+                      </div>
+                    )}
 	                    <form className="score-appeal-form" onSubmit={handleAppealScore}>
 	                      <strong>评分申诉复评</strong>
 	                      <label>
@@ -4494,6 +4598,47 @@ export function App() {
                   />
                 </label>
                 <label>
+                  <span>完成子项</span>
+                  <textarea
+                    rows={2}
+                    value={completionForm.completedSubtasks}
+                    onChange={(event) =>
+                      updateCompletionField("completedSubtasks", event.target.value)
+                    }
+                    placeholder="每行一个子项，例如：阅读第 2 章、整理错题。"
+                  />
+                </label>
+                <div className="form-grid compact">
+                  <label>
+                    <span>实际题量</span>
+                    <input
+                      min={0}
+                      type="number"
+                      value={completionForm.actualQuestionCount}
+                      onChange={(event) =>
+                        updateCompletionField(
+                          "actualQuestionCount",
+                          event.target.value
+                        )
+                      }
+                    />
+                  </label>
+                  <label>
+                    <span>正确题数</span>
+                    <input
+                      min={0}
+                      type="number"
+                      value={completionForm.correctQuestionCount}
+                      onChange={(event) =>
+                        updateCompletionField(
+                          "correctQuestionCount",
+                          event.target.value
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+                <label>
                   <span>今天完成了什么</span>
                   <textarea
                     required
@@ -4505,6 +4650,54 @@ export function App() {
                     placeholder="例如：完成第 1 章练习，整理了 3 条关键笔记。"
                   />
                 </label>
+                <label>
+                  <span>图片或截图链接</span>
+                  <textarea
+                    rows={2}
+                    value={completionForm.evidenceFiles}
+                    onChange={(event) =>
+                      updateCompletionField("evidenceFiles", event.target.value)
+                    }
+                    placeholder="可填写截图、图片或文件链接，每行一条。"
+                  />
+                </label>
+                <label>
+                  <span>错题 / 笔记链接</span>
+                  <textarea
+                    rows={2}
+                    value={completionForm.evidenceLinks}
+                    onChange={(event) =>
+                      updateCompletionField("evidenceLinks", event.target.value)
+                    }
+                    placeholder="可填写错题本、笔记、文档或网盘链接，每行一条。"
+                  />
+                </label>
+                <div className="form-grid compact">
+                  <label>
+                    <span>学习状态</span>
+                    <input
+                      value={completionForm.studyMood}
+                      onChange={(event) =>
+                        updateCompletionField("studyMood", event.target.value)
+                      }
+                      placeholder="例如：专注、疲惫、焦虑"
+                    />
+                  </label>
+                  <label>
+                    <span>主观难度</span>
+                    <select
+                      value={completionForm.difficultyLevel}
+                      onChange={(event) =>
+                        updateCompletionField("difficultyLevel", event.target.value)
+                      }
+                    >
+                      <option value="">未选择</option>
+                      <option value="EASY">简单</option>
+                      <option value="MEDIUM">适中</option>
+                      <option value="HARD">困难</option>
+                    </select>
+                  </label>
+                </div>
                 <label>
                   <span>遇到的问题</span>
                   <textarea

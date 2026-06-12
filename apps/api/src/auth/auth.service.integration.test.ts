@@ -39,6 +39,7 @@ describe("AuthService quota integration", () => {
     assert.equal(registered.user.quota.plan, "FREE");
     assert.equal(registered.user.quota.activeGoals.limit, 1);
     assert.equal(registered.user.quota.aiJobsToday.limit, 20);
+    assert.equal(registered.user.adminRole, null);
 
     await prisma.goal.create({
       data: {
@@ -72,6 +73,30 @@ describe("AuthService quota integration", () => {
     assert.equal(current.user.quota.aiJobsToday.used, 1);
     assert.equal(current.user.quota.replansThisWeek.used, 1);
     assert.equal(current.user.quota.scoreAppealsThisWeek.used, 0);
+    assert.equal(current.user.adminRole, null);
+  });
+
+  it("returns an active admin role so the web app can show the admin entry", async () => {
+    const suffix = `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const registered = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "Admin User"
+    });
+
+    await prisma.adminUser.create({
+      data: {
+        userId: registered.user.id,
+        role: "SUPER_ADMIN",
+        status: "ACTIVE"
+      }
+    });
+
+    const current = await authService.getCurrentUser(
+      `Bearer ${registered.token}`
+    );
+
+    assert.equal(current.user.adminRole, "SUPER_ADMIN");
   });
 
   it("deletes the current account and cascades owned data", async () => {

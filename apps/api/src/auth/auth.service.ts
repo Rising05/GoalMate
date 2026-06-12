@@ -59,7 +59,8 @@ export class AuthService {
         }
       },
       include: {
-        membership: true
+        membership: true,
+        adminProfile: true
       }
     });
 
@@ -70,7 +71,7 @@ export class AuthService {
     const payload = this.parseAuthPayload(input, false);
     const user = await this.prisma.user.findUnique({
       where: { email: payload.email },
-      include: { membership: true }
+      include: { membership: true, adminProfile: true }
     });
 
     if (!user || user.status !== "ACTIVE") {
@@ -94,7 +95,7 @@ export class AuthService {
     const session = this.sessionTokenService.verify(token);
     const user = await this.prisma.user.findUnique({
       where: { id: session.sub },
-      include: { membership: true }
+      include: { membership: true, adminProfile: true }
     });
 
     if (!user || user.status !== "ACTIVE") {
@@ -141,6 +142,10 @@ export class AuthService {
       status: string;
       expiresAt: Date | null;
     } | null;
+    adminProfile?: {
+      role: string;
+      status: string;
+    } | null;
   }) {
     const token = this.sessionTokenService.sign({
       sub: user.id,
@@ -164,6 +169,10 @@ export class AuthService {
       status: string;
       expiresAt: Date | null;
     } | null;
+    adminProfile?: {
+      role: string;
+      status: string;
+    } | null;
   }) {
     return {
       id: user.id,
@@ -178,6 +187,8 @@ export class AuthService {
             expiresAt: user.membership.expiresAt?.toISOString() ?? null
           }
         : null,
+      adminRole:
+        user.adminProfile?.status === "ACTIVE" ? user.adminProfile.role : null,
       quota: await this.getQuotaSummary(user.id, user.membership)
     };
   }

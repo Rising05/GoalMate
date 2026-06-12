@@ -2211,6 +2211,12 @@ button.heat-cell:disabled {
   font-weight: 700;
 }
 
+.form-grid.compact {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .completion-result {
   display: grid;
   gap: 12px;
@@ -2246,6 +2252,7 @@ button.heat-cell:disabled {
 }
 
 .score-dimensions,
+.checkin-evidence-summary,
 .result-impact-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2253,6 +2260,7 @@ button.heat-cell:disabled {
 }
 
 .score-dimensions span,
+.checkin-evidence-summary span,
 .result-impact-grid span {
   min-height: 38px;
   padding: 9px 10px;
@@ -2267,6 +2275,10 @@ button.heat-cell:disabled {
 .score-dimensions strong {
   color: var(--text);
   float: right;
+}
+
+.locked-analysis {
+  border-style: dashed;
 }
 
 .score-appeal-form {

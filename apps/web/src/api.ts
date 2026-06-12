@@ -11,6 +11,7 @@ export interface AuthUser {
     status: string;
     expiresAt: string | null;
   } | null;
+  adminRole: string | null;
   quota: {
     plan: string;
     hasProAccess: boolean;
@@ -145,13 +146,23 @@ export interface TaskCheckin {
   dailyTaskId: string | null;
   content: string;
   investedMinutes: number | null;
+  completedSubtasks: string[];
+  actualQuestionCount: number | null;
+  correctQuestionCount: number | null;
+  accuracy: number | null;
+  evidenceFiles: string[];
+  evidenceLinks: string[];
+  studyMood: string | null;
+  difficultyLevel: string | null;
   submittedAt: string;
   aiScore: {
     totalScore: number;
-    dimensions?: Record<string, number>;
-    evidence?: Record<string, unknown>;
-    summary: string;
-    suggestion: string;
+    analysisLevel: "BASIC" | "PRO";
+    isDetailedAnalysisUnlocked: boolean;
+    dimensions: Record<string, number> | null;
+    evidence: Record<string, unknown> | null;
+    summary: string | null;
+    suggestion: string | null;
   } | null;
 }
 
@@ -268,10 +279,12 @@ export interface TimelineItem {
   checkin: TaskCheckin | null;
   aiScore: {
     totalScore: number;
-    dimensions?: Record<string, number>;
-    evidence?: Record<string, unknown>;
-    summary: string;
-    suggestion: string;
+    analysisLevel: "BASIC" | "PRO";
+    isDetailedAnalysisUnlocked: boolean;
+    dimensions: Record<string, number> | null;
+    evidence: Record<string, unknown> | null;
+    summary: string | null;
+    suggestion: string | null;
   } | null;
 }
 
@@ -649,6 +662,14 @@ export interface AdminRawContent {
       taskTitle: string | null;
       content: string;
       investedMinutes: number | null;
+      completedSubtasks: unknown;
+      actualQuestionCount: number | null;
+      correctQuestionCount: number | null;
+      accuracy: number | null;
+      evidenceFiles: unknown;
+      evidenceLinks: unknown;
+      studyMood: string | null;
+      difficultyLevel: string | null;
       submittedAt: string;
       aiScore: {
         totalScore: number;
@@ -1448,6 +1469,14 @@ export async function completeDailyTask(
   payload: {
     content: string;
     investedMinutes?: number;
+    completedSubtasks?: string[] | string;
+    actualQuestionCount?: number;
+    correctQuestionCount?: number;
+    accuracy?: number;
+    evidenceFiles?: string[] | string;
+    evidenceLinks?: string[] | string;
+    studyMood?: string;
+    difficultyLevel?: string;
   }
 ) {
   const response = await fetch(`${API_BASE_URL}/daily-tasks/${taskId}/complete`, {
