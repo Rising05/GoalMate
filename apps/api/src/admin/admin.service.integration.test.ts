@@ -59,6 +59,77 @@ describe("AdminService integration", () => {
     assert.ok(emailLogs.logs.some((item) => item.goalId === goal.id));
   });
 
+  it("searches admin users by query, status, membership plan, and admin role", async () => {
+    const { user: admin } = await createUser("search-admin");
+    const { user: alpha } = await createUser("search-alpha");
+    const { user: beta } = await createUser("search-beta");
+
+    await prisma.adminUser.createMany({
+      data: [
+        {
+          userId: admin.id,
+          role: "OPERATOR",
+          status: "ACTIVE"
+        },
+        {
+          userId: alpha.id,
+          role: "SUPER_ADMIN",
+          status: "ACTIVE"
+        }
+      ]
+    });
+    await prisma.user.update({
+      where: { id: alpha.id },
+      data: {
+        displayName: "Search Alpha",
+        membership: {
+          create: {
+            plan: "PRO",
+            status: "MANUAL"
+          }
+        }
+      }
+    });
+    await prisma.user.update({
+      where: { id: beta.id },
+      data: {
+        displayName: "Search Beta",
+        status: "DISABLED",
+        membership: {
+          create: {
+            plan: "FREE",
+            status: "ACTIVE"
+          }
+        }
+      }
+    });
+
+    const byQuery = await adminService.listUsers(admin.id, {
+      query: "alpha",
+      plan: "PRO"
+    });
+    const byStatus = await adminService.listUsers(admin.id, {
+      status: "DISABLED"
+    });
+    const byRole = await adminService.listUsers(admin.id, {
+      adminRole: "SUPER_ADMIN"
+    });
+
+    assert.equal(byQuery.total, 1);
+    assert.equal(byQuery.users[0].id, alpha.id);
+    assert.equal(byQuery.users[0].membership?.plan, "PRO");
+    assert.equal(byQuery.filters.query, "alpha");
+    assert.equal(byQuery.filters.plan, "PRO");
+    assert.ok(byStatus.users.some((user) => user.id === beta.id));
+    assert.ok(byStatus.users.every((user) => user.status === "DISABLED"));
+    assert.ok(byRole.users.some((user) => user.id === alpha.id));
+    assert.ok(byRole.users.every((user) => user.adminRole === "SUPER_ADMIN"));
+    await assert.rejects(
+      () => adminService.listUsers(admin.id, { plan: "ENTERPRISE" }),
+      BadRequestException
+    );
+  });
+
   it("manually opens a membership and writes an audit log", async () => {
     const { user: admin } = await createUser("membership-admin");
     const { user: member } = await createUser("membership-member");

@@ -27,8 +27,11 @@ export class AdminController {
   }
 
   @Get("users")
-  listUsers(@Req() request: AuthenticatedRequest) {
-    return this.adminService.listUsers(request.user!.id);
+  listUsers(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>
+  ) {
+    return this.adminService.listUsers(request.user!.id, query);
   }
 
   @Get("goals")

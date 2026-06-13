@@ -16,7 +16,8 @@ import {
   MembershipStatus,
   Prisma,
   SystemConfig,
-  User
+  User,
+  UserStatus
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
@@ -29,6 +30,8 @@ const MEMBERSHIP_STATUSES = new Set<MembershipStatus>([
   "EXPIRED",
   "MANUAL"
 ]);
+const USER_STATUSES = new Set<UserStatus>(["ACTIVE", "DISABLED", "DELETED"]);
+const ADMIN_ROLES = new Set<AdminRole>(["OPERATOR", "SUPER_ADMIN"]);
 
 @Injectable()
 export class AdminService {
@@ -91,25 +94,70 @@ export class AdminService {
     };
   }
 
-  async listUsers(actorUserId: string) {
+  async listUsers(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
-    const users = await this.prisma.user.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      include: {
-        membership: true,
-        adminProfile: true,
-        _count: {
-          select: {
-            goals: true,
-            aiJobs: true,
-            emailLogs: true
+    const filters = this.parseUserSearchFilters(input);
+    const where: Prisma.UserWhereInput = {
+      ...(filters.query
+        ? {
+            OR: [
+              {
+                email: {
+                  contains: filters.query
+                }
+              },
+              {
+                displayName: {
+                  contains: filters.query
+                }
+              }
+            ]
+          }
+        : {}),
+      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.plan
+        ? {
+            membership: {
+              is: {
+                plan: filters.plan
+              }
+            }
+          }
+        : {}),
+      ...(filters.adminRole
+        ? {
+            adminProfile: {
+              is: {
+                role: filters.adminRole,
+                status: "ACTIVE"
+              }
+            }
+          }
+        : {})
+    };
+    const [users, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        include: {
+          membership: true,
+          adminProfile: true,
+          _count: {
+            select: {
+              goals: true,
+              aiJobs: true,
+              emailLogs: true
+            }
           }
         }
-      }
-    });
+      }),
+      this.prisma.user.count({ where })
+    ]);
 
     return {
+      total,
+      filters,
       users: users.map((user) => ({
         id: user.id,
         email: user.email,
@@ -490,6 +538,67 @@ export class AdminService {
     }
 
     return admin;
+  }
+
+  private parseUserSearchFilters(input: unknown) {
+    const body =
+      input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    const query =
+      typeof body.query === "string" && body.query.trim()
+        ? body.query.trim().slice(0, 80)
+        : undefined;
+    const status = this.parseOptionalUserStatus(body.status);
+    const plan = this.parseOptionalMembershipPlan(body.plan);
+    const adminRole = this.parseOptionalAdminRole(body.adminRole);
+
+    return {
+      query,
+      status,
+      plan,
+      adminRole
+    };
+  }
+
+  private parseOptionalUserStatus(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const status = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!USER_STATUSES.has(status as UserStatus)) {
+      throw new BadRequestException("用户状态不正确");
+    }
+
+    return status as UserStatus;
+  }
+
+  private parseOptionalMembershipPlan(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const plan = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!MEMBERSHIP_PLANS.has(plan as MembershipPlan)) {
+      throw new BadRequestException("会员计划必须是 FREE 或 PRO");
+    }
+
+    return plan as MembershipPlan;
+  }
+
+  private parseOptionalAdminRole(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const role = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!ADMIN_ROLES.has(role as AdminRole)) {
+      throw new BadRequestException("后台角色不正确");
+    }
+
+    return role as AdminRole;
   }
 
   private parseMembershipPayload(input: unknown) {

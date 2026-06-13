@@ -633,6 +633,13 @@ export interface AdminUser {
   };
 }
 
+export interface AdminUserFilters {
+  query?: string;
+  status?: string;
+  plan?: string;
+  adminRole?: string;
+}
+
 export interface AdminGoal {
   id: string;
   userId: string;
@@ -1328,20 +1335,39 @@ export async function fetchAdminOverview(token: string) {
   return data as AdminOverview;
 }
 
-export async function fetchAdminUsers(token: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/users`, {
+export async function fetchAdminUsers(
+  token: string,
+  filters: AdminUserFilters = {}
+) {
+  const url = new URL(`${API_BASE_URL}/admin/users`);
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  });
+
+  const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`
     }
   });
 
-  const data = await parseJson<{ users: AdminUser[] }>(response);
+  const data = await parseJson<{
+    users: AdminUser[];
+    total: number;
+    filters: AdminUserFilters;
+  }>(response);
 
   if (!response.ok) {
     throw new Error(getErrorMessage(data, "后台用户列表加载失败"));
   }
 
-  return data as { users: AdminUser[] };
+  return data as {
+    users: AdminUser[];
+    total: number;
+    filters: AdminUserFilters;
+  };
 }
 
 export async function fetchAdminGoals(token: string) {

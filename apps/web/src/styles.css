@@ -1188,6 +1188,16 @@ textarea:focus {
   margin-top: 12px;
 }
 
+.admin-filter-form {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+
+.admin-filter-form .form-actions {
+  margin-top: 0;
+}
+
 .notification-form,
 .reminder-type-list {
   display: grid;

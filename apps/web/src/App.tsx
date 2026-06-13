@@ -29,6 +29,7 @@ import {
   AdminRawContent,
   AdminSystemConfig,
   AdminUser,
+  AdminUserFilters,
   AiJob,
   DataExportFormat,
   DataExportResponse,
@@ -623,6 +624,7 @@ export function App() {
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminUserTotal, setAdminUserTotal] = useState(0);
   const [adminGoals, setAdminGoals] = useState<AdminGoal[]>([]);
   const [adminAiJobs, setAdminAiJobs] = useState<AdminAiJob[]>([]);
   const [adminEmailLogs, setAdminEmailLogs] = useState<AdminEmailLog[]>([]);
@@ -707,6 +709,12 @@ export function App() {
   const [adminRawForm, setAdminRawForm] = useState({
     userId: "",
     reason: ""
+  });
+  const [adminUserFilters, setAdminUserFilters] = useState<AdminUserFilters>({
+    query: "",
+    status: "",
+    plan: "",
+    adminRole: ""
   });
   const [adminConfigForm, setAdminConfigForm] = useState({
     key: "mvp.feature_flag",
@@ -926,6 +934,7 @@ export function App() {
       setDataExportResult(null);
       setAdminOverview(null);
       setAdminUsers([]);
+      setAdminUserTotal(0);
       setAdminGoals([]);
       setAdminAiJobs([]);
       setAdminEmailLogs([]);
@@ -2235,7 +2244,7 @@ export function App() {
         configsResponse
       ] = await Promise.all([
         fetchAdminOverview(token),
-        fetchAdminUsers(token),
+        fetchAdminUsers(token, adminUserFilters),
         fetchAdminGoals(token),
         fetchAdminAiJobs(token),
         fetchAdminEmailLogs(token),
@@ -2245,6 +2254,7 @@ export function App() {
 
       setAdminOverview(overview);
       setAdminUsers(usersResponse.users);
+      setAdminUserTotal(usersResponse.total);
       setAdminGoals(goalsResponse.goals);
       setAdminAiJobs(jobsResponse.jobs);
       setAdminEmailLogs(logsResponse.logs);
@@ -2257,6 +2267,76 @@ export function App() {
       }));
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : "后台数据加载失败");
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  }
+
+  function updateAdminUserFilter(field: keyof AdminUserFilters, value: string) {
+    setAdminUserFilters((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  async function handleSearchAdminUsers(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    setIsLoadingAdmin(true);
+
+    try {
+      const usersResponse = await fetchAdminUsers(session.token, adminUserFilters);
+      setAdminUsers(usersResponse.users);
+      setAdminUserTotal(usersResponse.total);
+      setAdminRawForm((current) => ({
+        ...current,
+        userId: usersResponse.users.some((user) => user.id === current.userId)
+          ? current.userId
+          : usersResponse.users[0]?.id ?? ""
+      }));
+      setAdminMessage(
+        usersResponse.total
+          ? `找到 ${usersResponse.total} 个用户。`
+          : "没有匹配的用户。"
+      );
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "后台用户搜索失败");
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  }
+
+  async function handleResetAdminUserFilters() {
+    const nextFilters = {
+      query: "",
+      status: "",
+      plan: "",
+      adminRole: ""
+    };
+    setAdminUserFilters(nextFilters);
+
+    if (!session) {
+      return;
+    }
+
+    setIsLoadingAdmin(true);
+
+    try {
+      const usersResponse = await fetchAdminUsers(session.token, nextFilters);
+      setAdminUsers(usersResponse.users);
+      setAdminUserTotal(usersResponse.total);
+      setAdminRawForm((current) => ({
+        ...current,
+        userId: usersResponse.users[0]?.id ?? ""
+      }));
+      setAdminMessage("用户筛选已清空。");
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "后台用户列表刷新失败");
     } finally {
       setIsLoadingAdmin(false);
     }
@@ -4594,6 +4674,79 @@ export function App() {
               <section className="panel">
                 <p className="eyebrow">Users</p>
                 <h2>用户与会员</h2>
+                <form
+                  className="admin-filter-form"
+                  onSubmit={(event) => void handleSearchAdminUsers(event)}
+                >
+                  <label>
+                    <span>搜索</span>
+                    <input
+                      value={adminUserFilters.query ?? ""}
+                      onChange={(event) =>
+                        updateAdminUserFilter("query", event.target.value)
+                      }
+                      placeholder="邮箱或昵称"
+                    />
+                  </label>
+                  <label>
+                    <span>状态</span>
+                    <select
+                      value={adminUserFilters.status ?? ""}
+                      onChange={(event) =>
+                        updateAdminUserFilter("status", event.target.value)
+                      }
+                    >
+                      <option value="">全部</option>
+                      <option value="ACTIVE">ACTIVE</option>
+                      <option value="DISABLED">DISABLED</option>
+                      <option value="DELETED">DELETED</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>会员</span>
+                    <select
+                      value={adminUserFilters.plan ?? ""}
+                      onChange={(event) =>
+                        updateAdminUserFilter("plan", event.target.value)
+                      }
+                    >
+                      <option value="">全部</option>
+                      <option value="FREE">FREE</option>
+                      <option value="PRO">PRO</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>后台角色</span>
+                    <select
+                      value={adminUserFilters.adminRole ?? ""}
+                      onChange={(event) =>
+                        updateAdminUserFilter("adminRole", event.target.value)
+                      }
+                    >
+                      <option value="">全部</option>
+                      <option value="OPERATOR">OPERATOR</option>
+                      <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                    </select>
+                  </label>
+                  <div className="form-actions">
+                    <button
+                      className="primary-button"
+                      disabled={isLoadingAdmin}
+                      type="submit"
+                    >
+                      搜索
+                    </button>
+                    <button
+                      className="ghost-button"
+                      disabled={isLoadingAdmin}
+                      type="button"
+                      onClick={() => void handleResetAdminUserFilters()}
+                    >
+                      清空
+                    </button>
+                  </div>
+                </form>
+                <p className="muted-text">当前显示 {adminUsers.length}/{adminUserTotal} 个用户。</p>
                 {adminUsers.length ? (
                   <div className="admin-user-list">
                     {adminUsers.slice(0, 8).map((user) => (
