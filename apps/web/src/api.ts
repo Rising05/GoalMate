@@ -557,6 +557,42 @@ export interface WechatBinding {
   updatedAt: string;
 }
 
+export type DataExportFormat = "JSON" | "CSV" | "PDF" | "EXCEL";
+
+export type DataExportScope =
+  | "profile"
+  | "membership"
+  | "goals"
+  | "plans"
+  | "milestones"
+  | "dailyTasks"
+  | "checkins"
+  | "aiScores"
+  | "scoreAppeals"
+  | "deviationEvents"
+  | "healthSnapshots"
+  | "rewardCards"
+  | "failureReports"
+  | "aiJobs"
+  | "notificationPreference"
+  | "emailLogs"
+  | "wechatBinding"
+  | "adminProfile"
+  | "auditLogs";
+
+export interface DataExportResponse {
+  exportId: string;
+  userId: string;
+  exportedAt: string;
+  format: DataExportFormat;
+  status: "READY" | "RESERVED";
+  fullExport: boolean;
+  scopes: DataExportScope[];
+  data: Record<string, unknown> | null;
+  download?: null;
+  message: string;
+}
+
 export interface AdminOverview {
   admin: {
     role: string;
@@ -786,6 +822,32 @@ export async function deleteCurrentAccount(token: string) {
   }
 
   return data as { deletedUserId: string };
+}
+
+export async function exportCurrentAccountData(
+  token: string,
+  payload: {
+    format: DataExportFormat;
+    fullExport: boolean;
+    scopes: DataExportScope[];
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/auth/export`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<DataExportResponse>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "数据导出失败"));
+  }
+
+  return data as DataExportResponse;
 }
 
 export async function createGoal(token: string, payload: CreateGoalInput) {

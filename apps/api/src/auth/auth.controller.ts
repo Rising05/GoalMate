@@ -20,6 +20,11 @@ export class AuthController {
     return this.authService.getCurrentUser(authorization);
   }
 
+  @Post("export")
+  exportData(@Headers("authorization") authorization: string | undefined, @Body() body: unknown) {
+    return this.authService.exportCurrentUserData(authorization, body);
+  }
+
   @Delete("me")
   deleteMe(@Headers("authorization") authorization?: string) {
     return this.authService.deleteCurrentUser(authorization);

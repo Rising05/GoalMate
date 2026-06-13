@@ -99,6 +99,203 @@ describe("AuthService quota integration", () => {
     assert.equal(current.user.adminRole, "SUPER_ADMIN");
   });
 
+  it("exports selected current-user data without leaking other users or password hashes", async () => {
+    const suffix = `export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const registered = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "Export User"
+    });
+    const other = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}-other@example.com`,
+      password: "password-123",
+      displayName: "Other Export User"
+    });
+    const goal = await prisma.goal.create({
+      data: {
+        userId: registered.user.id,
+        title: "导出目标",
+        description: "用于验证数据导出。",
+        category: "POSTGRAD_EXAM",
+        status: "ACTIVE",
+        startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        endDate: new Date("2026-07-10T00:00:00.000+08:00"),
+        toleranceDaysAllowed: 2,
+        subjects: ["数学", "英语"],
+        materials: ["真题"],
+        chapters: ["高数第一章"]
+      }
+    });
+    const plan = await prisma.plan.create({
+      data: {
+        goalId: goal.id,
+        summary: "导出计划",
+        isActive: true,
+        confirmedAt: new Date("2026-06-10T02:00:00.000Z")
+      }
+    });
+    const weeklyPlan = await prisma.weeklyPlan.create({
+      data: {
+        planId: plan.id,
+        weekIndex: 1,
+        title: "第一周",
+        summary: "基础复习",
+        startsOn: new Date("2026-06-10T00:00:00.000+08:00"),
+        endsOn: new Date("2026-06-16T00:00:00.000+08:00")
+      }
+    });
+    const task = await prisma.dailyTask.create({
+      data: {
+        goalId: goal.id,
+        weeklyPlanId: weeklyPlan.id,
+        taskDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        title: "导出任务",
+        description: "完成题目并上传证据。",
+        plannedMinutes: 60,
+        studyTaskType: "PRACTICE",
+        subject: "数学",
+        questionCount: 30,
+        targetAccuracy: 80,
+        evidenceRequired: true
+      }
+    });
+    const checkin = await prisma.checkin.create({
+      data: {
+        userId: registered.user.id,
+        goalId: goal.id,
+        dailyTaskId: task.id,
+        content: "完成 30 题，错题已整理。",
+        investedMinutes: 70,
+        completedSubtasks: ["刷题", "整理错题"],
+        actualQuestionCount: 30,
+        correctQuestionCount: 24,
+        accuracy: 80,
+        evidenceFiles: ["mock://image-1.png"],
+        evidenceLinks: ["https://example.com/wrong-note"],
+        studyMood: "FOCUSED",
+        difficultyLevel: "MEDIUM"
+      }
+    });
+    await prisma.aiScore.create({
+      data: {
+        checkinId: checkin.id,
+        totalScore: 86,
+        dimensions: { completion: 90 },
+        evidence: { actualQuestionCount: 30 },
+        summary: "完成度较高。",
+        suggestion: "继续复盘错题。"
+      }
+    });
+    await prisma.emailLog.create({
+      data: {
+        userId: registered.user.id,
+        goalId: goal.id,
+        channel: "EMAIL",
+        type: "DAILY_TASK",
+        recipientEmail: registered.user.email,
+        subject: "导出提醒",
+        content: "继续保持。",
+        status: "SENT",
+        attempts: 1,
+        sentAt: new Date("2026-06-10T03:00:00.000Z")
+      }
+    });
+    await prisma.wechatBinding.create({
+      data: {
+        userId: registered.user.id,
+        openId: `openid-${suffix}`,
+        nickname: "导出用户"
+      }
+    });
+    await prisma.goal.create({
+      data: {
+        userId: other.user.id,
+        title: "其他用户目标",
+        description: "不应出现在导出结果中。",
+        category: "STUDY",
+        status: "ACTIVE",
+        startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        endDate: new Date("2026-06-20T00:00:00.000+08:00")
+      }
+    });
+
+    const exported = await authService.exportCurrentUserData(
+      `Bearer ${registered.token}`,
+      {
+        format: "JSON",
+        fullExport: false,
+        scopes: [
+          "profile",
+          "goals",
+          "plans",
+          "dailyTasks",
+          "checkins",
+          "aiScores",
+          "emailLogs",
+          "wechatBinding"
+        ]
+      }
+    );
+    const data = exported.data as Record<string, unknown>;
+    const profile = data.profile as Record<string, unknown>;
+    const goals = data.goals as Array<Record<string, unknown>>;
+    const checkins = data.checkins as Array<Record<string, unknown>>;
+    const scores = data.aiScores as Array<Record<string, unknown>>;
+    const logs = data.emailLogs as Array<Record<string, unknown>>;
+
+    assert.equal(exported.status, "READY");
+    assert.equal(exported.fullExport, false);
+    assert.deepEqual(exported.scopes, [
+      "profile",
+      "goals",
+      "plans",
+      "dailyTasks",
+      "checkins",
+      "aiScores",
+      "emailLogs",
+      "wechatBinding"
+    ]);
+    assert.equal(profile.email, registered.user.email);
+    assert.equal("passwordHash" in profile, false);
+    assert.equal(goals.length, 1);
+    assert.equal(goals[0].title, "导出目标");
+    assert.equal(checkins[0].actualQuestionCount, 30);
+    assert.deepEqual(checkins[0].evidenceLinks, [
+      "https://example.com/wrong-note"
+    ]);
+    assert.equal(scores[0].totalScore, 86);
+    assert.equal(logs[0].channel, "EMAIL");
+    assert.equal("membership" in data, false);
+    assert.match(JSON.stringify(exported), /导出目标/);
+    assert.doesNotMatch(JSON.stringify(exported), /其他用户目标/);
+    assert.doesNotMatch(JSON.stringify(exported), /passwordHash/);
+  });
+
+  it("returns reserved metadata for non-JSON export formats", async () => {
+    const suffix = `export-reserved-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    const registered = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "Reserved Export User"
+    });
+
+    const exported = await authService.exportCurrentUserData(
+      `Bearer ${registered.token}`,
+      {
+        format: "PDF",
+        fullExport: true
+      }
+    );
+
+    assert.equal(exported.status, "RESERVED");
+    assert.equal(exported.format, "PDF");
+    assert.equal(exported.data, null);
+    assert.ok(exported.scopes.includes("goals"));
+    assert.match(exported.message, /已预留/);
+  });
+
   it("deletes the current account and cascades owned data", async () => {
     const suffix = `delete-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const registered = await authService.register({

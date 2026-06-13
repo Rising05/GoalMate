@@ -5,6 +5,7 @@ import {
   CalendarCheck,
   CheckCircle2,
   ChevronRight,
+  Download,
   Gift,
   History,
   LineChart,
@@ -29,6 +30,9 @@ import {
   AdminSystemConfig,
   AdminUser,
   AiJob,
+  DataExportFormat,
+  DataExportResponse,
+  DataExportScope,
   EmailLog,
   FailureReport,
   Goal,
@@ -57,6 +61,7 @@ import {
   deleteGoal,
   deleteRewardCard,
   enqueueDueEmailLogs,
+  exportCurrentAccountData,
   fetchAdminAiJobs,
   fetchAdminAuditLogs,
   fetchAdminEmailLogs,
@@ -171,6 +176,44 @@ const navItems: NavItem[] = [
     description: "Operations",
     icon: ShieldCheck
   }
+];
+
+const dataExportScopeOptions: Array<{
+  code: DataExportScope;
+  label: string;
+}> = [
+  { code: "profile", label: "账号资料" },
+  { code: "membership", label: "会员状态" },
+  { code: "goals", label: "目标" },
+  { code: "plans", label: "计划" },
+  { code: "milestones", label: "里程碑" },
+  { code: "dailyTasks", label: "每日任务" },
+  { code: "checkins", label: "打卡记录" },
+  { code: "aiScores", label: "AI 评分" },
+  { code: "scoreAppeals", label: "评分申诉" },
+  { code: "deviationEvents", label: "偏差事件" },
+  { code: "healthSnapshots", label: "健康趋势" },
+  { code: "rewardCards", label: "奖励愿景板" },
+  { code: "failureReports", label: "失败复盘" },
+  { code: "aiJobs", label: "AI 任务" },
+  { code: "notificationPreference", label: "提醒偏好" },
+  { code: "emailLogs", label: "提醒日志" },
+  { code: "wechatBinding", label: "微信绑定" },
+  { code: "adminProfile", label: "后台身份" },
+  { code: "auditLogs", label: "审计日志" }
+];
+
+const defaultDataExportScopes: DataExportScope[] = [
+  "profile",
+  "membership",
+  "goals",
+  "plans",
+  "dailyTasks",
+  "checkins",
+  "aiScores",
+  "deviationEvents",
+  "healthSnapshots",
+  "failureReports"
 ];
 
 const setupFields = [
@@ -645,6 +688,20 @@ export function App() {
     unionId: "",
     nickname: ""
   });
+  const [dataExportForm, setDataExportForm] = useState<{
+    format: DataExportFormat;
+    fullExport: boolean;
+    scopes: DataExportScope[];
+  }>({
+    format: "JSON",
+    fullExport: false,
+    scopes: defaultDataExportScopes
+  });
+  const [dataExportResult, setDataExportResult] =
+    useState<DataExportResponse | null>(null);
+  const [dataExportMessage, setDataExportMessage] =
+    useState("选择范围后可导出当前账号数据。");
+  const [isExportingData, setIsExportingData] = useState(false);
   const [adminRawForm, setAdminRawForm] = useState({
     userId: "",
     reason: ""
@@ -864,6 +921,7 @@ export function App() {
       setNotificationPreference(null);
       setWechatBinding(null);
       setEmailLogs([]);
+      setDataExportResult(null);
       setAdminOverview(null);
       setAdminUsers([]);
       setAdminGoals([]);
@@ -877,6 +935,7 @@ export function App() {
       setRewardMessage("登录后可维护奖励愿景板。");
       setFailureMessage("登录后可查看失败复盘。");
       setNotificationMessage("登录后可设置邮件提醒。");
+      setDataExportMessage("选择范围后可导出当前账号数据。");
       setAdminMessage("管理员账号登录后可查看后台。");
       return;
     }
@@ -1287,6 +1346,58 @@ export function App() {
     } catch (error) {
       setNotificationMessage(error instanceof Error ? error.message : "账号删除失败");
     }
+  }
+
+  function toggleDataExportScope(scope: DataExportScope) {
+    setDataExportForm((current) => {
+      const scopes = current.scopes.includes(scope)
+        ? current.scopes.filter((item) => item !== scope)
+        : [...current.scopes, scope];
+
+      return {
+        ...current,
+        scopes
+      };
+    });
+  }
+
+  async function handleExportCurrentAccountData() {
+    if (!session) {
+      setDataExportMessage("请先登录后再导出数据。");
+      return;
+    }
+
+    setIsExportingData(true);
+
+    try {
+      const result = await exportCurrentAccountData(session.token, dataExportForm);
+      setDataExportResult(result);
+      setDataExportMessage(
+        result.status === "READY"
+          ? `导出已生成：${result.scopes.length} 个范围。`
+          : result.message
+      );
+    } catch (error) {
+      setDataExportMessage(error instanceof Error ? error.message : "数据导出失败");
+    } finally {
+      setIsExportingData(false);
+    }
+  }
+
+  function downloadDataExportResult() {
+    if (!dataExportResult?.data) {
+      return;
+    }
+
+    const blob = new Blob([JSON.stringify(dataExportResult, null, 2)], {
+      type: "application/json"
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${dataExportResult.exportId}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   function handleRewardImageUpload(file: File | null) {
@@ -3981,6 +4092,92 @@ export function App() {
                         </strong>
                       </div>
                     ))}
+                  </div>
+                  <div className="data-export-box">
+                    <div className="section-heading compact-heading">
+                      <div>
+                        <p className="eyebrow">Export</p>
+                        <h3>数据导出</h3>
+                      </div>
+                      <select
+                        value={dataExportForm.format}
+                        onChange={(event) =>
+                          setDataExportForm((current) => ({
+                            ...current,
+                            format: event.target.value as DataExportFormat
+                          }))
+                        }
+                      >
+                        {(["JSON", "CSV", "PDF", "EXCEL"] as DataExportFormat[]).map(
+                          (format) => (
+                            <option key={format} value={format}>
+                              {format}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+                    <label className="toggle-row">
+                      <input
+                        checked={dataExportForm.fullExport}
+                        type="checkbox"
+                        onChange={(event) =>
+                          setDataExportForm((current) => ({
+                            ...current,
+                            fullExport: event.target.checked
+                          }))
+                        }
+                      />
+                      <span>一键完整导出</span>
+                    </label>
+                    <div className="export-scope-grid">
+                      {dataExportScopeOptions.map((scope) => (
+                        <label className="toggle-row" key={scope.code}>
+                          <input
+                            checked={
+                              dataExportForm.fullExport ||
+                              dataExportForm.scopes.includes(scope.code)
+                            }
+                            disabled={dataExportForm.fullExport}
+                            type="checkbox"
+                            onChange={() => toggleDataExportScope(scope.code)}
+                          />
+                          <span>{scope.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="form-actions">
+                      <button
+                        className="primary-button"
+                        disabled={isExportingData}
+                        type="button"
+                        onClick={() => void handleExportCurrentAccountData()}
+                      >
+                        {isExportingData ? "导出中" : "生成导出"}
+                        <Download size={16} aria-hidden="true" />
+                      </button>
+                      <button
+                        className="ghost-button"
+                        disabled={!dataExportResult?.data}
+                        type="button"
+                        onClick={downloadDataExportResult}
+                      >
+                        下载 JSON
+                      </button>
+                    </div>
+                    {dataExportResult ? (
+                      <div className="settings-list">
+                        <div>
+                          <span>{dataExportResult.exportId}</span>
+                          <strong>{dataExportResult.status}</strong>
+                        </div>
+                        <div>
+                          <span>{dataExportResult.scopes.join(" / ")}</span>
+                          <strong>{dataExportResult.format}</strong>
+                        </div>
+                      </div>
+                    ) : null}
+                    <p className="form-message">{dataExportMessage}</p>
                   </div>
                   <div className="form-actions">
                     <button
