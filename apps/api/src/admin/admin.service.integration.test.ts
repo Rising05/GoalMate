@@ -59,6 +59,87 @@ describe("AdminService integration", () => {
     assert.ok(emailLogs.logs.some((item) => item.goalId === goal.id));
   });
 
+  it("filters admin goals, AI jobs, and email logs", async () => {
+    const { user: admin } = await createUser("filter-admin");
+    const { user: member, goal } =
+      await createUserWithOperationalData("filter-operational");
+
+    await prisma.adminUser.create({
+      data: {
+        userId: admin.id,
+        role: "OPERATOR",
+        status: "ACTIVE"
+      }
+    });
+    await prisma.aiJob.create({
+      data: {
+        userId: member.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_REPLAN",
+        status: "FAILED",
+        attempts: 3,
+        payload: {
+          source: "admin-filter-test"
+        },
+        error: "provider timeout"
+      }
+    });
+    await prisma.emailLog.create({
+      data: {
+        userId: member.id,
+        goalId: goal.id,
+        channel: "WECHAT",
+        type: "MISSED_CHECKIN",
+        recipientEmail: member.email,
+        subject: "后台筛选微信提醒",
+        content: "用于后台筛选。",
+        status: "FAILED",
+        attempts: 1,
+        error: "wechat not bound"
+      }
+    });
+
+    const goals = await adminService.listGoals(admin.id, {
+      query: "filter-operational",
+      status: "AT_RISK",
+      category: "STUDY"
+    });
+    const failedJobs = await adminService.listAiJobs(admin.id, {
+      query: "filter-operational",
+      status: "FAILED",
+      type: "GOAL_PLAN_REPLAN"
+    });
+    const failedWechatLogs = await adminService.listEmailLogs(admin.id, {
+      query: "后台筛选",
+      status: "FAILED",
+      channel: "WECHAT",
+      type: "MISSED_CHECKIN"
+    });
+
+    assert.equal(goals.total, 1);
+    assert.equal(goals.goals[0].id, goal.id);
+    assert.equal(goals.filters.status, "AT_RISK");
+    assert.equal(goals.filters.category, "STUDY");
+    assert.equal(failedJobs.total, 1);
+    assert.equal(failedJobs.jobs[0].type, "GOAL_PLAN_REPLAN");
+    assert.equal(failedJobs.jobs[0].status, "FAILED");
+    assert.equal(failedWechatLogs.total, 1);
+    assert.equal(failedWechatLogs.logs[0].channel, "WECHAT");
+    assert.equal(failedWechatLogs.logs[0].status, "FAILED");
+    await assert.rejects(
+      () => adminService.listGoals(admin.id, { category: "UNKNOWN" }),
+      BadRequestException
+    );
+    await assert.rejects(
+      () => adminService.listAiJobs(admin.id, { status: "CANCELLED" }),
+      BadRequestException
+    );
+    await assert.rejects(
+      () => adminService.listEmailLogs(admin.id, { channel: "SMS" }),
+      BadRequestException
+    );
+  });
+
   it("searches admin users by query, status, membership plan, and admin role", async () => {
     const { user: admin } = await createUser("search-admin");
     const { user: alpha } = await createUser("search-alpha");

@@ -22,9 +22,12 @@ import {
   AuthResponse,
   ActivityDay,
   AdminAiJob,
+  AdminAiJobFilters,
   AdminAuditLog,
   AdminEmailLog,
+  AdminEmailLogFilters,
   AdminGoal,
+  AdminGoalFilters,
   AdminOverview,
   AdminRawContent,
   AdminSystemConfig,
@@ -626,8 +629,11 @@ export function App() {
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminUserTotal, setAdminUserTotal] = useState(0);
   const [adminGoals, setAdminGoals] = useState<AdminGoal[]>([]);
+  const [adminGoalTotal, setAdminGoalTotal] = useState(0);
   const [adminAiJobs, setAdminAiJobs] = useState<AdminAiJob[]>([]);
+  const [adminAiJobTotal, setAdminAiJobTotal] = useState(0);
   const [adminEmailLogs, setAdminEmailLogs] = useState<AdminEmailLog[]>([]);
+  const [adminEmailLogTotal, setAdminEmailLogTotal] = useState(0);
   const [adminAuditLogs, setAdminAuditLogs] = useState<AdminAuditLog[]>([]);
   const [adminSystemConfigs, setAdminSystemConfigs] = useState<
     AdminSystemConfig[]
@@ -716,6 +722,24 @@ export function App() {
     plan: "",
     adminRole: ""
   });
+  const [adminGoalFilters, setAdminGoalFilters] = useState<AdminGoalFilters>({
+    query: "",
+    status: "",
+    category: ""
+  });
+  const [adminAiJobFilters, setAdminAiJobFilters] =
+    useState<AdminAiJobFilters>({
+      query: "",
+      status: "",
+      type: ""
+    });
+  const [adminEmailLogFilters, setAdminEmailLogFilters] =
+    useState<AdminEmailLogFilters>({
+      query: "",
+      status: "",
+      type: "",
+      channel: ""
+    });
   const [adminConfigForm, setAdminConfigForm] = useState({
     key: "mvp.feature_flag",
     value: "{\n  \"enabled\": true\n}",
@@ -936,8 +960,11 @@ export function App() {
       setAdminUsers([]);
       setAdminUserTotal(0);
       setAdminGoals([]);
+      setAdminGoalTotal(0);
       setAdminAiJobs([]);
+      setAdminAiJobTotal(0);
       setAdminEmailLogs([]);
+      setAdminEmailLogTotal(0);
       setAdminAuditLogs([]);
       setAdminSystemConfigs([]);
       setAdminRawContent(null);
@@ -2245,9 +2272,9 @@ export function App() {
       ] = await Promise.all([
         fetchAdminOverview(token),
         fetchAdminUsers(token, adminUserFilters),
-        fetchAdminGoals(token),
-        fetchAdminAiJobs(token),
-        fetchAdminEmailLogs(token),
+        fetchAdminGoals(token, adminGoalFilters),
+        fetchAdminAiJobs(token, adminAiJobFilters),
+        fetchAdminEmailLogs(token, adminEmailLogFilters),
         fetchAdminAuditLogs(token),
         fetchAdminSystemConfigs(token)
       ]);
@@ -2256,8 +2283,11 @@ export function App() {
       setAdminUsers(usersResponse.users);
       setAdminUserTotal(usersResponse.total);
       setAdminGoals(goalsResponse.goals);
+      setAdminGoalTotal(goalsResponse.total);
       setAdminAiJobs(jobsResponse.jobs);
+      setAdminAiJobTotal(jobsResponse.total);
       setAdminEmailLogs(logsResponse.logs);
+      setAdminEmailLogTotal(logsResponse.total);
       setAdminAuditLogs(auditResponse.logs);
       setAdminSystemConfigs(configsResponse.configs);
       setAdminMessage("后台数据已加载。");
@@ -2342,6 +2372,103 @@ export function App() {
     }
   }
 
+  function updateAdminGoalFilter(field: keyof AdminGoalFilters, value: string) {
+    setAdminGoalFilters((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  function updateAdminAiJobFilter(field: keyof AdminAiJobFilters, value: string) {
+    setAdminAiJobFilters((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  function updateAdminEmailLogFilter(
+    field: keyof AdminEmailLogFilters,
+    value: string
+  ) {
+    setAdminEmailLogFilters((current) => ({
+      ...current,
+      [field]: value
+    }));
+  }
+
+  async function handleSearchAdminGoals(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    setIsLoadingAdmin(true);
+
+    try {
+      const response = await fetchAdminGoals(session.token, adminGoalFilters);
+      setAdminGoals(response.goals);
+      setAdminGoalTotal(response.total);
+      setAdminMessage(response.total ? `找到 ${response.total} 个目标。` : "没有匹配的目标。");
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "后台目标搜索失败");
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  }
+
+  async function handleSearchAdminAiJobs(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    setIsLoadingAdmin(true);
+
+    try {
+      const response = await fetchAdminAiJobs(session.token, adminAiJobFilters);
+      setAdminAiJobs(response.jobs);
+      setAdminAiJobTotal(response.total);
+      setAdminMessage(
+        response.total ? `找到 ${response.total} 个 AI 任务。` : "没有匹配的 AI 任务。"
+      );
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "后台 AI 任务搜索失败");
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  }
+
+  async function handleSearchAdminEmailLogs(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    setIsLoadingAdmin(true);
+
+    try {
+      const response = await fetchAdminEmailLogs(
+        session.token,
+        adminEmailLogFilters
+      );
+      setAdminEmailLogs(response.logs);
+      setAdminEmailLogTotal(response.total);
+      setAdminMessage(
+        response.total ? `找到 ${response.total} 条提醒日志。` : "没有匹配的提醒日志。"
+      );
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "后台提醒日志搜索失败");
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  }
+
   async function handleOpenProMembership(userId: string) {
     if (!session) {
       setAdminMessage("请先登录管理员账号。");
@@ -2410,10 +2537,11 @@ export function App() {
     try {
       const result = await retryAdminAiJob(session.token, job.id, { reason });
       const [jobsResponse, auditResponse] = await Promise.all([
-        fetchAdminAiJobs(session.token),
+        fetchAdminAiJobs(session.token, adminAiJobFilters),
         fetchAdminAuditLogs(session.token)
       ]);
       setAdminAiJobs(jobsResponse.jobs);
+      setAdminAiJobTotal(jobsResponse.total);
       setAdminAuditLogs(auditResponse.logs);
       setAdminMessage(
         result.queue.queued
@@ -4551,6 +4679,72 @@ export function App() {
                   <section>
                     <p className="eyebrow">Goals</p>
                     <h2>目标状态</h2>
+                    <form
+                      className="admin-filter-form compact-admin-filter"
+                      onSubmit={(event) => void handleSearchAdminGoals(event)}
+                    >
+                      <label>
+                        <span>搜索</span>
+                        <input
+                          value={adminGoalFilters.query ?? ""}
+                          onChange={(event) =>
+                            updateAdminGoalFilter("query", event.target.value)
+                          }
+                          placeholder="目标、用户"
+                        />
+                      </label>
+                      <label>
+                        <span>状态</span>
+                        <select
+                          value={adminGoalFilters.status ?? ""}
+                          onChange={(event) =>
+                            updateAdminGoalFilter("status", event.target.value)
+                          }
+                        >
+                          <option value="">全部</option>
+                          <option value="ACTIVE">ACTIVE</option>
+                          <option value="AT_RISK">AT_RISK</option>
+                          <option value="REPLANNING">REPLANNING</option>
+                          <option value="WAITING_CONFIRMATION">
+                            WAITING_CONFIRMATION
+                          </option>
+                          <option value="COMPLETED">COMPLETED</option>
+                          <option value="FAILED">FAILED</option>
+                          <option value="GENERATION_FAILED">GENERATION_FAILED</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>分类</span>
+                        <select
+                          value={adminGoalFilters.category ?? ""}
+                          onChange={(event) =>
+                            updateAdminGoalFilter("category", event.target.value)
+                          }
+                        >
+                          <option value="">全部</option>
+                          <option value="STUDY">STUDY</option>
+                          <option value="POSTGRAD_EXAM">POSTGRAD_EXAM</option>
+                          <option value="CET_4_6">CET_4_6</option>
+                          <option value="IELTS_TOEFL">IELTS_TOEFL</option>
+                          <option value="GPA_IMPROVEMENT">GPA_IMPROVEMENT</option>
+                          <option value="CERTIFICATION">CERTIFICATION</option>
+                          <option value="CAREER">CAREER</option>
+                          <option value="FITNESS">FITNESS</option>
+                          <option value="HABIT">HABIT</option>
+                          <option value="CUSTOM">CUSTOM</option>
+                        </select>
+                      </label>
+                      <button
+                        className="primary-button"
+                        disabled={isLoadingAdmin}
+                        type="submit"
+                      >
+                        筛选
+                      </button>
+                    </form>
+                    <p className="muted-text">
+                      当前显示 {adminGoals.length}/{adminGoalTotal} 个目标。
+                    </p>
                     {adminGoals.length ? (
                       <div className="admin-table-list">
                         {adminGoals.slice(0, 8).map((goal) => (
@@ -4578,6 +4772,57 @@ export function App() {
                   <section>
                     <p className="eyebrow">AI jobs</p>
                     <h2>异步任务</h2>
+                    <form
+                      className="admin-filter-form compact-admin-filter"
+                      onSubmit={(event) => void handleSearchAdminAiJobs(event)}
+                    >
+                      <label>
+                        <span>搜索</span>
+                        <input
+                          value={adminAiJobFilters.query ?? ""}
+                          onChange={(event) =>
+                            updateAdminAiJobFilter("query", event.target.value)
+                          }
+                          placeholder="任务、目标、用户"
+                        />
+                      </label>
+                      <label>
+                        <span>状态</span>
+                        <select
+                          value={adminAiJobFilters.status ?? ""}
+                          onChange={(event) =>
+                            updateAdminAiJobFilter("status", event.target.value)
+                          }
+                        >
+                          <option value="">全部</option>
+                          <option value="QUEUED">QUEUED</option>
+                          <option value="RUNNING">RUNNING</option>
+                          <option value="RETRYING">RETRYING</option>
+                          <option value="SUCCEEDED">SUCCEEDED</option>
+                          <option value="FAILED">FAILED</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>类型</span>
+                        <input
+                          value={adminAiJobFilters.type ?? ""}
+                          onChange={(event) =>
+                            updateAdminAiJobFilter("type", event.target.value)
+                          }
+                          placeholder="GOAL_PLAN_REPLAN"
+                        />
+                      </label>
+                      <button
+                        className="primary-button"
+                        disabled={isLoadingAdmin}
+                        type="submit"
+                      >
+                        筛选
+                      </button>
+                    </form>
+                    <p className="muted-text">
+                      当前显示 {adminAiJobs.length}/{adminAiJobTotal} 个 AI 任务。
+                    </p>
                     {adminAiJobs.length ? (
                       <div className="admin-table-list">
                         {adminAiJobs.slice(0, 8).map((job) => (
@@ -4614,6 +4859,69 @@ export function App() {
                   <section>
                     <p className="eyebrow">Email</p>
                     <h2>邮件提醒日志</h2>
+                    <form
+                      className="admin-filter-form compact-admin-filter"
+                      onSubmit={(event) => void handleSearchAdminEmailLogs(event)}
+                    >
+                      <label>
+                        <span>搜索</span>
+                        <input
+                          value={adminEmailLogFilters.query ?? ""}
+                          onChange={(event) =>
+                            updateAdminEmailLogFilter("query", event.target.value)
+                          }
+                          placeholder="主题、收件人、用户"
+                        />
+                      </label>
+                      <label>
+                        <span>状态</span>
+                        <select
+                          value={adminEmailLogFilters.status ?? ""}
+                          onChange={(event) =>
+                            updateAdminEmailLogFilter("status", event.target.value)
+                          }
+                        >
+                          <option value="">全部</option>
+                          <option value="QUEUED">QUEUED</option>
+                          <option value="SENT">SENT</option>
+                          <option value="FAILED">FAILED</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>渠道</span>
+                        <select
+                          value={adminEmailLogFilters.channel ?? ""}
+                          onChange={(event) =>
+                            updateAdminEmailLogFilter("channel", event.target.value)
+                          }
+                        >
+                          <option value="">全部</option>
+                          <option value="EMAIL">EMAIL</option>
+                          <option value="WECHAT">WECHAT</option>
+                          <option value="WEB">WEB</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>类型</span>
+                        <input
+                          value={adminEmailLogFilters.type ?? ""}
+                          onChange={(event) =>
+                            updateAdminEmailLogFilter("type", event.target.value)
+                          }
+                          placeholder="DAILY_TASK"
+                        />
+                      </label>
+                      <button
+                        className="primary-button"
+                        disabled={isLoadingAdmin}
+                        type="submit"
+                      >
+                        筛选
+                      </button>
+                    </form>
+                    <p className="muted-text">
+                      当前显示 {adminEmailLogs.length}/{adminEmailLogTotal} 条日志。
+                    </p>
                     {adminEmailLogs.length ? (
                       <div className="admin-table-list">
                         {adminEmailLogs.slice(0, 8).map((log) => (

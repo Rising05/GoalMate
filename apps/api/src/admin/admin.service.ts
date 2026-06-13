@@ -8,9 +8,12 @@ import {
 } from "@nestjs/common";
 import {
   AiJob,
+  AiJobStatus,
   AuditLog,
   EmailLog,
   Goal,
+  GoalCategory,
+  GoalStatus,
   Membership,
   MembershipPlan,
   MembershipStatus,
@@ -32,6 +35,39 @@ const MEMBERSHIP_STATUSES = new Set<MembershipStatus>([
 ]);
 const USER_STATUSES = new Set<UserStatus>(["ACTIVE", "DISABLED", "DELETED"]);
 const ADMIN_ROLES = new Set<AdminRole>(["OPERATOR", "SUPER_ADMIN"]);
+const GOAL_STATUSES = new Set<GoalStatus>([
+  "DRAFT",
+  "GENERATING_PLAN",
+  "WAITING_CONFIRMATION",
+  "ACTIVE",
+  "AT_RISK",
+  "REPLANNING",
+  "COMPLETED",
+  "FAILED",
+  "GENERATION_FAILED"
+]);
+const GOAL_CATEGORIES = new Set<GoalCategory>([
+  "STUDY",
+  "CAREER",
+  "FITNESS",
+  "HABIT",
+  "CUSTOM",
+  "POSTGRAD_EXAM",
+  "CET_4_6",
+  "IELTS_TOEFL",
+  "GPA_IMPROVEMENT",
+  "CERTIFICATION",
+  "CUSTOM_STUDY"
+]);
+const AI_JOB_STATUSES = new Set<AiJobStatus>([
+  "QUEUED",
+  "RUNNING",
+  "RETRYING",
+  "SUCCEEDED",
+  "FAILED"
+]);
+const EMAIL_LOG_STATUSES = new Set(["QUEUED", "SENT", "FAILED"]);
+const NOTIFICATION_CHANNELS = new Set(["EMAIL", "WECHAT", "WEB"]);
 
 @Injectable()
 export class AdminService {
@@ -177,41 +213,83 @@ export class AdminService {
     };
   }
 
-  async listGoals(actorUserId: string) {
+  async listGoals(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
-    const goals = await this.prisma.goal.findMany({
-      orderBy: { updatedAt: "desc" },
-      take: 100,
-      include: {
-        user: { select: { email: true, displayName: true } },
-        _count: {
-          select: {
-            dailyTasks: true,
-            checkins: true,
-            deviationEvents: true,
-            rewardCards: true
+    const filters = this.parseGoalFilters(input);
+    const where: Prisma.GoalWhereInput = {
+      ...(filters.query
+        ? {
+            OR: [
+              { title: { contains: filters.query } },
+              { description: { contains: filters.query } },
+              { user: { email: { contains: filters.query } } },
+              { user: { displayName: { contains: filters.query } } }
+            ]
+          }
+        : {}),
+      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.category ? { category: filters.category } : {})
+    };
+    const [goals, total] = await Promise.all([
+      this.prisma.goal.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        take: 100,
+        include: {
+          user: { select: { email: true, displayName: true } },
+          _count: {
+            select: {
+              dailyTasks: true,
+              checkins: true,
+              deviationEvents: true,
+              rewardCards: true
+            }
           }
         }
-      }
-    });
+      }),
+      this.prisma.goal.count({ where })
+    ]);
 
     return {
+      total,
+      filters,
       goals: goals.map((goal) => this.serializeAdminGoal(goal))
     };
   }
 
-  async listAiJobs(actorUserId: string) {
+  async listAiJobs(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
-    const jobs = await this.prisma.aiJob.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      include: {
-        user: { select: { email: true, displayName: true } },
-        goal: { select: { title: true, status: true } }
-      }
-    });
+    const filters = this.parseAiJobFilters(input);
+    const where: Prisma.AiJobWhereInput = {
+      ...(filters.query
+        ? {
+            OR: [
+              { type: { contains: filters.query } },
+              { user: { email: { contains: filters.query } } },
+              { user: { displayName: { contains: filters.query } } },
+              { goal: { title: { contains: filters.query } } }
+            ]
+          }
+        : {}),
+      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.type ? { type: filters.type } : {})
+    };
+    const [jobs, total] = await Promise.all([
+      this.prisma.aiJob.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        include: {
+          user: { select: { email: true, displayName: true } },
+          goal: { select: { title: true, status: true } }
+        }
+      }),
+      this.prisma.aiJob.count({ where })
+    ]);
 
     return {
+      total,
+      filters,
       jobs: jobs.map((job) => this.serializeAiJob(job))
     };
   }
@@ -284,17 +362,40 @@ export class AdminService {
     };
   }
 
-  async listEmailLogs(actorUserId: string) {
+  async listEmailLogs(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
-    const logs = await this.prisma.emailLog.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      include: {
-        user: { select: { email: true, displayName: true } }
-      }
-    });
+    const filters = this.parseEmailLogFilters(input);
+    const where: Prisma.EmailLogWhereInput = {
+      ...(filters.query
+        ? {
+            OR: [
+              { recipientEmail: { contains: filters.query } },
+              { subject: { contains: filters.query } },
+              { type: { contains: filters.query } },
+              { user: { email: { contains: filters.query } } },
+              { user: { displayName: { contains: filters.query } } }
+            ]
+          }
+        : {}),
+      ...(filters.status ? { status: filters.status } : {}),
+      ...(filters.type ? { type: filters.type } : {}),
+      ...(filters.channel ? { channel: filters.channel } : {})
+    };
+    const [logs, total] = await Promise.all([
+      this.prisma.emailLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        include: {
+          user: { select: { email: true, displayName: true } }
+        }
+      }),
+      this.prisma.emailLog.count({ where })
+    ]);
 
     return {
+      total,
+      filters,
       logs: logs.map((log) => this.serializeEmailLog(log, log.user))
     };
   }
@@ -601,6 +702,116 @@ export class AdminService {
     return role as AdminRole;
   }
 
+  private parseGoalFilters(input: unknown) {
+    const body =
+      input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+
+    return {
+      query: this.cleanOptionalFilterText(body.query),
+      status: this.parseOptionalGoalStatus(body.status),
+      category: this.parseOptionalGoalCategory(body.category)
+    };
+  }
+
+  private parseAiJobFilters(input: unknown) {
+    const body =
+      input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+
+    return {
+      query: this.cleanOptionalFilterText(body.query),
+      status: this.parseOptionalAiJobStatus(body.status),
+      type: this.cleanOptionalFilterText(body.type)
+    };
+  }
+
+  private parseEmailLogFilters(input: unknown) {
+    const body =
+      input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+
+    return {
+      query: this.cleanOptionalFilterText(body.query),
+      status: this.parseOptionalEmailLogStatus(body.status),
+      type: this.cleanOptionalFilterText(body.type),
+      channel: this.parseOptionalNotificationChannel(body.channel)
+    };
+  }
+
+  private parseOptionalGoalStatus(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const status = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!GOAL_STATUSES.has(status as GoalStatus)) {
+      throw new BadRequestException("目标状态不正确");
+    }
+
+    return status as GoalStatus;
+  }
+
+  private parseOptionalGoalCategory(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const category = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!GOAL_CATEGORIES.has(category as GoalCategory)) {
+      throw new BadRequestException("目标分类不正确");
+    }
+
+    return category as GoalCategory;
+  }
+
+  private parseOptionalAiJobStatus(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const status = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!AI_JOB_STATUSES.has(status as AiJobStatus)) {
+      throw new BadRequestException("AI 任务状态不正确");
+    }
+
+    return status as AiJobStatus;
+  }
+
+  private parseOptionalEmailLogStatus(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const status = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!EMAIL_LOG_STATUSES.has(status)) {
+      throw new BadRequestException("提醒日志状态不正确");
+    }
+
+    return status;
+  }
+
+  private parseOptionalNotificationChannel(value: unknown) {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const channel = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!NOTIFICATION_CHANNELS.has(channel)) {
+      throw new BadRequestException("提醒渠道不正确");
+    }
+
+    return channel;
+  }
+
+  private cleanOptionalFilterText(value: unknown) {
+    return typeof value === "string" && value.trim()
+      ? value.trim().slice(0, 80)
+      : undefined;
+  }
+
   private parseMembershipPayload(input: unknown) {
     if (!input || typeof input !== "object") {
       throw new BadRequestException("请求参数不正确");
@@ -837,6 +1048,7 @@ export class AdminService {
       userEmail: user?.email ?? log.recipientEmail,
       userDisplayName: user?.displayName ?? null,
       goalId: log.goalId,
+      channel: log.channel,
       type: log.type,
       recipientEmail: log.recipientEmail,
       subject: log.subject,

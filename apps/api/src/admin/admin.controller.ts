@@ -35,13 +35,19 @@ export class AdminController {
   }
 
   @Get("goals")
-  listGoals(@Req() request: AuthenticatedRequest) {
-    return this.adminService.listGoals(request.user!.id);
+  listGoals(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>
+  ) {
+    return this.adminService.listGoals(request.user!.id, query);
   }
 
   @Get("ai-jobs")
-  listAiJobs(@Req() request: AuthenticatedRequest) {
-    return this.adminService.listAiJobs(request.user!.id);
+  listAiJobs(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>
+  ) {
+    return this.adminService.listAiJobs(request.user!.id, query);
   }
 
   @Post("ai-jobs/:jobId/retry")
@@ -54,8 +60,11 @@ export class AdminController {
   }
 
   @Get("email-logs")
-  listEmailLogs(@Req() request: AuthenticatedRequest) {
-    return this.adminService.listEmailLogs(request.user!.id);
+  listEmailLogs(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>
+  ) {
+    return this.adminService.listEmailLogs(request.user!.id, query);
   }
 
   @Patch("users/:userId/membership")

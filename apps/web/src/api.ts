@@ -662,6 +662,12 @@ export interface AdminGoal {
   };
 }
 
+export interface AdminGoalFilters {
+  query?: string;
+  status?: string;
+  category?: string;
+}
+
 export interface AdminAiJob {
   id: string;
   userId: string;
@@ -678,6 +684,12 @@ export interface AdminAiJob {
   updatedAt: string;
 }
 
+export interface AdminAiJobFilters {
+  query?: string;
+  status?: string;
+  type?: string;
+}
+
 export interface AdminAiJobRetryResponse {
   job: AdminAiJob;
   queue: {
@@ -692,6 +704,13 @@ export interface AdminAiJobRetryResponse {
 export interface AdminEmailLog extends Omit<EmailLog, "content"> {
   userEmail: string;
   userDisplayName: string | null;
+}
+
+export interface AdminEmailLogFilters {
+  query?: string;
+  status?: string;
+  type?: string;
+  channel?: string;
 }
 
 export interface AdminAuditLog {
@@ -1370,36 +1389,74 @@ export async function fetchAdminUsers(
   };
 }
 
-export async function fetchAdminGoals(token: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/goals`, {
+export async function fetchAdminGoals(
+  token: string,
+  filters: AdminGoalFilters = {}
+) {
+  const url = new URL(`${API_BASE_URL}/admin/goals`);
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  });
+
+  const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`
     }
   });
 
-  const data = await parseJson<{ goals: AdminGoal[] }>(response);
+  const data = await parseJson<{
+    goals: AdminGoal[];
+    total: number;
+    filters: AdminGoalFilters;
+  }>(response);
 
   if (!response.ok) {
     throw new Error(getErrorMessage(data, "后台目标列表加载失败"));
   }
 
-  return data as { goals: AdminGoal[] };
+  return data as {
+    goals: AdminGoal[];
+    total: number;
+    filters: AdminGoalFilters;
+  };
 }
 
-export async function fetchAdminAiJobs(token: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/ai-jobs`, {
+export async function fetchAdminAiJobs(
+  token: string,
+  filters: AdminAiJobFilters = {}
+) {
+  const url = new URL(`${API_BASE_URL}/admin/ai-jobs`);
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  });
+
+  const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`
     }
   });
 
-  const data = await parseJson<{ jobs: AdminAiJob[] }>(response);
+  const data = await parseJson<{
+    jobs: AdminAiJob[];
+    total: number;
+    filters: AdminAiJobFilters;
+  }>(response);
 
   if (!response.ok) {
     throw new Error(getErrorMessage(data, "后台 AI 任务加载失败"));
   }
 
-  return data as { jobs: AdminAiJob[] };
+  return data as {
+    jobs: AdminAiJob[];
+    total: number;
+    filters: AdminAiJobFilters;
+  };
 }
 
 export async function retryAdminAiJob(
@@ -1425,20 +1482,39 @@ export async function retryAdminAiJob(
   return data as AdminAiJobRetryResponse;
 }
 
-export async function fetchAdminEmailLogs(token: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/email-logs`, {
+export async function fetchAdminEmailLogs(
+  token: string,
+  filters: AdminEmailLogFilters = {}
+) {
+  const url = new URL(`${API_BASE_URL}/admin/email-logs`);
+
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value) {
+      url.searchParams.set(key, value);
+    }
+  });
+
+  const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`
     }
   });
 
-  const data = await parseJson<{ logs: AdminEmailLog[] }>(response);
+  const data = await parseJson<{
+    logs: AdminEmailLog[];
+    total: number;
+    filters: AdminEmailLogFilters;
+  }>(response);
 
   if (!response.ok) {
     throw new Error(getErrorMessage(data, "后台邮件日志加载失败"));
   }
 
-  return data as { logs: AdminEmailLog[] };
+  return data as {
+    logs: AdminEmailLog[];
+    total: number;
+    filters: AdminEmailLogFilters;
+  };
 }
 
 export async function updateAdminMembership(

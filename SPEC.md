@@ -688,6 +688,15 @@ MVP 已落地的会员额度统计：
 - Web 后台用户与会员面板提供搜索输入、用户状态、会员计划和后台角色筛选，并展示当前返回数 / 匹配总数。
 - 已新增 `AdminService integration` 用例，覆盖 query、会员计划、用户状态、后台角色筛选和非法筛选值拒绝。
 
+已落地的后台列表筛选能力：
+
+- `GET /admin/goals` 支持 `query`、`status` 和 `category` 筛选，`query` 覆盖目标标题、目标描述、用户邮箱和昵称。
+- `GET /admin/ai-jobs` 支持 `query`、`status` 和 `type` 筛选，`query` 覆盖 job 类型、用户邮箱、用户昵称和目标标题。
+- `GET /admin/email-logs` 支持 `query`、`status`、`type` 和 `channel` 筛选，`query` 覆盖收件人、主题、类型、用户邮箱和昵称。
+- 后台邮件日志返回 `channel` 字段，Web 后台可区分 EMAIL / WECHAT / WEB 渠道。
+- Web 后台目标、AI jobs 和邮件日志区块已提供对应筛选表单，并展示当前返回数 / 匹配总数。
+- 已新增 `AdminService integration` 用例，覆盖目标、AI job、邮件日志筛选和非法分类 / 状态 / 渠道拒绝。
+
 ## 11. 隐私和安全
 
 MVP 需要重视私人目标、复盘内容和奖励愿景板数据。
@@ -1508,9 +1517,10 @@ API 要求：
 
 - 后台已支持用户、目标、AI job、邮件 / 微信提醒日志、会员状态、系统配置和审计日志查看。
 - 已实现 `GET /admin/users` 用户搜索筛选，支持邮箱 / 昵称、用户状态、会员计划和后台角色。
+- 已实现 `GET /admin/goals`、`GET /admin/ai-jobs` 和 `GET /admin/email-logs` 后台筛选参数。
 - 已实现 `POST /admin/ai-jobs/:jobId/retry`；只允许重试 `FAILED` job，要求填写原因，重试动作会写入 `AI_JOB_RETRY` 审计日志。
 - Web 后台 AI jobs 列表已为失败任务提供重试按钮。
-- 当前仍缺目标 / AI job / 邮件日志的后台筛选参数、复杂报表和真实 AI worker 消费重试任务。
+- 当前仍缺复杂报表、筛选结果分页和真实 AI worker 消费重试任务。
 
 超级管理员能力：
 
