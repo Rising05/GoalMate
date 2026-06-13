@@ -3,7 +3,8 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from "@nestjs/common";
 import {
   AiJob,
@@ -18,6 +19,7 @@ import {
   User
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { QueueService } from "../queue/queue.service";
 
 type AdminRole = "OPERATOR" | "SUPER_ADMIN";
 
@@ -30,7 +32,12 @@ const MEMBERSHIP_STATUSES = new Set<MembershipStatus>([
 
 @Injectable()
 export class AdminService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(QueueService)
+    private readonly queueService?: QueueService
+  ) {}
 
   async getOverview(actorUserId: string) {
     const admin = await this.assertAdmin(actorUserId);
@@ -158,6 +165,74 @@ export class AdminService {
 
     return {
       jobs: jobs.map((job) => this.serializeAiJob(job))
+    };
+  }
+
+  async retryAiJob(actorUserId: string, jobId: string, input: unknown) {
+    await this.assertAdmin(actorUserId);
+    const job = await this.prisma.aiJob.findUnique({
+      where: { id: jobId },
+      include: {
+        user: { select: { email: true, displayName: true } },
+        goal: { select: { title: true, status: true } }
+      }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    if (job.status !== "FAILED") {
+      throw new BadRequestException("只有失败的 AI 任务可以重试");
+    }
+
+    const payload = this.parseAdminRetryPayload(input);
+    const queue = await this.enqueueAiJobRetry(job);
+    const originalPayload = this.jsonObject(job.payload);
+    const retryMetadata = {
+      requestedBy: actorUserId,
+      requestedAt: new Date().toISOString(),
+      reason: payload.reason,
+      previousStatus: job.status,
+      previousAttempts: job.attempts,
+      previousError: job.error,
+      queue
+    };
+    const retriedJob = await this.prisma.aiJob.update({
+      where: { id: job.id },
+      data: {
+        status: "QUEUED",
+        attempts: 0,
+        error: null,
+        payload: this.toJson({
+          ...originalPayload,
+          adminRetry: retryMetadata
+        })
+      },
+      include: {
+        user: { select: { email: true, displayName: true } },
+        goal: { select: { title: true, status: true } }
+      }
+    });
+
+    await this.createAuditLog(actorUserId, {
+      action: "AI_JOB_RETRY",
+      targetType: "AI_JOB",
+      targetId: job.id,
+      reason: payload.reason,
+      metadata: {
+        userId: job.userId,
+        goalId: job.goalId,
+        type: job.type,
+        previousAttempts: job.attempts,
+        previousError: job.error,
+        queue
+      }
+    });
+
+    return {
+      job: this.serializeAiJob(retriedJob),
+      queue
     };
   }
 
@@ -507,6 +582,54 @@ export class AdminService {
       description,
       reason
     };
+  }
+
+  private parseAdminRetryPayload(input: unknown) {
+    const body =
+      input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    const reason =
+      typeof body.reason === "string" && body.reason.trim()
+        ? body.reason.trim().slice(0, 500)
+        : "";
+
+    if (reason.length < 6) {
+      throw new BadRequestException("重试 AI 任务必须填写至少 6 个字符的原因");
+    }
+
+    return { reason };
+  }
+
+  private async enqueueAiJobRetry(job: AiJob) {
+    try {
+      const queue = await this.queueService?.enqueueAiJob({
+        jobId: job.id,
+        type: job.type,
+        goalId: job.goalId,
+        userId: job.userId
+      });
+
+      return queue ?? {
+        queued: false,
+        queueName: "ai-jobs",
+        reason: "Queue service is not configured."
+      };
+    } catch (error) {
+      return {
+        queued: false,
+        queueName: "ai-jobs",
+        error: error instanceof Error ? error.message : "Queue enqueue failed"
+      };
+    }
+  }
+
+  private jsonObject(value: unknown) {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  private toJson(value: unknown) {
+    return value as Prisma.InputJsonValue;
   }
 
   private async createAuditLog(

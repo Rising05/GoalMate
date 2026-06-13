@@ -181,6 +181,85 @@ describe("AdminService integration", () => {
       )
     );
   });
+
+  it("lets an admin retry a failed AI job with audit logging", async () => {
+    const { user: admin } = await createUser("retry-admin");
+    const { user: member, goal } = await createUserWithOperationalData("retry-job");
+
+    await prisma.adminUser.create({
+      data: {
+        userId: admin.id,
+        role: "OPERATOR",
+        status: "ACTIVE"
+      }
+    });
+
+    const failedJob = await prisma.aiJob.create({
+      data: {
+        userId: member.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_REPLAN",
+        status: "FAILED",
+        attempts: 3,
+        payload: {
+          goalId: goal.id,
+          adjustmentReason: "用户调整备考节奏"
+        },
+        error: "DeepSeek timeout"
+      }
+    });
+
+    await assert.rejects(
+      () => adminService.retryAiJob(admin.id, failedJob.id, { reason: "太短" }),
+      BadRequestException
+    );
+
+    const result = await adminService.retryAiJob(admin.id, failedJob.id, {
+      reason: "后台排查失败后手动重试"
+    });
+    const storedJob = await prisma.aiJob.findUniqueOrThrow({
+      where: { id: failedJob.id }
+    });
+    const auditLogs = await adminService.listAuditLogs(admin.id);
+    const payload = storedJob.payload as {
+      adminRetry?: {
+        reason?: string;
+        previousStatus?: string;
+        previousAttempts?: number;
+        previousError?: string;
+        queue?: { queued?: boolean; queueName?: string; reason?: string };
+      };
+    };
+
+    assert.equal(result.job.id, failedJob.id);
+    assert.equal(result.job.status, "QUEUED");
+    assert.equal(result.job.attempts, 0);
+    assert.equal(result.job.error, null);
+    assert.equal(storedJob.status, "QUEUED");
+    assert.equal(storedJob.attempts, 0);
+    assert.equal(storedJob.error, null);
+    assert.equal(payload.adminRetry?.reason, "后台排查失败后手动重试");
+    assert.equal(payload.adminRetry?.previousStatus, "FAILED");
+    assert.equal(payload.adminRetry?.previousAttempts, 3);
+    assert.equal(payload.adminRetry?.previousError, "DeepSeek timeout");
+    assert.equal(payload.adminRetry?.queue?.queued, false);
+    assert.equal(payload.adminRetry?.queue?.queueName, "ai-jobs");
+    assert.ok(
+      auditLogs.logs.some(
+        (log) =>
+          log.action === "AI_JOB_RETRY" &&
+          log.targetId === failedJob.id &&
+          log.reason === "后台排查失败后手动重试"
+      )
+    );
+    await assert.rejects(
+      () =>
+        adminService.retryAiJob(admin.id, failedJob.id, {
+          reason: "重复重试应被拒绝"
+        }),
+      BadRequestException
+    );
+  });
 });
 
 async function cleanupTestData() {

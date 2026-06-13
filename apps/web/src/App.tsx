@@ -85,6 +85,7 @@ import {
   generateRescueTask,
   listGoals,
   processQueuedEmailLogs,
+  retryAdminAiJob,
   requestGoalReplan,
   restartGoal,
   retryFailedEmailLogs,
@@ -650,6 +651,7 @@ export function App() {
   const [isSavingAdminConfig, setIsSavingAdminConfig] = useState(false);
   const [adminMembershipUpdatingUserId, setAdminMembershipUpdatingUserId] =
     useState<string | null>(null);
+  const [adminRetryingAiJobId, setAdminRetryingAiJobId] = useState<string | null>(null);
   const [isGeneratingRescueTask, setIsGeneratingRescueTask] = useState(false);
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
     toDateKey(new Date())
@@ -2308,6 +2310,40 @@ export function App() {
       setAdminMessage("敏感原文已加载，并已写入审计日志。");
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : "敏感原文加载失败");
+    }
+  }
+
+  async function handleRetryAdminAiJob(job: AdminAiJob) {
+    if (!session) {
+      setAdminMessage("请先登录管理员账号。");
+      return;
+    }
+
+    const reason = window.prompt("请输入重试失败 AI 任务的原因", "后台排查后手动重试");
+
+    if (!reason) {
+      return;
+    }
+
+    setAdminRetryingAiJobId(job.id);
+
+    try {
+      const result = await retryAdminAiJob(session.token, job.id, { reason });
+      const [jobsResponse, auditResponse] = await Promise.all([
+        fetchAdminAiJobs(session.token),
+        fetchAdminAuditLogs(session.token)
+      ]);
+      setAdminAiJobs(jobsResponse.jobs);
+      setAdminAuditLogs(auditResponse.logs);
+      setAdminMessage(
+        result.queue.queued
+          ? "AI 任务已重新入队。"
+          : `AI 任务已标记重试，队列未启用：${result.queue.reason ?? result.queue.error ?? "待 worker 处理"}`
+      );
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "AI 任务重试失败");
+    } finally {
+      setAdminRetryingAiJobId(null);
     }
   }
 
@@ -4477,6 +4513,16 @@ export function App() {
                               {job.status} · {job.attempts} 次
                               {job.error ? ` · ${job.error}` : ""}
                             </span>
+                            {job.status === "FAILED" ? (
+                              <button
+                                className="ghost-button"
+                                disabled={adminRetryingAiJobId === job.id}
+                                type="button"
+                                onClick={() => void handleRetryAdminAiJob(job)}
+                              >
+                                {adminRetryingAiJobId === job.id ? "重试中" : "重试"}
+                              </button>
+                            ) : null}
                           </article>
                         ))}
                       </div>

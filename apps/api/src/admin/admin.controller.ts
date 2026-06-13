@@ -41,6 +41,15 @@ export class AdminController {
     return this.adminService.listAiJobs(request.user!.id);
   }
 
+  @Post("ai-jobs/:jobId/retry")
+  retryAiJob(
+    @Req() request: AuthenticatedRequest,
+    @Param("jobId") jobId: string,
+    @Body() body: unknown
+  ) {
+    return this.adminService.retryAiJob(request.user!.id, jobId, body);
+  }
+
   @Get("email-logs")
   listEmailLogs(@Req() request: AuthenticatedRequest) {
     return this.adminService.listEmailLogs(request.user!.id);

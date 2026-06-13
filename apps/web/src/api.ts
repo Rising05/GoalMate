@@ -671,6 +671,17 @@ export interface AdminAiJob {
   updatedAt: string;
 }
 
+export interface AdminAiJobRetryResponse {
+  job: AdminAiJob;
+  queue: {
+    queued: boolean;
+    queueName: string;
+    jobId?: string;
+    reason?: string;
+    error?: string;
+  };
+}
+
 export interface AdminEmailLog extends Omit<EmailLog, "content"> {
   userEmail: string;
   userDisplayName: string | null;
@@ -1363,6 +1374,29 @@ export async function fetchAdminAiJobs(token: string) {
   }
 
   return data as { jobs: AdminAiJob[] };
+}
+
+export async function retryAdminAiJob(
+  token: string,
+  jobId: string,
+  payload: { reason: string }
+) {
+  const response = await fetch(`${API_BASE_URL}/admin/ai-jobs/${jobId}/retry`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<AdminAiJobRetryResponse>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "AI 任务重试失败"));
+  }
+
+  return data as AdminAiJobRetryResponse;
 }
 
 export async function fetchAdminEmailLogs(token: string) {
