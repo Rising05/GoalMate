@@ -184,10 +184,27 @@ export class AuthService {
       userId: user.id,
       exportedAt: new Date().toISOString(),
       format: request.format,
-      status: request.format === "JSON" ? "READY" : "RESERVED",
+      status: ["JSON", "CSV"].includes(request.format) ? "READY" : "RESERVED",
       fullExport: request.fullExport,
       scopes
     };
+
+    if (request.format === "CSV") {
+      const data = await this.buildExportData(user.id, scopes);
+      const content = this.buildCsvExport(data);
+
+      return {
+        ...base,
+        data: null,
+        download: {
+          filename: `${base.exportId}.csv`,
+          contentType: "text/csv; charset=utf-8",
+          encoding: "utf-8",
+          content
+        },
+        message: "CSV 数据导出已生成。"
+      };
+    }
 
     if (request.format !== "JSON") {
       return {
@@ -201,11 +218,15 @@ export class AuthService {
     return {
       ...base,
       data: await this.buildExportData(user.id, scopes),
+      download: null,
       message: "JSON 数据导出已生成。"
     };
   }
 
-  private async buildExportData(userId: string, scopes: ExportScope[]) {
+  private async buildExportData(
+    userId: string,
+    scopes: ExportScope[]
+  ): Promise<Record<string, unknown>> {
     const scopeSet = new Set(scopes);
     const data: Record<string, unknown> = {};
     const goalIds = await this.getExportGoalIds(userId);
@@ -356,7 +377,7 @@ export class AuthService {
       });
     }
 
-    return this.serializeExportValue(data);
+    return this.serializeExportValue(data) as Record<string, unknown>;
   }
 
   private async buildAuthResponse(user: {
@@ -516,6 +537,63 @@ export class AuthService {
     const day = parts.find((part) => part.type === "day")?.value;
 
     return `${year}-${month}-${day}`;
+  }
+
+  private buildCsvExport(data: Record<string, unknown>) {
+    const rows: string[][] = [["scope", "recordIndex", "field", "value"]];
+
+    for (const [scope, value] of Object.entries(data)) {
+      if (Array.isArray(value)) {
+        value.forEach((record, index) => {
+          this.appendCsvRecordRows(rows, scope, index, record);
+        });
+        continue;
+      }
+
+      this.appendCsvRecordRows(rows, scope, 0, value);
+    }
+
+    return rows.map((row) => row.map((cell) => this.escapeCsvCell(cell)).join(",")).join("\n");
+  }
+
+  private appendCsvRecordRows(
+    rows: string[][],
+    scope: string,
+    recordIndex: number,
+    record: unknown
+  ) {
+    if (record && typeof record === "object" && !Array.isArray(record)) {
+      for (const [field, value] of Object.entries(record as Record<string, unknown>)) {
+        rows.push([scope, String(recordIndex), field, this.stringifyCsvValue(value)]);
+      }
+      return;
+    }
+
+    rows.push([scope, String(recordIndex), "value", this.stringifyCsvValue(record)]);
+  }
+
+  private stringifyCsvValue(value: unknown) {
+    if (value === null || value === undefined) {
+      return "";
+    }
+
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+
+    if (typeof value === "object") {
+      return JSON.stringify(value);
+    }
+
+    return String(value);
+  }
+
+  private escapeCsvCell(value: string) {
+    if (/[",\n\r]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+
+    return value;
   }
 
   private parseExportPayload(input: unknown): {

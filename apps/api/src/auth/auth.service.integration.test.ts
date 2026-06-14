@@ -271,6 +271,48 @@ describe("AuthService quota integration", () => {
     assert.doesNotMatch(JSON.stringify(exported), /passwordHash/);
   });
 
+  it("exports selected current-user data as a CSV download", async () => {
+    const suffix = `export-csv-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    const registered = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "CSV Export User"
+    });
+
+    await prisma.goal.create({
+      data: {
+        userId: registered.user.id,
+        title: "CSV 导出目标",
+        description: "用于验证 CSV 文件导出。",
+        category: "STUDY",
+        status: "ACTIVE",
+        startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        endDate: new Date("2026-06-20T00:00:00.000+08:00")
+      }
+    });
+
+    const exported = await authService.exportCurrentUserData(
+      `Bearer ${registered.token}`,
+      {
+        format: "CSV",
+        fullExport: false,
+        scopes: ["profile", "goals"]
+      }
+    );
+
+    assert.equal(exported.status, "READY");
+    assert.equal(exported.format, "CSV");
+    assert.equal(exported.data, null);
+    assert.equal(exported.download?.contentType, "text/csv; charset=utf-8");
+    assert.match(exported.download?.filename ?? "", /\.csv$/);
+    assert.match(exported.download?.content ?? "", /^scope,recordIndex,field,value/);
+    assert.match(exported.download?.content ?? "", /CSV Export User/);
+    assert.match(exported.download?.content ?? "", /CSV 导出目标/);
+    assert.doesNotMatch(exported.download?.content ?? "", /passwordHash/);
+  });
+
   it("returns reserved metadata for non-JSON export formats", async () => {
     const suffix = `export-reserved-${Date.now()}-${Math.random()
       .toString(36)

@@ -589,7 +589,12 @@ export interface DataExportResponse {
   fullExport: boolean;
   scopes: DataExportScope[];
   data: Record<string, unknown> | null;
-  download?: null;
+  download: {
+    filename: string;
+    contentType: string;
+    encoding: string;
+    content: string;
+  } | null;
   message: string;
 }
 

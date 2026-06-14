@@ -1455,17 +1455,22 @@ export function App() {
   }
 
   function downloadDataExportResult() {
-    if (!dataExportResult?.data) {
+    if (!dataExportResult?.data && !dataExportResult?.download) {
       return;
     }
 
-    const blob = new Blob([JSON.stringify(dataExportResult, null, 2)], {
-      type: "application/json"
-    });
+    const blob = dataExportResult.download
+      ? new Blob([dataExportResult.download.content], {
+          type: dataExportResult.download.contentType
+        })
+      : new Blob([JSON.stringify(dataExportResult, null, 2)], {
+          type: "application/json"
+        });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${dataExportResult.exportId}.json`;
+    link.download =
+      dataExportResult.download?.filename ?? `${dataExportResult.exportId}.json`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -4434,11 +4439,11 @@ export function App() {
                       </button>
                       <button
                         className="ghost-button"
-                        disabled={!dataExportResult?.data}
+                        disabled={!dataExportResult?.data && !dataExportResult?.download}
                         type="button"
                         onClick={downloadDataExportResult}
                       >
-                        下载 JSON
+                        下载导出
                       </button>
                     </div>
                     {dataExportResult ? (

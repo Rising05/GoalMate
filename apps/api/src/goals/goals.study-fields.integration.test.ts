@@ -52,16 +52,16 @@ describe("GoalsService study fields integration", () => {
     const storedGoal = await prisma.goal.findUniqueOrThrow({
       where: { id: created.goal.id }
     });
-    const storedTask = await prisma.dailyTask.findFirstOrThrow({
-      where: {
-        goalId: created.goal.id,
-        studyTaskType: {
-          not: null
-        }
-      },
-      orderBy: { taskDate: "asc" }
-    });
     const firstPlanTask = planned.plan?.weeklyPlans[0]?.dailyTasks[0];
+
+    assert.equal(planned.job.status, "SUCCEEDED");
+    assert.ok(firstPlanTask);
+
+    const storedTask = await prisma.dailyTask.findUniqueOrThrow({
+      where: {
+        id: firstPlanTask.id
+      }
+    });
 
     assert.equal(created.goal.category, "POSTGRAD_EXAM");
     assert.equal(created.goal.examName, "考研英语一");
@@ -74,8 +74,6 @@ describe("GoalsService study fields integration", () => {
     assert.deepEqual(created.goal.weaknesses, ["长难句", "写作论证"]);
     assert.equal(storedGoal.category, "POSTGRAD_EXAM");
     assert.equal(storedGoal.dailyStudyMinutes, 90);
-    assert.equal(planned.job.status, "SUCCEEDED");
-    assert.ok(firstPlanTask);
     assert.ok(firstPlanTask.studyTaskType);
     assert.ok(firstPlanTask.subject);
     assert.ok(firstPlanTask.chapterRef);
