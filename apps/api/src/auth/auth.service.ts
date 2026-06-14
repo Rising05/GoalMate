@@ -184,10 +184,31 @@ export class AuthService {
       userId: user.id,
       exportedAt: new Date().toISOString(),
       format: request.format,
-      status: ["JSON", "CSV"].includes(request.format) ? "READY" : "RESERVED",
+      status: ["JSON", "CSV", "PDF"].includes(request.format) ? "READY" : "RESERVED",
       fullExport: request.fullExport,
       scopes
     };
+
+    if (request.format === "PDF") {
+      const data = await this.buildExportData(user.id, scopes);
+      const content = this.buildPdfExport(data, {
+        exportId: base.exportId,
+        exportedAt: base.exportedAt,
+        scopes
+      });
+
+      return {
+        ...base,
+        data: null,
+        download: {
+          filename: `${base.exportId}.pdf`,
+          contentType: "application/pdf",
+          encoding: "base64",
+          content
+        },
+        message: "PDF 数据报告已生成。"
+      };
+    }
 
     if (request.format === "CSV") {
       const data = await this.buildExportData(user.id, scopes);
@@ -594,6 +615,108 @@ export class AuthService {
     }
 
     return value;
+  }
+
+  private buildPdfExport(
+    data: Record<string, unknown>,
+    metadata: { exportId: string; exportedAt: string; scopes: ExportScope[] }
+  ) {
+    const lines = [
+      "GoalMate Account Export",
+      `Export ID: ${metadata.exportId}`,
+      `Exported At: ${metadata.exportedAt}`,
+      `Scopes: ${metadata.scopes.join(", ")}`,
+      ""
+    ];
+
+    for (const [scope, value] of Object.entries(data)) {
+      if (Array.isArray(value)) {
+        lines.push(`${scope}: ${value.length} records`);
+        value.slice(0, 4).forEach((record, index) => {
+          lines.push(`  ${index + 1}. ${this.toPdfSummary(record)}`);
+        });
+        continue;
+      }
+
+      lines.push(`${scope}: ${this.toPdfSummary(value)}`);
+    }
+
+    const escapedLines = lines
+      .flatMap((line) => this.wrapPdfLine(this.toAsciiPdfText(line), 92))
+      .slice(0, 60);
+    const stream = [
+      "BT",
+      "/F1 10 Tf",
+      "50 750 Td",
+      "14 TL",
+      ...escapedLines.map((line) => `(${this.escapePdfText(line)}) Tj T*`),
+      "ET"
+    ].join("\n");
+    const objects = [
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+      "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+      `<< /Length ${Buffer.byteLength(stream, "utf8")} >>\nstream\n${stream}\nendstream`
+    ];
+    const chunks = ["%PDF-1.4\n"];
+    const offsets = [0];
+
+    for (const [index, object] of objects.entries()) {
+      offsets.push(Buffer.byteLength(chunks.join(""), "utf8"));
+      chunks.push(`${index + 1} 0 obj\n${object}\nendobj\n`);
+    }
+
+    const xrefOffset = Buffer.byteLength(chunks.join(""), "utf8");
+    chunks.push(`xref\n0 ${objects.length + 1}\n`);
+    chunks.push("0000000000 65535 f \n");
+    offsets.slice(1).forEach((offset) => {
+      chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`);
+    });
+    chunks.push(
+      `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+    );
+
+    return Buffer.from(chunks.join(""), "utf8").toString("base64");
+  }
+
+  private toPdfSummary(value: unknown) {
+    if (!value || typeof value !== "object") {
+      return this.stringifyCsvValue(value);
+    }
+
+    const record = value as Record<string, unknown>;
+    const preferredKeys = ["title", "email", "displayName", "status", "type", "subject"];
+    const parts = preferredKeys
+      .filter((key) => key in record)
+      .map((key) => `${key}=${this.stringifyCsvValue(record[key])}`);
+
+    return parts.length ? parts.join("; ") : JSON.stringify(record).slice(0, 180);
+  }
+
+  private toAsciiPdfText(value: string) {
+    return value.replace(/[^\x20-\x7E]/g, (character) => {
+      const codePoint = character.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD";
+      return `\\u${codePoint.padStart(4, "0")}`;
+    });
+  }
+
+  private wrapPdfLine(value: string, size: number) {
+    if (value.length <= size) {
+      return [value];
+    }
+
+    const lines: string[] = [];
+
+    for (let index = 0; index < value.length; index += size) {
+      lines.push(value.slice(index, index + size));
+    }
+
+    return lines;
+  }
+
+  private escapePdfText(value: string) {
+    return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
   }
 
   private parseExportPayload(input: unknown): {

@@ -1460,9 +1460,16 @@ export function App() {
     }
 
     const blob = dataExportResult.download
-      ? new Blob([dataExportResult.download.content], {
-          type: dataExportResult.download.contentType
-        })
+      ? new Blob(
+          [
+            dataExportResult.download.encoding === "base64"
+              ? decodeBase64Download(dataExportResult.download.content)
+              : dataExportResult.download.content
+          ],
+          {
+            type: dataExportResult.download.contentType
+          }
+        )
       : new Blob([JSON.stringify(dataExportResult, null, 2)], {
           type: "application/json"
         });
@@ -1473,6 +1480,17 @@ export function App() {
       dataExportResult.download?.filename ?? `${dataExportResult.exportId}.json`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function decodeBase64Download(content: string) {
+    const binary = window.atob(content);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+
+    return bytes;
   }
 
   function handleRewardImageUpload(file: File | null) {

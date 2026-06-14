@@ -313,6 +313,52 @@ describe("AuthService quota integration", () => {
     assert.doesNotMatch(exported.download?.content ?? "", /passwordHash/);
   });
 
+  it("exports selected current-user data as a PDF report download", async () => {
+    const suffix = `export-pdf-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    const registered = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "PDF Export User"
+    });
+
+    await prisma.goal.create({
+      data: {
+        userId: registered.user.id,
+        title: "PDF 导出目标",
+        description: "用于验证 PDF 文件导出。",
+        category: "STUDY",
+        status: "ACTIVE",
+        startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        endDate: new Date("2026-06-20T00:00:00.000+08:00")
+      }
+    });
+
+    const exported = await authService.exportCurrentUserData(
+      `Bearer ${registered.token}`,
+      {
+        format: "PDF",
+        fullExport: false,
+        scopes: ["profile", "goals"]
+      }
+    );
+    const pdfContent = Buffer.from(exported.download?.content ?? "", "base64").toString(
+      "utf8"
+    );
+
+    assert.equal(exported.status, "READY");
+    assert.equal(exported.format, "PDF");
+    assert.equal(exported.data, null);
+    assert.equal(exported.download?.contentType, "application/pdf");
+    assert.equal(exported.download?.encoding, "base64");
+    assert.match(exported.download?.filename ?? "", /\.pdf$/);
+    assert.match(pdfContent, /^%PDF-1\.4/);
+    assert.match(pdfContent, /GoalMate Account Export/);
+    assert.match(pdfContent, /PDF Export User/);
+    assert.doesNotMatch(pdfContent, /passwordHash/);
+  });
+
   it("returns reserved metadata for non-JSON export formats", async () => {
     const suffix = `export-reserved-${Date.now()}-${Math.random()
       .toString(36)
@@ -326,13 +372,13 @@ describe("AuthService quota integration", () => {
     const exported = await authService.exportCurrentUserData(
       `Bearer ${registered.token}`,
       {
-        format: "PDF",
+        format: "EXCEL",
         fullExport: true
       }
     );
 
     assert.equal(exported.status, "RESERVED");
-    assert.equal(exported.format, "PDF");
+    assert.equal(exported.format, "EXCEL");
     assert.equal(exported.data, null);
     assert.ok(exported.scopes.includes("goals"));
     assert.match(exported.message, /已预留/);
