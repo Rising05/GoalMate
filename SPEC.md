@@ -606,7 +606,9 @@ MVP 已落地的提醒日志和重试能力：
 - `notification_preferences.channels` 预留提醒渠道，支持 `WEB / EMAIL / WECHAT`；`email_logs.channel` 记录具体投递渠道。
 - `wechat_bindings` 预留 Web 账号与微信 openid / unionid 绑定关系；已提供绑定、解绑和查询接口。
 - 当用户同时启用 EMAIL 与 WECHAT 且已绑定微信时，提醒生成会分别写入 EMAIL 和 WECHAT 渠道日志；当前发送队列只处理 EMAIL，WECHAT 日志保留给后续微信 provider 消费。
-- 剩余风险：当前仍使用 MockMailProvider，尚未接入真实邮件服务商和微信服务商；失败重试为手动触发基础版，后续需要由 BullMQ worker 根据退避策略自动重试。
+- `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，并按 `emailLogId` 调用 `processQueuedEmailLog` 处理单条到期邮件日志。
+- worker 路径发送失败时会累计 `attempts`；非最终 BullMQ attempt 会保持日志为 `QUEUED` 并抛错交给 BullMQ attempts/backoff 退避重试，最终 attempt 才落库为 `FAILED`。
+- 剩余风险：当前仍使用 MockMailProvider，尚未接入真实邮件服务商和微信服务商；WECHAT 日志尚未接入真实微信 provider 或订阅消息模板。
 
 ## 9. 商业化
 
@@ -1376,7 +1378,9 @@ AI Provider 要求：
 - `processQueuedAiJob` 已支持 `GOAL_PLAN_GENERATION` 和 `GOAL_PLAN_REPLAN`，会把 job 推进到 `RUNNING / RETRYING / SUCCEEDED / FAILED`，成功时落库新计划，失败时记录错误并把目标置为 `GENERATION_FAILED`。
 - worker 消费具备幂等保护：非 `QUEUED` job 不会重复执行。
 - 已补 `AiJobsService requestGoalReplan integration`，覆盖 worker 成功消费、失败重试耗尽、重复消费幂等；已补 `QueueService integration`，覆盖 BullMQ disabled 时 worker 不启动。
-- 剩余风险：Email worker、Report worker 仍待接入 BullMQ 自动消费；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径。
+- `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
+- 已补 `NotificationsService integration`，覆盖单条邮件 worker 路径成功、重复消费幂等、失败保持 queued 等待重试，以及最终 attempt 失败落库。
+- 剩余风险：Report worker 仍待接入 BullMQ 自动消费；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
 
 AI job 状态需要支持：
 
@@ -1645,10 +1649,10 @@ API 要求：
 
 阶段 C：真实 worker 和自动轮询。
 
-- BullMQ AI worker 已真实消费计划生成和重规划任务；邮件、报告任务 worker 仍待补齐。
+- BullMQ AI worker 已真实消费计划生成和重规划任务；Email worker 已真实消费 EMAIL 提醒日志；报告任务 worker 仍待补齐。
 - 前端 job 状态自动轮询。
 - 管理后台支持失败 job 重试。
-- 已补 AI worker 成功、失败重试耗尽和幂等测试；邮件 / 报告 worker 测试仍待补齐。
+- 已补 AI worker 成功、失败重试耗尽和幂等测试；已补 Email worker 单条发送、幂等和退避重试状态测试；报告 worker 测试仍待补齐。
 
 阶段 D：提醒完整版。
 
@@ -1664,8 +1668,10 @@ API 要求：
 - 已新增 `POST /notifications/email-logs/retry-failed`，允许当前用户将 `FAILED` 且尝试次数小于 3 的邮件重新排队。
 - MockMailProvider 继续保留并支持 `simulateFailure`，用于本地和测试环境验证失败重试。
 - 已新增提醒渠道字段：`notification_preferences.channels` 支持 `WEB / EMAIL / WECHAT`，`email_logs.channel` 记录每条日志的投递渠道。
+- 已新增 `NotificationsWorker` 和 `processQueuedEmailLog(emailLogId)`：worker 可按单条 EMAIL 日志消费，成功写入 `SENT`，重复消费保持幂等，失败时在非最终 BullMQ attempt 继续保持 `QUEUED`，最终 attempt 写入 `FAILED`。
+- 已新增 `NotificationsService integration` 用例，覆盖 worker-safe 单条发送、重复消费幂等、失败后等待 BullMQ 退避重试，以及最终失败落库。
 - Web 账号页已提供失败邮件重试按钮、渠道开关、微信绑定表单，并展示邮件日志尝试次数和渠道。
-- 剩余风险：真实邮件服务商、真实微信提醒 provider、自动退避重试 worker 和微信订阅消息模板仍待实现。
+- 剩余风险：真实邮件服务商、真实微信提醒 provider 和微信订阅消息模板仍待实现；Report worker 仍未接入。
 
 阶段 E：微信小程序轻量版。
 

@@ -247,6 +247,62 @@ describe("NotificationsService integration", () => {
     assert.equal(processed.sent, 1);
     assert.equal(processed.processed[0].status, "SENT");
   });
+
+  it("processes one queued email log through the worker-safe path", async () => {
+    const provider = new CountingMailProvider();
+    const service = new NotificationsService(prisma, provider);
+    const user = await createUser("worker-send");
+    const preview = await service.createPreviewEmailLog(user.id, {
+      type: "DAILY_TASK",
+      scheduledFor: "2026-06-11T09:00:00.000+08:00"
+    });
+
+    const processed = await service.processQueuedEmailLog(preview.log.id, {
+      now: "2026-06-11T10:00:00.000+08:00"
+    });
+    const repeated = await service.processQueuedEmailLog(preview.log.id, {
+      now: "2026-06-11T10:01:00.000+08:00"
+    });
+
+    assert.equal(provider.calls, 1);
+    assert.equal(processed.processed, true);
+    assert.equal(processed.sent, true);
+    assert.equal(processed.log.status, "SENT");
+    assert.equal(processed.log.attempts, 1);
+    assert.equal(repeated.processed, false);
+    assert.equal(repeated.log.status, "SENT");
+  });
+
+  it("keeps worker email failures queued until the final BullMQ attempt", async () => {
+    const provider = new FailingMailProvider();
+    const service = new NotificationsService(prisma, provider);
+    const user = await createUser("worker-retry");
+    const preview = await service.createPreviewEmailLog(user.id, {
+      type: "DAILY_TASK",
+      scheduledFor: "2026-06-11T09:00:00.000+08:00"
+    });
+
+    const first = await service.processQueuedEmailLog(preview.log.id, {
+      now: "2026-06-11T10:00:00.000+08:00",
+      finalAttempt: false
+    });
+    const final = await service.processQueuedEmailLog(preview.log.id, {
+      now: "2026-06-11T10:01:00.000+08:00",
+      finalAttempt: true
+    });
+
+    assert.equal(provider.calls, 2);
+    assert.equal(first.processed, true);
+    assert.equal(first.retryable, true);
+    assert.equal(first.failed, false);
+    assert.equal(first.log.status, "QUEUED");
+    assert.equal(first.log.attempts, 1);
+    assert.equal(final.retryable, false);
+    assert.equal(final.failed, true);
+    assert.equal(final.log.status, "FAILED");
+    assert.equal(final.log.attempts, 2);
+    assert.equal(final.log.error, "Forced email provider failure");
+  });
 });
 
 class CountingMailProvider implements MailProvider {
@@ -258,6 +314,19 @@ class CountingMailProvider implements MailProvider {
     return {
       status: "SENT" as const,
       error: null
+    };
+  }
+}
+
+class FailingMailProvider implements MailProvider {
+  readonly name = "failing-mail";
+  calls = 0;
+
+  async send() {
+    this.calls += 1;
+    return {
+      status: "FAILED" as const,
+      error: "Forced email provider failure"
     };
   }
 }

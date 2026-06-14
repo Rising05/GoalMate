@@ -1,5 +1,5 @@
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
-import { Queue, Worker } from "bullmq";
+import { Job, Queue, Worker } from "bullmq";
 
 interface QueueConnection {
   host: string;
@@ -37,7 +37,7 @@ export class QueueService implements OnModuleDestroy {
 
   createWorker(
     queueName: string,
-    processor: (data: Record<string, unknown>) => Promise<unknown>
+    processor: (data: Record<string, unknown>, job: Job) => Promise<unknown>
   ) {
     if (!this.enabled) {
       return {
@@ -57,7 +57,7 @@ export class QueueService implements OnModuleDestroy {
 
     const worker = new Worker(
       queueName,
-      async (job) => processor(job.data as Record<string, unknown>),
+      async (job) => processor(job.data as Record<string, unknown>, job),
       {
         connection: this.connection
       }

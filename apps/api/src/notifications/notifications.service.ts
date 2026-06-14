@@ -347,6 +347,98 @@ export class NotificationsService {
     };
   }
 
+  async processQueuedEmailLog(emailLogId: string, input: unknown = {}) {
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const now = this.parseNow(input);
+    const simulateFailure = body.simulateFailure === true;
+    const finalAttempt = body.finalAttempt === true;
+    const log = await this.prisma.emailLog.findUnique({
+      where: { id: emailLogId }
+    });
+
+    if (!log) {
+      throw new NotFoundException("提醒日志不存在");
+    }
+
+    if (log.channel !== "EMAIL") {
+      return {
+        log: this.serializeEmailLog(log),
+        processed: false,
+        reason: "Only EMAIL logs are processed by the email worker.",
+        retryable: false
+      };
+    }
+
+    if (log.status !== "QUEUED") {
+      return {
+        log: this.serializeEmailLog(log),
+        processed: false,
+        reason: "Email log is not queued.",
+        retryable: false
+      };
+    }
+
+    if (log.attempts >= MAX_EMAIL_ATTEMPTS) {
+      return {
+        log: this.serializeEmailLog(log),
+        processed: false,
+        reason: "Email log has reached the maximum attempts.",
+        retryable: false
+      };
+    }
+
+    if (log.scheduledFor && log.scheduledFor > now) {
+      return {
+        log: this.serializeEmailLog(log),
+        processed: false,
+        reason: "Email log is not due yet.",
+        retryable: false
+      };
+    }
+
+    const result = await this.mailProvider.send(log, { simulateFailure });
+    const nextAttempts = log.attempts + 1;
+
+    if (result.status === "SENT") {
+      const sentLog = await this.prisma.emailLog.update({
+        where: { id: log.id },
+        data: {
+          status: "SENT",
+          attempts: nextAttempts,
+          error: null,
+          sentAt: now
+        }
+      });
+
+      return {
+        log: this.serializeEmailLog(sentLog),
+        processed: true,
+        sent: true,
+        failed: false,
+        retryable: false
+      };
+    }
+
+    const retryable = !finalAttempt && nextAttempts < MAX_EMAIL_ATTEMPTS;
+    const failedLog = await this.prisma.emailLog.update({
+      where: { id: log.id },
+      data: {
+        status: retryable ? "QUEUED" : "FAILED",
+        attempts: nextAttempts,
+        error: result.error ?? "Mail provider failed",
+        sentAt: null
+      }
+    });
+
+    return {
+      log: this.serializeEmailLog(failedLog),
+      processed: true,
+      sent: false,
+      failed: !retryable,
+      retryable
+    };
+  }
+
   async retryFailedEmailLogs(userId: string, input: unknown = {}) {
     const now = this.parseNow(input);
     const failedLogs = await this.prisma.emailLog.findMany({

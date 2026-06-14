@@ -26,7 +26,7 @@ The MVP now covers the core GoalPilot AI loop:
 2. Daily tasks, text check-ins, mock AI scoring, score appeals, deviation detection, rescue tasks, heatmap, health report, and growth timeline.
 3. Goal settlement, failure reports, restart flow, reward board, notification preferences/email logs, membership quota checks, AI usage statistics, and admin audit interfaces.
 4. Health report rescue metrics and daily `health_snapshots` for future trend charts.
-5. AI provider abstraction with Mock default, optional DeepSeek provider, AI job status lookup with frontend refresh UI, scoring/mail provider abstractions, and BullMQ/Redis queue metadata for plan, scoring, and email jobs.
+5. AI provider abstraction with Mock default, optional DeepSeek provider, AI job status lookup with frontend refresh UI, scoring/mail provider abstractions, BullMQ/Redis queue metadata, and opt-in AI/email workers for plan and reminder jobs.
 6. Privacy deletion endpoints for owned goals and current account data.
 7. Playwright E2E coverage for the new-user MVP loop from registration through plan confirmation, check-in, rescue task, heatmap, timeline, and API data assertions.
 
@@ -36,6 +36,7 @@ Useful optional environment variables for the API:
 - `DEEPSEEK_API_KEY=...`
 - `DEEPSEEK_MODEL=deepseek-chat`
 - `BULLMQ_ENABLED=true`
+- `BULLMQ_WORKERS_ENABLED=true`
 - `REDIS_URL=redis://127.0.0.1:6379`
 
 Core validation commands:

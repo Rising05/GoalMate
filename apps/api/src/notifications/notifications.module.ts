@@ -6,12 +6,14 @@ import { MAIL_PROVIDER } from "./mail-provider";
 import { MockMailProvider } from "./mock-mail.provider";
 import { NotificationsController } from "./notifications.controller";
 import { NotificationsService } from "./notifications.service";
+import { NotificationsWorker } from "./notifications.worker";
 
 @Module({
   imports: [AuthModule, PrismaModule, QueueModule],
   controllers: [NotificationsController],
   providers: [
     NotificationsService,
+    NotificationsWorker,
     MockMailProvider,
     {
       provide: MAIL_PROVIDER,
