@@ -236,7 +236,6 @@ export class AdminService {
         orderBy: { updatedAt: "desc" },
         take: 100,
         include: {
-          user: { select: { email: true, displayName: true } },
           _count: {
             select: {
               dailyTasks: true,
@@ -249,11 +248,22 @@ export class AdminService {
       }),
       this.prisma.goal.count({ where })
     ]);
+    const users = await this.prisma.user.findMany({
+      where: {
+        id: {
+          in: [...new Set(goals.map((goal) => goal.userId))]
+        }
+      },
+      select: { id: true, email: true, displayName: true }
+    });
+    const usersById = new Map(users.map((user) => [user.id, user]));
 
     return {
       total,
       filters,
-      goals: goals.map((goal) => this.serializeAdminGoal(goal))
+      goals: goals.map((goal) =>
+        this.serializeAdminGoal(goal, usersById.get(goal.userId))
+      )
     };
   }
 
@@ -988,20 +998,20 @@ export class AdminService {
 
   private serializeAdminGoal(
     goal: Goal & {
-      user: Pick<User, "email" | "displayName">;
       _count: {
         dailyTasks: number;
         checkins: number;
         deviationEvents: number;
         rewardCards: number;
       };
-    }
+    },
+    user?: Pick<User, "email" | "displayName">
   ) {
     return {
       id: goal.id,
       userId: goal.userId,
-      userEmail: goal.user.email,
-      userDisplayName: goal.user.displayName,
+      userEmail: user?.email ?? "用户已删除",
+      userDisplayName: user?.displayName ?? null,
       title: goal.title,
       category: goal.category,
       status: goal.status,

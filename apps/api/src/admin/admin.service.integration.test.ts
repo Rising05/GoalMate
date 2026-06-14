@@ -36,6 +36,7 @@ describe("AdminService integration", () => {
   it("lists users, goals, AI jobs, and email logs for an admin", async () => {
     const { user: admin } = await createUser("operator");
     const { user: member, goal } = await createUserWithOperationalData("lists");
+    const orphanGoalId = `${TEST_EMAIL_PREFIX}orphan-${Date.now()}`;
 
     await prisma.adminUser.create({
       data: {
@@ -44,6 +45,7 @@ describe("AdminService integration", () => {
         status: "ACTIVE"
       }
     });
+    await createOrphanGoal(orphanGoalId);
 
     const overview = await adminService.getOverview(admin.id);
     const users = await adminService.listUsers(admin.id);
@@ -55,6 +57,11 @@ describe("AdminService integration", () => {
     assert.ok(overview.metrics.users >= 2);
     assert.ok(users.users.some((item) => item.id === member.id));
     assert.ok(goals.goals.some((item) => item.id === goal.id));
+    assert.ok(
+      goals.goals.some(
+        (item) => item.id === orphanGoalId && item.userEmail === "用户已删除"
+      )
+    );
     assert.ok(aiJobs.jobs.some((item) => item.goalId === goal.id));
     assert.ok(emailLogs.logs.some((item) => item.goalId === goal.id));
   });
@@ -415,6 +422,13 @@ describe("AdminService integration", () => {
 });
 
 async function cleanupTestData() {
+  await prisma.goal.deleteMany({
+    where: {
+      id: {
+        startsWith: `${TEST_EMAIL_PREFIX}orphan-`
+      }
+    }
+  });
   await prisma.systemConfig.deleteMany({
     where: {
       key: TEST_CONFIG_KEY
@@ -442,6 +456,39 @@ async function createUser(scenario: string) {
   });
 
   return { user };
+}
+
+async function createOrphanGoal(id: string) {
+  await prisma.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS=0");
+
+  try {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO goals (
+        id,
+        userId,
+        title,
+        description,
+        category,
+        status,
+        startDate,
+        endDate,
+        timezone,
+        toleranceDaysAllowed,
+        toleranceDaysUsed,
+        dailyTimeBudgetMinutes,
+        createdAt,
+        updatedAt
+      ) VALUES (?, ?, ?, ?, 'STUDY', 'DRAFT', ?, ?, 'Asia/Shanghai', 0, 0, 20, NOW(), NOW())`,
+      id,
+      `${id}-missing-user`,
+      "孤儿后台目标",
+      "用于验证后台目标列表兜底。",
+      new Date("2026-06-10T00:00:00.000+08:00"),
+      new Date("2026-06-20T00:00:00.000+08:00")
+    );
+  } finally {
+    await prisma.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS=1");
+  }
 }
 
 async function createUserWithOperationalData(scenario: string) {

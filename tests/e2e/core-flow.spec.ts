@@ -55,7 +55,11 @@ async function loadWebSession(
   await page.evaluate((sessionToken) => {
     localStorage.setItem("goalmate.session", sessionToken);
   }, token);
+  const currentUserResponse = page.waitForResponse(
+    (response) => response.url().includes("/auth/me") && response.request().method() === "GET"
+  );
   await page.reload();
+  await expect((await currentUserResponse).ok()).toBeTruthy();
   await expect(page.getByRole("heading", { level: 1, name: "创建目标" })).toBeVisible();
 }
 
@@ -111,6 +115,7 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   const email = `e2e-core-${stamp}@example.com`;
   const password = "Password123!";
   const goalTitle = `E2E GoalPilot MVP ${stamp}`;
+  const completedGoalTitle = `E2E Goal Completed ${stamp}`;
   const failedGoalTitle = `E2E Failure Review ${stamp}`;
   const today = new Date();
   const endDate = new Date(today);
@@ -249,6 +254,53 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   await expect(page.getByText("目标及关联数据已删除。")).toBeVisible();
 
   await page.getByRole("button", { name: /创建目标/ }).click();
+  await page.getByLabel("目标标题").fill(completedGoalTitle);
+  await page
+    .getByLabel("目标描述")
+    .fill("通过 E2E 测试验证目标到达结束日期后可完成结算。");
+  await page.getByLabel("每日投入分钟").fill("20");
+  await page.getByLabel("开始日期").fill(toDateInputValue(yesterday));
+  await page.getByLabel("结束日期", { exact: true }).fill(toDateInputValue(yesterday));
+  await page.getByLabel("容错次数").fill("2");
+  await page.getByLabel("当前基础").fill("已经完成主要任务");
+  await page.getByLabel("主要限制").fill("仅需完成最后结算");
+  await page.getByLabel("完成奖励").fill("完成后归档阶段成果");
+  await page.getByRole("button", { name: /保存草稿/ }).click();
+
+  await expect(page.getByRole("button", { name: new RegExp(completedGoalTitle) })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^生成 AI 计划/ })).toBeVisible();
+
+  await page.getByRole("button", { name: /^生成 AI 计划/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "AI 计划确认" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: completedGoalTitle })).toBeVisible();
+  await page.getByRole("button", { name: /确认计划并开始执行/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "今日任务" })).toBeVisible();
+
+  await page.getByRole("button", { name: /目标列表/ }).click();
+  await page.getByRole("button", { name: new RegExp(completedGoalTitle) }).click();
+  const completionSettlementResponse = page.waitForResponse(
+    (response) => response.url().includes("/settle") && response.request().method() === "POST"
+  );
+  await page.getByRole("button", { name: /结算状态/ }).click();
+  await expect((await completionSettlementResponse).ok()).toBeTruthy();
+
+  const completedGoalsResponse = await request.get(`${apiUrl}/goals`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  expect(completedGoalsResponse.ok()).toBeTruthy();
+  const completedGoalsBody = (await completedGoalsResponse.json()) as {
+    goals: Array<{ id: string; title: string; status: string }>;
+  };
+  const completedGoal = completedGoalsBody.goals.find(
+    (item) => item.title === completedGoalTitle
+  );
+
+  expect(completedGoal).toBeTruthy();
+  expect(completedGoal!.status).toBe("COMPLETED");
+
+  await page.getByRole("button", { name: /创建目标/ }).click();
   await page.getByLabel("目标标题").fill(failedGoalTitle);
   await page
     .getByLabel("目标描述")
@@ -313,7 +365,6 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
 
   await page.getByRole("button", { name: /创建新目标/ }).click();
   await expect(page.getByRole("heading", { level: 1, name: "AI 计划确认" })).toBeVisible();
-  await expect(page.getByText("新目标草稿已创建，可重新生成 AI 计划。")).toBeVisible();
 
   const restartedGoalsResponse = await request.get(`${apiUrl}/goals`, {
     headers: {

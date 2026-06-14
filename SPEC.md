@@ -1134,12 +1134,14 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 2026-06-11 已通过 `npm run typecheck`、`npm run test:integration`（37/37）和 `npm run build` 验证会员 quota/AI usage 增量。
 - 2026-06-12 已通过 `npm run typecheck`、`npm run test:integration`（40/40）和 `npm run build` 验证隐私删除接口和前端入口。
 - 2026-06-12 已新增 Playwright E2E 核心闭环测试，覆盖新用户注册、创建目标、生成计划、确认计划、完成普通任务、生成并完成救援任务、查看热力图、查看成长时间线，并通过 API 断言健康报告和 `deviationEventId` 时间线数据。
+- 2026-06-14 已扩展 Playwright E2E 核心闭环：覆盖到期且容错未超的目标完成结算、到期且容错超限的失败复盘、失败报告 API 和重新开启新目标。
 - 2026-06-12 已新增打卡证据字段和 Pro AI 分析解锁增量：`checkins` 保存完成子项、题量、正确题数、正确率、图片/文件证据、错题/笔记链接、学习状态和主观难度；免费用户仅返回基础评分和完成状态，Pro 用户返回维度评分、证据分析、AI 总结和建议。
 - 2026-06-12 已补充 `DailyTasksService check-in evidence integration`，验证证据持久化、正确率计算、免费版 AI 分析脱敏、Pro 详细分析解锁、非法题量校验和跨用户任务隔离。
 - 2026-06-12 已补充 `AuthService quota integration` 管理员身份返回验证；普通用户 `adminRole=null`，ACTIVE 管理员返回角色，Web 导航据此隐藏或显示后台入口。
 - 2026-06-14 已补充 Playwright E2E 验收：普通用户登录后不显示“后台管理”导航入口，`admin_users.status=ACTIVE` 的管理员账号登录后显示后台入口。
 - 2026-06-12 已新增邮件提醒鼓励文案和失败重试基础版：`email_logs.attempts` 记录发送尝试次数，`POST /notifications/email-logs/retry-failed` 支持失败日志重新排队，账号页提供重试入口；`NotificationsService integration` 覆盖每日/未打卡提醒鼓励文案、失败记录和重试后再次发送。
 - 2026-06-12 已新增微信小程序预留数据结构和接口：`notification_preferences.channels` 支持 `WEB / EMAIL / WECHAT`，`email_logs.channel` 记录投递渠道，`wechat_bindings` 保存当前用户 openid / unionid 绑定；`NotificationsService integration` 覆盖微信绑定、解绑、EMAIL+WECHAT 双渠道提醒日志和未绑定微信时跳过。
+- 2026-06-14 已增强后台目标列表健壮性：管理接口按 `userId` 批量合并用户资料，遇到历史孤儿目标时返回“用户已删除”兜底，不因单条脏数据导致后台目标列表 500。
 
 ## 21. 验收标准
 
