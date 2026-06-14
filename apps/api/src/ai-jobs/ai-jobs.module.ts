@@ -4,6 +4,7 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { QueueModule } from "../queue/queue.module";
 import { AiJobsController } from "./ai-jobs.controller";
 import { AiJobsService } from "./ai-jobs.service";
+import { AiJobsWorker } from "./ai-jobs.worker";
 import { DeepSeekPlanProvider } from "./deepseek-plan.provider";
 import { MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER } from "./plan-provider";
@@ -13,6 +14,7 @@ import { PLAN_PROVIDER } from "./plan-provider";
   controllers: [AiJobsController],
   providers: [
     AiJobsService,
+    AiJobsWorker,
     MockPlanProvider,
     DeepSeekPlanProvider,
     {

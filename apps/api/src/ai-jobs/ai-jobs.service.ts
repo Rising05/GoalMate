@@ -327,6 +327,120 @@ export class AiJobsService {
     };
   }
 
+  async processQueuedAiJob(id: string) {
+    const job = await this.prisma.aiJob.findUnique({
+      where: { id },
+      include: { goal: true }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    if (job.status !== "QUEUED") {
+      return {
+        job: this.serializeAiJob(job),
+        processed: false,
+        reason: "AI job is not queued."
+      };
+    }
+
+    if (!job.goal) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: "AI job has no target goal."
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        plan: null
+      };
+    }
+
+    if (![GOAL_PLAN_GENERATION, GOAL_PLAN_REPLAN].includes(job.type)) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: `Unsupported AI job type: ${job.type}`
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        plan: null
+      };
+    }
+
+    const payload = this.jsonObject(job.payload);
+    const nextPlanVersion =
+      job.type === GOAL_PLAN_REPLAN
+        ? this.parsePayloadInteger(payload.nextPlanVersion, 2)
+        : 1;
+
+    try {
+      await this.prisma.goal.update({
+        where: { id: job.goal.id },
+        data: {
+          status:
+            job.type === GOAL_PLAN_REPLAN ? "REPLANNING" : "GENERATING_PLAN"
+        }
+      });
+      const generatedPlan = await this.generatePlanWithRetry(job.id, job.goal);
+      const plan = await this.persistGeneratedPlan(
+        job.goal,
+        generatedPlan,
+        nextPlanVersion
+      );
+      const succeededJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "SUCCEEDED",
+          result: {
+            planId: plan.id,
+            planVersion: plan.version,
+            milestoneCount: plan.goal.milestones.length,
+            weeklyPlanCount: plan.weeklyPlans.length,
+            dailyTaskCount: plan.weeklyPlans.reduce(
+              (count, weeklyPlan) => count + weeklyPlan.dailyTasks.length,
+              0
+            )
+          }
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(succeededJob),
+        processed: true,
+        plan: this.serializePlan(plan)
+      };
+    } catch (error) {
+      await this.prisma.goal.update({
+        where: { id: job.goal.id },
+        data: { status: "GENERATION_FAILED" }
+      });
+
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: error instanceof Error ? error.message : "AI worker failed"
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        plan: null
+      };
+    }
+  }
+
   private async attachQueueMetadata(job: AiJob) {
     const payload = this.jsonObject(job.payload);
 
@@ -467,6 +581,12 @@ export class AiJobsService {
     }
 
     return numberValue;
+  }
+
+  private parsePayloadInteger(value: unknown, fallback: number) {
+    const parsed = Number(value);
+
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
   }
 
   private async assertActiveGoalQuota(userId: string, goalId: string) {

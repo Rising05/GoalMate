@@ -101,6 +101,69 @@ describe("AiJobsService requestGoalReplan integration", () => {
     );
   });
 
+  it("processes a queued goal-plan job through the worker path", async () => {
+    const user = await createUser("worker-success");
+    const goal = await createDraftGoal(user.id, "Worker 计划生成目标");
+    const job = await prisma.aiJob.create({
+      data: {
+        userId: user.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_GENERATION",
+        status: "QUEUED",
+        payload: {
+          goalId: goal.id,
+          provider: "mock",
+          source: "worker-test"
+        }
+      }
+    });
+
+    const result = await aiJobsService.processQueuedAiJob(job.id);
+    const storedGoal = await prisma.goal.findUniqueOrThrow({
+      where: { id: goal.id }
+    });
+    const repeated = await aiJobsService.processQueuedAiJob(job.id);
+
+    assert.equal(result.processed, true);
+    assert.equal(result.job.status, "SUCCEEDED");
+    assert.equal(result.job.attempts, 1);
+    assert.equal(result.plan?.version, 1);
+    assert.equal(storedGoal.status, "WAITING_CONFIRMATION");
+    assert.equal(repeated.processed, false);
+    assert.equal(repeated.job.status, "SUCCEEDED");
+  });
+
+  it("marks a queued worker job as failed after retry exhaustion", async () => {
+    const provider = new FlakyPlanProvider(3);
+    const service = new AiJobsService(prisma, provider);
+    const user = await createUser("worker-failed");
+    const goal = await createDraftGoal(user.id, "Worker 失败目标");
+    const job = await prisma.aiJob.create({
+      data: {
+        userId: user.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_GENERATION",
+        status: "QUEUED",
+        payload: {
+          goalId: goal.id,
+          provider: "mock",
+          source: "worker-test"
+        }
+      }
+    });
+
+    const result = await service.processQueuedAiJob(job.id);
+    const storedGoal = await prisma.goal.findUniqueOrThrow({
+      where: { id: goal.id }
+    });
+
+    assert.equal(result.processed, true);
+    assert.equal(result.job.status, "FAILED");
+    assert.equal(result.job.attempts, 3);
+    assert.equal(storedGoal.status, "GENERATION_FAILED");
+    assert.match(result.job.error ?? "", /模拟 AI 失败/);
+  });
+
   it("marks AI plan generation as failed after max retries", async () => {
     const provider = new FlakyPlanProvider(3);
     const service = new AiJobsService(prisma, provider);

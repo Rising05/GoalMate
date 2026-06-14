@@ -1370,6 +1370,14 @@ AI Provider 要求：
 - Report worker：健康快照、周报、月报和趋势分析。
 - Admin retry worker：管理员手动重试失败任务。
 
+当前实现进度：
+
+- `AiJobsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `ai-jobs` 队列，并调用 `AiJobsService.processQueuedAiJob(jobId)` 消费 `QUEUED` AI job。
+- `processQueuedAiJob` 已支持 `GOAL_PLAN_GENERATION` 和 `GOAL_PLAN_REPLAN`，会把 job 推进到 `RUNNING / RETRYING / SUCCEEDED / FAILED`，成功时落库新计划，失败时记录错误并把目标置为 `GENERATION_FAILED`。
+- worker 消费具备幂等保护：非 `QUEUED` job 不会重复执行。
+- 已补 `AiJobsService requestGoalReplan integration`，覆盖 worker 成功消费、失败重试耗尽、重复消费幂等；已补 `QueueService integration`，覆盖 BullMQ disabled 时 worker 不启动。
+- 剩余风险：Email worker、Report worker 仍待接入 BullMQ 自动消费；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径。
+
 AI job 状态需要支持：
 
 - `QUEUED`
@@ -1385,7 +1393,7 @@ AI job 状态需要支持：
 - 失败后显示可理解原因。
 - 允许用户在失败后重新发起任务。
 - 管理后台可查看 job payload 摘要、错误、尝试次数和重试入口。
-- 当前已实现管理员手动重试失败 AI job 的接口和 Web 入口；真实 worker 对重试后的 `QUEUED` job 消费仍属于后续完善项。
+- 当前已实现管理员手动重试失败 AI job 的接口和 Web 入口；重试后的 `QUEUED` 计划生成 / 重规划 job 可由 AI worker 消费。
 
 ### 22.8 提醒完整版
 
@@ -1637,10 +1645,10 @@ API 要求：
 
 阶段 C：真实 worker 和自动轮询。
 
-- BullMQ worker 真实消费 AI、邮件、报告任务。
+- BullMQ AI worker 已真实消费计划生成和重规划任务；邮件、报告任务 worker 仍待补齐。
 - 前端 job 状态自动轮询。
 - 管理后台支持失败 job 重试。
-- 补 worker 成功、失败、重试和幂等测试。
+- 已补 AI worker 成功、失败重试耗尽和幂等测试；邮件 / 报告 worker 测试仍待补齐。
 
 阶段 D：提醒完整版。
 

@@ -1,5 +1,5 @@
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
-import { Queue } from "bullmq";
+import { Queue, Worker } from "bullmq";
 
 interface QueueConnection {
   host: string;
@@ -12,6 +12,7 @@ interface QueueConnection {
 @Injectable()
 export class QueueService implements OnModuleDestroy {
   private readonly queues = new Map<string, Queue>();
+  private readonly workers = new Map<string, Worker>();
   private readonly enabled = process.env.BULLMQ_ENABLED === "true";
   private readonly connection = this.parseRedisConnection(
     process.env.REDIS_URL ?? "redis://127.0.0.1:6379"
@@ -34,8 +35,47 @@ export class QueueService implements OnModuleDestroy {
     return this.enqueue("email", input.type, input);
   }
 
+  createWorker(
+    queueName: string,
+    processor: (data: Record<string, unknown>) => Promise<unknown>
+  ) {
+    if (!this.enabled) {
+      return {
+        started: false,
+        queueName,
+        reason: "BullMQ is disabled; set BULLMQ_ENABLED=true to start workers."
+      };
+    }
+
+    if (this.workers.has(queueName)) {
+      return {
+        started: true,
+        queueName,
+        existing: true
+      };
+    }
+
+    const worker = new Worker(
+      queueName,
+      async (job) => processor(job.data as Record<string, unknown>),
+      {
+        connection: this.connection
+      }
+    );
+    this.workers.set(queueName, worker);
+
+    return {
+      started: true,
+      queueName,
+      existing: false
+    };
+  }
+
   async onModuleDestroy() {
-    await Promise.all(Array.from(this.queues.values()).map((queue) => queue.close()));
+    await Promise.all([
+      ...Array.from(this.workers.values()).map((worker) => worker.close()),
+      ...Array.from(this.queues.values()).map((queue) => queue.close())
+    ]);
   }
 
   private async enqueue(queueName: string, jobName: string, data: Record<string, unknown>) {
