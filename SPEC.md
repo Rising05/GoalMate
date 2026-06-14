@@ -1586,10 +1586,10 @@ API 要求：
 - JSON 格式返回 `status=READY` 和结构化备份数据；日期字段统一序列化为 ISO 字符串。
 - CSV 格式返回 `status=READY` 和 `download` 元数据，包含 `.csv` 文件名、`text/csv; charset=utf-8` content type 和 UTF-8 CSV 内容；Web 账号页可直接下载。
 - PDF 格式返回 `status=READY` 和 `download` 元数据，包含 `.pdf` 文件名、`application/pdf` content type 和 base64 PDF 内容；当前生成单页账户导出摘要报告。
-- EXCEL 格式已接入接口和 Web 选择器，当前返回 `status=RESERVED` 与预留提示，后续接入真实文件生成。
+- EXCEL 格式返回 `status=READY` 和 `download` 元数据，包含 `.xls` 文件名、`application/vnd.ms-excel; charset=utf-8` content type 和 SpreadsheetML 内容；Web 账号页可直接下载。
 - 用户可以传入 `fullExport=true` 一键完整导出，也可以传入 `fullExport=false` 和 `scopes` 做部分导出。
 - 导出数据不包含 `users.passwordHash`，并通过当前用户 token 隔离目标、任务、打卡、AI 评分、提醒和微信绑定数据。
-- 已新增 `AuthService quota integration` 导出用例，覆盖 JSON 部分导出、CSV 文件内容、PDF 报告内容、打卡证据字段、AI 评分、提醒日志、微信绑定、其他用户数据隔离、密码哈希排除和 EXCEL 预留格式。
+- 已新增 `AuthService quota integration` 导出用例，覆盖 JSON 部分导出、CSV 文件内容、PDF 报告内容、EXCEL 工作簿内容、打卡证据字段、AI 评分、提醒日志、微信绑定、其他用户数据隔离和密码哈希排除。
 
 隐私要求：
 
@@ -1677,7 +1677,7 @@ API 要求：
 阶段 F：导出、隐私和支付预留。
 
 - 用户选择性导出和完整导出。
-- 已完成当前用户 JSON 部分 / 完整导出闭环、CSV 文件下载和 PDF 报告下载；EXCEL 为接口级预留，尚未生成真实文件。
+- 已完成当前用户 JSON 部分 / 完整导出闭环、CSV 文件下载、PDF 报告下载和 EXCEL 工作簿下载。
 - 敏感字段加密。
 - AI 请求脱敏。
 - Stripe / 微信支付模型和 webhook 预留。
@@ -1702,7 +1702,7 @@ API 要求：
 - BullMQ worker 可以真实消费 AI、邮件和报告任务。
 - 前端可以自动展示 job 状态。
 - 用户可以选择导出部分数据或完整导出。
-- 当前第一阶段验收以 `POST /auth/export` JSON / CSV / PDF 导出为准；EXCEL 真实文件生成仍是剩余风险。
+- 当前第一阶段验收以 `POST /auth/export` JSON / CSV / PDF / EXCEL 导出为准。
 - 管理后台所有原文查看必须写审计日志。
 - `npm run typecheck` 通过。
 - `npm run test:integration` 通过。

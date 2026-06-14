@@ -184,10 +184,27 @@ export class AuthService {
       userId: user.id,
       exportedAt: new Date().toISOString(),
       format: request.format,
-      status: ["JSON", "CSV", "PDF"].includes(request.format) ? "READY" : "RESERVED",
+      status: "READY",
       fullExport: request.fullExport,
       scopes
     };
+
+    if (request.format === "EXCEL") {
+      const data = await this.buildExportData(user.id, scopes);
+      const content = this.buildExcelExport(data);
+
+      return {
+        ...base,
+        data: null,
+        download: {
+          filename: `${base.exportId}.xls`,
+          contentType: "application/vnd.ms-excel; charset=utf-8",
+          encoding: "utf-8",
+          content
+        },
+        message: "EXCEL 数据导出已生成。"
+      };
+    }
 
     if (request.format === "PDF") {
       const data = await this.buildExportData(user.id, scopes);
@@ -615,6 +632,55 @@ export class AuthService {
     }
 
     return value;
+  }
+
+  private buildExcelExport(data: Record<string, unknown>) {
+    const rows: string[][] = [["scope", "recordIndex", "field", "value"]];
+
+    for (const [scope, value] of Object.entries(data)) {
+      if (Array.isArray(value)) {
+        value.forEach((record, index) => {
+          this.appendCsvRecordRows(rows, scope, index, record);
+        });
+        continue;
+      }
+
+      this.appendCsvRecordRows(rows, scope, 0, value);
+    }
+
+    const tableRows = rows
+      .map(
+        (row) =>
+          `<Row>${row
+            .map(
+              (cell) =>
+                `<Cell><Data ss:Type="String">${this.escapeXmlCell(cell)}</Data></Cell>`
+            )
+            .join("")}</Row>`
+      )
+      .join("");
+
+    return [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<?mso-application progid="Excel.Sheet"?>',
+      '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"',
+      ' xmlns:o="urn:schemas-microsoft-com:office:office"',
+      ' xmlns:x="urn:schemas-microsoft-com:office:excel"',
+      ' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">',
+      '<Worksheet ss:Name="GoalMate Export">',
+      `<Table>${tableRows}</Table>`,
+      "</Worksheet>",
+      "</Workbook>"
+    ].join("");
+  }
+
+  private escapeXmlCell(value: string) {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
   }
 
   private buildPdfExport(

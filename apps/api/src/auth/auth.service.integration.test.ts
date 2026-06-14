@@ -359,29 +359,51 @@ describe("AuthService quota integration", () => {
     assert.doesNotMatch(pdfContent, /passwordHash/);
   });
 
-  it("returns reserved metadata for non-JSON export formats", async () => {
-    const suffix = `export-reserved-${Date.now()}-${Math.random()
+  it("exports selected current-user data as an Excel workbook download", async () => {
+    const suffix = `export-excel-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}`;
     const registered = await authService.register({
       email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
       password: "password-123",
-      displayName: "Reserved Export User"
+      displayName: "Excel Export User"
+    });
+
+    await prisma.goal.create({
+      data: {
+        userId: registered.user.id,
+        title: "Excel 导出目标",
+        description: "用于验证 Excel 文件导出。",
+        category: "STUDY",
+        status: "ACTIVE",
+        startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        endDate: new Date("2026-06-20T00:00:00.000+08:00")
+      }
     });
 
     const exported = await authService.exportCurrentUserData(
       `Bearer ${registered.token}`,
       {
         format: "EXCEL",
-        fullExport: true
+        fullExport: false,
+        scopes: ["profile", "goals"]
       }
     );
 
-    assert.equal(exported.status, "RESERVED");
+    assert.equal(exported.status, "READY");
     assert.equal(exported.format, "EXCEL");
     assert.equal(exported.data, null);
-    assert.ok(exported.scopes.includes("goals"));
-    assert.match(exported.message, /已预留/);
+    assert.equal(
+      exported.download?.contentType,
+      "application/vnd.ms-excel; charset=utf-8"
+    );
+    assert.equal(exported.download?.encoding, "utf-8");
+    assert.match(exported.download?.filename ?? "", /\.xls$/);
+    assert.match(exported.download?.content ?? "", /^<\?xml version="1\.0"/);
+    assert.match(exported.download?.content ?? "", /GoalMate Export/);
+    assert.match(exported.download?.content ?? "", /Excel Export User/);
+    assert.match(exported.download?.content ?? "", /Excel 导出目标/);
+    assert.doesNotMatch(exported.download?.content ?? "", /passwordHash/);
   });
 
   it("deletes the current account and cascades owned data", async () => {
