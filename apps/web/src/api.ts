@@ -844,6 +844,22 @@ export async function authenticate(
   return data as AuthResponse;
 }
 
+export async function fetchCurrentUser(token: string) {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ user: AuthUser }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "登录状态已失效"));
+  }
+
+  return data as { user: AuthUser };
+}
+
 export async function deleteCurrentAccount(token: string) {
   const response = await fetch(`${API_BASE_URL}/auth/me`, {
     method: "DELETE",

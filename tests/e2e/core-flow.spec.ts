@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { PrismaClient } from "../../apps/api/node_modules/@prisma/client";
 
 const apiPort = process.env.E2E_API_PORT ?? "3100";
 const apiUrl = `http://127.0.0.1:${apiPort}`;
+const prisma = new PrismaClient();
 
 function toDateInputValue(date: Date) {
   const year = date.getFullYear();
@@ -19,14 +21,102 @@ async function getSessionToken(page: import("@playwright/test").Page) {
   return token!;
 }
 
+async function registerViaApi(
+  request: import("@playwright/test").APIRequestContext,
+  input: { email: string; password: string; displayName: string }
+) {
+  const response = await request.post(`${apiUrl}/auth/register`, {
+    data: input
+  });
+
+  expect(response.ok()).toBeTruthy();
+
+  return (await response.json()) as { user: { id: string; email: string } };
+}
+
+async function loginViaApi(
+  request: import("@playwright/test").APIRequestContext,
+  input: { email: string; password: string }
+) {
+  const response = await request.post(`${apiUrl}/auth/login`, {
+    data: input
+  });
+
+  expect(response.ok()).toBeTruthy();
+
+  return (await response.json()) as { token: string };
+}
+
+async function loadWebSession(
+  page: import("@playwright/test").Page,
+  token: string
+) {
+  await page.goto("/");
+  await page.evaluate((sessionToken) => {
+    localStorage.setItem("goalmate.session", sessionToken);
+  }, token);
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "创建目标" })).toBeVisible();
+}
+
+test.afterAll(async () => {
+  await prisma.$disconnect();
+});
+
+test("admin navigation is only visible to active admin accounts", async ({
+  page,
+  request
+}) => {
+  const stamp = Date.now();
+  const password = "Password123!";
+  const regularEmail = `e2e-regular-${stamp}@example.com`;
+  const adminEmail = `e2e-admin-${stamp}@example.com`;
+
+  const regular = await registerViaApi(request, {
+    email: regularEmail,
+    password,
+    displayName: "Regular User"
+  });
+  const admin = await registerViaApi(request, {
+    email: adminEmail,
+    password,
+    displayName: "Admin User"
+  });
+
+  await prisma.adminUser.create({
+    data: {
+      userId: admin.user.id,
+      role: "OPERATOR",
+      status: "ACTIVE"
+    }
+  });
+
+  const regularSession = await loginViaApi(request, {
+    email: regular.user.email,
+    password
+  });
+  await loadWebSession(page, regularSession.token);
+  await expect(page.getByRole("button", { name: /后台管理/ })).toHaveCount(0);
+
+  const adminSession = await loginViaApi(request, {
+    email: admin.user.email,
+    password
+  });
+  await loadWebSession(page, adminSession.token);
+  await expect(page.getByRole("button", { name: /后台管理/ })).toBeVisible();
+});
+
 test("new user completes the core GoalPilot MVP loop", async ({ page, request }) => {
   const stamp = Date.now();
   const email = `e2e-core-${stamp}@example.com`;
   const password = "Password123!";
   const goalTitle = `E2E GoalPilot MVP ${stamp}`;
+  const failedGoalTitle = `E2E Failure Review ${stamp}`;
   const today = new Date();
   const endDate = new Date(today);
   endDate.setDate(today.getDate() + 14);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
 
   await page.goto("/");
   await page.getByRole("button", { name: /账号/ }).click();
@@ -52,7 +142,8 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   await page.getByLabel("完成奖励").fill("完成后喝一杯喜欢的咖啡");
   await page.getByRole("button", { name: /保存草稿/ }).click();
 
-  await expect(page.getByText(`目标草稿已保存：${goalTitle}`)).toBeVisible();
+  await expect(page.getByRole("button", { name: new RegExp(goalTitle) })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^生成 AI 计划/ })).toBeVisible();
 
   await page.getByRole("button", { name: /^生成 AI 计划/ }).click();
   await expect(page.getByRole("heading", { level: 1, name: "AI 计划确认" })).toBeVisible();
@@ -77,8 +168,13 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   await page.getByRole("button", { name: /返回今日任务/ }).click();
 
   await expect(page.getByText(/今日快照 .* 已保存/)).toBeVisible();
+  const rescueResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/rescue-task") && response.request().method() === "POST"
+  );
   await page.getByRole("button", { name: /生成救援任务/ }).last().click();
-  await expect(page.getByText("救援任务已保存到今日任务，可以直接完成。")).toBeVisible();
+  await expect((await rescueResponse).ok()).toBeTruthy();
+  await expect(page.getByRole("button", { name: "完成救援任务" })).toBeVisible();
   await page.getByRole("button", { name: "完成救援任务" }).click();
 
   await expect(page.getByRole("heading", { name: "完成任务复盘" })).toBeVisible();
@@ -146,4 +242,92 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
 
   expect(timelineItems.some((item) => item.kind === "DEVIATION")).toBeTruthy();
   expect(timelineItems.some((item) => item.deviationEventId)).toBeTruthy();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: /目标列表/ }).click();
+  await page.getByRole("button", { name: /删除目标/ }).click();
+  await expect(page.getByText("目标及关联数据已删除。")).toBeVisible();
+
+  await page.getByRole("button", { name: /创建目标/ }).click();
+  await page.getByLabel("目标标题").fill(failedGoalTitle);
+  await page
+    .getByLabel("目标描述")
+    .fill("通过 E2E 测试验证目标失败结算、失败复盘和重新开启目标。");
+  await page.getByLabel("每日投入分钟").fill("20");
+  await page.getByLabel("开始日期").fill(toDateInputValue(yesterday));
+  await page.getByLabel("结束日期").fill(toDateInputValue(yesterday));
+  await page.getByLabel("容错次数").fill("0");
+  await page.getByLabel("当前基础").fill("上一轮执行已经中断");
+  await page.getByLabel("主要限制").fill("计划已过期且任务未完成");
+  await page.getByLabel("完成奖励").fill("重开后恢复稳定节奏");
+  await page.getByRole("button", { name: /保存草稿/ }).click();
+
+  await expect(page.getByRole("button", { name: new RegExp(failedGoalTitle) })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^生成 AI 计划/ })).toBeVisible();
+
+  await page.getByRole("button", { name: /^生成 AI 计划/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "AI 计划确认" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: failedGoalTitle })).toBeVisible();
+  await page.getByRole("button", { name: /确认计划并开始执行/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "今日任务" })).toBeVisible();
+
+  await page.getByRole("button", { name: /目标列表/ }).click();
+  await page.getByRole("button", { name: new RegExp(failedGoalTitle) }).click();
+  await page.getByRole("button", { name: /结算状态/ }).click();
+
+  await expect(page.getByRole("heading", { level: 1, name: "失败复盘" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "失败原因分析" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "断签时间线" })).toBeVisible();
+  await expect(page.getByText("AI 复盘建议")).toBeVisible();
+
+  const failedGoalsResponse = await request.get(`${apiUrl}/goals`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  expect(failedGoalsResponse.ok()).toBeTruthy();
+  const failedGoalsBody = (await failedGoalsResponse.json()) as {
+    goals: Array<{ id: string; title: string; status: string }>;
+  };
+  const failedGoal = failedGoalsBody.goals.find((item) => item.title === failedGoalTitle);
+
+  expect(failedGoal).toBeTruthy();
+  expect(failedGoal!.status).toBe("FAILED");
+
+  const failureReportResponse = await request.get(
+    `${apiUrl}/goals/${failedGoal!.id}/failure-report`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+  expect(failureReportResponse.ok()).toBeTruthy();
+  const failureReport = (await failureReportResponse.json()) as {
+    brokenStreakTimeline: Array<{ date: string }>;
+    suggestion: string;
+  };
+
+  expect(failureReport.brokenStreakTimeline.length).toBeGreaterThanOrEqual(1);
+  expect(failureReport.suggestion).toContain("重新开启");
+
+  await page.getByRole("button", { name: /创建新目标/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "AI 计划确认" })).toBeVisible();
+  await expect(page.getByText("新目标草稿已创建，可重新生成 AI 计划。")).toBeVisible();
+
+  const restartedGoalsResponse = await request.get(`${apiUrl}/goals`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  expect(restartedGoalsResponse.ok()).toBeTruthy();
+  const restartedGoalsBody = (await restartedGoalsResponse.json()) as {
+    goals: Array<{ title: string; status: string }>;
+  };
+
+  expect(
+    restartedGoalsBody.goals.some(
+      (item) => item.title === `${failedGoalTitle}（重新开始）` && item.status === "DRAFT"
+    )
+  ).toBeTruthy();
 });

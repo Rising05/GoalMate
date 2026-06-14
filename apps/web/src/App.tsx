@@ -75,6 +75,7 @@ import {
   fetchAdminSystemConfigs,
   fetchAdminUsers,
   fetchAiJob,
+  fetchCurrentUser,
   fetchEmailLogs,
   fetchFailureReport,
   fetchGoalPlan,
@@ -940,6 +941,37 @@ export function App() {
     setActivePage("create");
     setGoalMessage("已登录，可以创建目标草稿。");
   }
+
+  useEffect(() => {
+    let isMounted = true;
+    const token = localStorage.getItem("goalmate.session");
+
+    if (!token) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    fetchCurrentUser(token)
+      .then((response) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setSession({
+          token,
+          user: response.user
+        });
+        setGoalMessage("已恢复登录，可以继续创建目标草稿。");
+      })
+      .catch(() => {
+        localStorage.removeItem("goalmate.session");
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!session) {
