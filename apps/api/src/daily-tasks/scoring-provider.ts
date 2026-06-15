@@ -14,7 +14,7 @@ export interface CheckinEvidenceInput {
   actualQuestionCount?: number;
   correctQuestionCount?: number;
   accuracy?: number;
-  evidenceFiles: string[];
+  evidenceFiles: unknown[];
   evidenceLinks: string[];
   studyMood?: string;
   difficultyLevel?: string;

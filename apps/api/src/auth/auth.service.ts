@@ -32,6 +32,7 @@ const EXPORT_SCOPES = [
   "notificationPreference",
   "emailLogs",
   "wechatBinding",
+  "uploadAssets",
   "adminProfile",
   "auditLogs"
 ] as const;
@@ -399,6 +400,13 @@ export class AuthService {
     if (scopeSet.has("wechatBinding")) {
       data.wechatBinding = await this.prisma.wechatBinding.findUnique({
         where: { userId }
+      });
+    }
+
+    if (scopeSet.has("uploadAssets")) {
+      data.uploadAssets = await this.prisma.uploadAsset.findMany({
+        where: { userId },
+        orderBy: { createdAt: "asc" }
       });
     }
 

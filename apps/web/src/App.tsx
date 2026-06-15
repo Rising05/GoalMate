@@ -205,6 +205,7 @@ const dataExportScopeOptions: Array<{
   { code: "notificationPreference", label: "提醒偏好" },
   { code: "emailLogs", label: "提醒日志" },
   { code: "wechatBinding", label: "微信绑定" },
+  { code: "uploadAssets", label: "上传证据" },
   { code: "adminProfile", label: "后台身份" },
   { code: "auditLogs", label: "审计日志" }
 ];

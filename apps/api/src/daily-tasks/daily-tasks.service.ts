@@ -74,11 +74,24 @@ interface CompleteTaskPayload {
   actualQuestionCount?: number;
   correctQuestionCount?: number;
   accuracy?: number;
-  evidenceFiles: string[];
+  evidenceFiles: EvidenceFile[];
   evidenceLinks: string[];
   studyMood?: string;
   difficultyLevel?: string;
 }
+
+type EvidenceFile =
+  | string
+  | {
+      uploadId: string;
+      name: string;
+      mimeType: string;
+      sizeBytes: number;
+      checksumSha256: string | null;
+      storageProvider: string;
+      objectKey: string;
+      url: string;
+    };
 
 interface ScoreAppealPayload {
   reason: string;
@@ -395,6 +408,8 @@ export class DailyTasksService {
     if (task.status === DONE_STATUS) {
       throw new BadRequestException("任务已完成");
     }
+
+    await this.assertEvidenceUploadsOwned(userId, payload.evidenceFiles);
 
     const investedMinutes = payload.investedMinutes ?? task.plannedMinutes ?? 0;
     const score = await this.scoringProvider.score({
@@ -723,7 +738,7 @@ export class DailyTasksService {
       body.accuracy,
       "正确率必须是 0 到 100 的整数"
     );
-    const evidenceFiles = this.parseTextList(body.evidenceFiles, 10, 500);
+    const evidenceFiles = this.parseEvidenceFiles(body.evidenceFiles);
     const evidenceLinks = this.parseTextList(body.evidenceLinks, 10, 500);
     const studyMood = this.cleanText(body.studyMood, 40) || undefined;
     const difficultyLevel = this.cleanText(body.difficultyLevel, 40) || undefined;
@@ -835,6 +850,70 @@ export class DailyTasksService {
       .slice(0, maxItems);
   }
 
+  private parseEvidenceFiles(value: unknown) {
+    const rawItems = Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? value.split(/\r?\n|,/)
+        : [];
+    const files: EvidenceFile[] = [];
+
+    for (const item of rawItems) {
+      if (files.length >= 10) {
+        break;
+      }
+
+      if (typeof item === "string") {
+        const cleaned = item.trim().slice(0, 500);
+
+        if (cleaned) {
+          files.push(cleaned);
+        }
+
+        continue;
+      }
+
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        continue;
+      }
+
+      const file = this.parseEvidenceFileObject(item as Record<string, unknown>);
+
+      if (file) {
+        files.push(file);
+      }
+    }
+
+    return files;
+  }
+
+  private parseEvidenceFileObject(item: Record<string, unknown>): EvidenceFile | null {
+    const uploadId = this.cleanText(item.uploadId, 191);
+    const name = this.cleanText(item.name ?? item.fileName, 180);
+    const mimeType = this.cleanText(item.mimeType, 120).toLowerCase();
+    const sizeBytes = Number(item.sizeBytes);
+    const checksumSha256 = this.cleanText(item.checksumSha256, 64).toLowerCase();
+    const storageProvider =
+      this.cleanText(item.storageProvider, 80) || "LOCAL_PLACEHOLDER";
+    const objectKey = this.cleanText(item.objectKey, 500);
+    const url = this.cleanText(item.url ?? item.publicUrl, 1000);
+
+    if (!uploadId || !name || !mimeType || !Number.isInteger(sizeBytes)) {
+      return null;
+    }
+
+    return {
+      uploadId,
+      name,
+      mimeType,
+      sizeBytes,
+      checksumSha256: checksumSha256 || null,
+      storageProvider,
+      objectKey,
+      url
+    };
+  }
+
   private getEvidenceSummary(payload: CompleteTaskPayload) {
     return {
       completedSubtaskCount: payload.completedSubtasks.length,
@@ -858,6 +937,33 @@ export class DailyTasksService {
         ["ACTIVE", "MANUAL"].includes(membership.status) &&
         (!membership.expiresAt || membership.expiresAt > new Date())
     );
+  }
+
+  private async assertEvidenceUploadsOwned(
+    userId: string,
+    evidenceFiles: EvidenceFile[]
+  ) {
+    const uploadIds = evidenceFiles
+      .flatMap((file) => (typeof file === "string" ? [] : [file.uploadId]))
+      .filter((id, index, ids) => ids.indexOf(id) === index);
+
+    if (!uploadIds.length) {
+      return;
+    }
+
+    const ownedCount = await this.prisma.uploadAsset.count({
+      where: {
+        userId,
+        id: {
+          in: uploadIds
+        },
+        status: "READY"
+      }
+    });
+
+    if (ownedCount !== uploadIds.length) {
+      throw new BadRequestException("上传证据不属于当前用户或不可用");
+    }
   }
 
   private parseYear(value?: string) {
@@ -890,6 +996,18 @@ export class DailyTasksService {
     }
 
     return value.filter((item): item is string => typeof item === "string");
+  }
+
+  private normalizeEvidenceFiles(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter(
+      (item) =>
+        typeof item === "string" ||
+        (Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    );
   }
 
   private toJson(value: unknown) {
@@ -1108,7 +1226,7 @@ export class DailyTasksService {
       actualQuestionCount: checkin.actualQuestionCount,
       correctQuestionCount: checkin.correctQuestionCount,
       accuracy: checkin.accuracy,
-      evidenceFiles: this.normalizeStringArray(checkin.evidenceFiles),
+      evidenceFiles: this.normalizeEvidenceFiles(checkin.evidenceFiles),
       evidenceLinks: this.normalizeStringArray(checkin.evidenceLinks),
       studyMood: checkin.studyMood,
       difficultyLevel: checkin.difficultyLevel,

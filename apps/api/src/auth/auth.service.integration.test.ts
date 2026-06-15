@@ -207,6 +207,22 @@ describe("AuthService quota integration", () => {
         nickname: "导出用户"
       }
     });
+    await prisma.uploadAsset.create({
+      data: {
+        userId: registered.user.id,
+        source: "WECHAT",
+        purpose: "CHECKIN_EVIDENCE",
+        fileName: "export-proof.png",
+        mimeType: "image/png",
+        sizeBytes: 256_000,
+        storageProvider: "LOCAL_PLACEHOLDER",
+        objectKey: `evidence/${registered.user.id}/${suffix}-proof.png`,
+        publicUrl: "https://example.com/export-proof.png",
+        metadata: {
+          taskId: task.id
+        }
+      }
+    });
     await prisma.goal.create({
       data: {
         userId: other.user.id,
@@ -216,6 +232,18 @@ describe("AuthService quota integration", () => {
         status: "ACTIVE",
         startDate: new Date("2026-06-10T00:00:00.000+08:00"),
         endDate: new Date("2026-06-20T00:00:00.000+08:00")
+      }
+    });
+    await prisma.uploadAsset.create({
+      data: {
+        userId: other.user.id,
+        source: "WEB",
+        purpose: "CHECKIN_EVIDENCE",
+        fileName: "other-proof.png",
+        mimeType: "image/png",
+        sizeBytes: 128_000,
+        storageProvider: "LOCAL_PLACEHOLDER",
+        objectKey: `evidence/${other.user.id}/${suffix}-other-proof.png`
       }
     });
 
@@ -232,7 +260,8 @@ describe("AuthService quota integration", () => {
           "checkins",
           "aiScores",
           "emailLogs",
-          "wechatBinding"
+          "wechatBinding",
+          "uploadAssets"
         ]
       }
     );
@@ -242,6 +271,7 @@ describe("AuthService quota integration", () => {
     const checkins = data.checkins as Array<Record<string, unknown>>;
     const scores = data.aiScores as Array<Record<string, unknown>>;
     const logs = data.emailLogs as Array<Record<string, unknown>>;
+    const uploadAssets = data.uploadAssets as Array<Record<string, unknown>>;
 
     assert.equal(exported.status, "READY");
     assert.equal(exported.fullExport, false);
@@ -253,7 +283,8 @@ describe("AuthService quota integration", () => {
       "checkins",
       "aiScores",
       "emailLogs",
-      "wechatBinding"
+      "wechatBinding",
+      "uploadAssets"
     ]);
     assert.equal(profile.email, registered.user.email);
     assert.equal("passwordHash" in profile, false);
@@ -265,9 +296,12 @@ describe("AuthService quota integration", () => {
     ]);
     assert.equal(scores[0].totalScore, 86);
     assert.equal(logs[0].channel, "EMAIL");
+    assert.equal(uploadAssets.length, 1);
+    assert.equal(uploadAssets[0].fileName, "export-proof.png");
     assert.equal("membership" in data, false);
     assert.match(JSON.stringify(exported), /导出目标/);
     assert.doesNotMatch(JSON.stringify(exported), /其他用户目标/);
+    assert.doesNotMatch(JSON.stringify(exported), /other-proof/);
     assert.doesNotMatch(JSON.stringify(exported), /passwordHash/);
   });
 
@@ -434,22 +468,37 @@ describe("AuthService quota integration", () => {
         plannedMinutes: 20
       }
     });
+    await prisma.uploadAsset.create({
+      data: {
+        userId: registered.user.id,
+        source: "WEB",
+        purpose: "CHECKIN_EVIDENCE",
+        fileName: "delete-proof.png",
+        mimeType: "image/png",
+        sizeBytes: 10_000,
+        storageProvider: "LOCAL_PLACEHOLDER",
+        objectKey: `evidence/${registered.user.id}/${suffix}-delete-proof.png`
+      }
+    });
 
     const result = await authService.deleteCurrentUser(
       `Bearer ${registered.token}`
     );
-    const [storedUser, goalCount, taskCount, membershipCount] = await Promise.all([
-      prisma.user.findUnique({ where: { id: registered.user.id } }),
-      prisma.goal.count({ where: { userId: registered.user.id } }),
-      prisma.dailyTask.count({ where: { goalId: goal.id } }),
-      prisma.membership.count({ where: { userId: registered.user.id } })
-    ]);
+    const [storedUser, goalCount, taskCount, membershipCount, uploadCount] =
+      await Promise.all([
+        prisma.user.findUnique({ where: { id: registered.user.id } }),
+        prisma.goal.count({ where: { userId: registered.user.id } }),
+        prisma.dailyTask.count({ where: { goalId: goal.id } }),
+        prisma.membership.count({ where: { userId: registered.user.id } }),
+        prisma.uploadAsset.count({ where: { userId: registered.user.id } })
+      ]);
 
     assert.equal(result.deletedUserId, registered.user.id);
     assert.equal(storedUser, null);
     assert.equal(goalCount, 0);
     assert.equal(taskCount, 0);
     assert.equal(membershipCount, 0);
+    assert.equal(uploadCount, 0);
   });
 });
 

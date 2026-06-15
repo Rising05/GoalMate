@@ -120,6 +120,76 @@ describe("DailyTasksService check-in evidence integration", () => {
       NotFoundException
     );
   });
+
+  it("accepts owned upload evidence metadata and rejects foreign uploads", async () => {
+    const { user, task } = await createExecutableTask("upload-owned", "PRO");
+    const other = await createUser("upload-foreign", "PRO");
+    const upload = await prisma.uploadAsset.create({
+      data: {
+        userId: user.id,
+        source: "WECHAT",
+        purpose: "CHECKIN_EVIDENCE",
+        fileName: "owned-proof.png",
+        mimeType: "image/png",
+        sizeBytes: 123_456,
+        storageProvider: "LOCAL_PLACEHOLDER",
+        objectKey: `evidence/${user.id}/owned-proof.png`
+      }
+    });
+    const foreignUpload = await prisma.uploadAsset.create({
+      data: {
+        userId: other.id,
+        source: "WEB",
+        purpose: "CHECKIN_EVIDENCE",
+        fileName: "foreign-proof.png",
+        mimeType: "image/png",
+        sizeBytes: 10_000,
+        storageProvider: "LOCAL_PLACEHOLDER",
+        objectKey: `evidence/${other.id}/foreign-proof.png`
+      }
+    });
+
+    const result = await dailyTasksService.completeTask(user.id, task.id, {
+      content: "完成内容：已上传模考截图并整理错题。",
+      investedMinutes: 50,
+      evidenceFiles: [
+        {
+          uploadId: upload.id,
+          name: upload.fileName,
+          mimeType: upload.mimeType,
+          sizeBytes: upload.sizeBytes,
+          storageProvider: upload.storageProvider,
+          objectKey: upload.objectKey,
+          url: `/uploads/evidence/${upload.id}`
+        }
+      ]
+    });
+    const secondTask = await createTaskForUser(user.id, "拒绝外部上传证据");
+
+    assert.equal(result.checkin.evidenceFiles.length, 1);
+    assert.equal(
+      (result.checkin.evidenceFiles[0] as { uploadId?: string }).uploadId,
+      upload.id
+    );
+    await assert.rejects(
+      () =>
+        dailyTasksService.completeTask(user.id, secondTask.id, {
+          content: "完成内容：尝试使用他人的上传证据。",
+          evidenceFiles: [
+            {
+              uploadId: foreignUpload.id,
+              name: foreignUpload.fileName,
+              mimeType: foreignUpload.mimeType,
+              sizeBytes: foreignUpload.sizeBytes,
+              storageProvider: foreignUpload.storageProvider,
+              objectKey: foreignUpload.objectKey,
+              url: `/uploads/evidence/${foreignUpload.id}`
+            }
+          ]
+        }),
+      BadRequestException
+    );
+  });
 });
 
 async function cleanupTestUsers() {
@@ -185,4 +255,33 @@ async function createExecutableTask(scenario: string, plan: "FREE" | "PRO") {
   });
 
   return { user, goal, task };
+}
+
+async function createTaskForUser(userId: string, title: string) {
+  const goal = await prisma.goal.create({
+    data: {
+      userId,
+      title: `${title}目标`,
+      description: "用于验证上传证据归属。",
+      category: "POSTGRAD_EXAM",
+      status: "ACTIVE",
+      startDate: new Date("2026-06-10T00:00:00.000+08:00"),
+      endDate: new Date("2026-06-30T00:00:00.000+08:00"),
+      toleranceDaysAllowed: 2
+    }
+  });
+
+  return prisma.dailyTask.create({
+    data: {
+      goalId: goal.id,
+      taskDate: new Date("2026-06-10T00:00:00.000+08:00"),
+      title,
+      description: "用于验证上传证据归属。",
+      plannedMinutes: 30,
+      studyTaskType: "PRACTICE",
+      subject: "英语",
+      evidenceRequired: true,
+      status: "PENDING"
+    }
+  });
 }

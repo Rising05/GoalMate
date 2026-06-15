@@ -150,7 +150,7 @@ export interface TaskCheckin {
   actualQuestionCount: number | null;
   correctQuestionCount: number | null;
   accuracy: number | null;
-  evidenceFiles: string[];
+  evidenceFiles: EvidenceFile[];
   evidenceLinks: string[];
   studyMood: string | null;
   difficultyLevel: string | null;
@@ -164,6 +164,42 @@ export interface TaskCheckin {
     summary: string | null;
     suggestion: string | null;
   } | null;
+}
+
+export type EvidenceFile =
+  | string
+  | {
+      uploadId: string;
+      name: string;
+      mimeType: string;
+      sizeBytes: number;
+      checksumSha256: string | null;
+      storageProvider: string;
+      objectKey: string;
+      url: string;
+    };
+
+export interface UploadAsset {
+  id: string;
+  userId: string;
+  source: "WEB" | "WECHAT" | string;
+  purpose: "CHECKIN_EVIDENCE" | "ERROR_NOTE" | "STUDY_NOTE" | string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksumSha256: string | null;
+  storageProvider: string;
+  objectKey: string;
+  publicUrl: string | null;
+  status: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EvidenceUploadResponse {
+  asset: UploadAsset;
+  evidenceFile: Exclude<EvidenceFile, string>;
 }
 
 export interface ScoreAppeal {
@@ -577,6 +613,7 @@ export type DataExportScope =
   | "notificationPreference"
   | "emailLogs"
   | "wechatBinding"
+  | "uploadAssets"
   | "adminProfile"
   | "auditLogs";
 
@@ -906,6 +943,53 @@ export async function exportCurrentAccountData(
   }
 
   return data as DataExportResponse;
+}
+
+export async function createEvidenceUpload(
+  token: string,
+  payload: {
+    source?: "WEB" | "WECHAT";
+    purpose?: "CHECKIN_EVIDENCE" | "ERROR_NOTE" | "STUDY_NOTE";
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    checksumSha256?: string;
+    publicUrl?: string;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/uploads/evidence`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<EvidenceUploadResponse>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "上传证据登记失败"));
+  }
+
+  return data as EvidenceUploadResponse;
+}
+
+export async function getEvidenceUpload(token: string, uploadId: string) {
+  const response = await fetch(`${API_BASE_URL}/uploads/evidence/${uploadId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<EvidenceUploadResponse>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "上传证据读取失败"));
+  }
+
+  return data as EvidenceUploadResponse;
 }
 
 export async function createGoal(token: string, payload: CreateGoalInput) {
@@ -1796,7 +1880,7 @@ export async function completeDailyTask(
     actualQuestionCount?: number;
     correctQuestionCount?: number;
     accuracy?: number;
-    evidenceFiles?: string[] | string;
+    evidenceFiles?: EvidenceFile[] | string;
     evidenceLinks?: string[] | string;
     studyMood?: string;
     difficultyLevel?: string;

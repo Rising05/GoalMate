@@ -85,6 +85,7 @@ model User {
   notificationPreference NotificationPreference?
   emailLogs              EmailLog[]
   wechatBinding          WechatBinding?
+  uploadAssets           UploadAsset[]
   scoreAppeals           ScoreAppeal[]
   adminProfile           AdminUser?
   auditLogs              AuditLog[]
@@ -192,6 +193,31 @@ model WechatBinding {
 
   @@index([status])
   @@map("wechat_bindings")
+}
+
+model UploadAsset {
+  id              String   @id @default(cuid())
+  userId          String
+  source          String   @default("WEB")
+  purpose         String   @default("CHECKIN_EVIDENCE")
+  fileName        String
+  mimeType        String
+  sizeBytes       Int
+  checksumSha256  String?
+  storageProvider String   @default("LOCAL_PLACEHOLDER")
+  objectKey       String   @unique
+  publicUrl       String?  @db.Text
+  status          String   @default("READY")
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([source, purpose])
+  @@index([status, createdAt])
+  @@map("upload_assets")
 }
 
 model Membership {

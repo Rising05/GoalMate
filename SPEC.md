@@ -1308,6 +1308,7 @@ AI 生成计划时必须考虑：
 - `completedSubtasks`：完成的子项。
 - `actualQuestionCount`：实际题量。
 - `correctQuestionCount`：正确题数。
+- `upload_assets`：上传证据元数据表，按当前用户隔离 Web / WeChat 上传来源、用途、文件名、MIME、大小、校验值、对象 key 和访问 URL。
 - `accuracy`：正确率。
 - `evidenceFiles`：图片、截图或文件。
 - `evidenceLinks`：错题、笔记、文档或网盘链接。
@@ -1509,6 +1510,14 @@ API 要求：
 - 小程序鉴权和 Web session 可并存。
 - 微信 openid / unionid 需要与用户账号绑定。
 
+当前实现进度：
+
+- 已新增 `20260615103000_add_upload_assets` Prisma migration 和 `upload_assets` 表，保存当前用户上传证据元数据。
+- 已新增 `UploadsModule`：`POST /uploads/evidence` 创建上传证据元数据，`GET /uploads/evidence/:id` 仅允许上传所属用户读取。
+- `POST /daily-tasks/:id/complete` 的 `evidenceFiles` 已支持字符串链接或上传 metadata 对象；当传入 `uploadId` 时会校验该上传证据必须属于当前用户且状态为 `READY`。
+- 已补 `UploadsService integration`，覆盖上传 metadata 创建、当前用户读取隔离和非法 MIME / 大小 / URL 校验；已补 `DailyTasksService check-in evidence integration`，覆盖打卡引用本人上传证据和拒绝他人上传证据。
+- 当前仍不实现真实小程序 UI、微信登录 code2session、对象存储直传、病毒扫描或签名 URL 下载；接口和数据结构已为 Web / WeChat 共用上传证据预留。
+
 ### 22.11 管理后台完整版
 
 管理后台使用者为产品所有者本人，暂不面向客服或运营团队。
@@ -1583,7 +1592,7 @@ API 要求：
 - 健康趋势。
 - 救援任务。
 - 失败复盘。
-- 当前实现的导出范围还包括账号资料、会员状态、里程碑、评分申诉、AI job、提醒偏好、邮件 / 微信提醒日志、微信绑定、后台身份和当前账号产生的审计日志。
+- 当前实现的导出范围还包括账号资料、会员状态、里程碑、评分申诉、AI job、提醒偏好、邮件 / 微信提醒日志、微信绑定、上传证据元数据、后台身份和当前账号产生的审计日志。
 
 导出格式：
 
@@ -1600,8 +1609,8 @@ API 要求：
 - PDF 格式返回 `status=READY` 和 `download` 元数据，包含 `.pdf` 文件名、`application/pdf` content type 和 base64 PDF 内容；当前生成单页账户导出摘要报告。
 - EXCEL 格式返回 `status=READY` 和 `download` 元数据，包含 `.xls` 文件名、`application/vnd.ms-excel; charset=utf-8` content type 和 SpreadsheetML 内容；Web 账号页可直接下载。
 - 用户可以传入 `fullExport=true` 一键完整导出，也可以传入 `fullExport=false` 和 `scopes` 做部分导出。
-- 导出数据不包含 `users.passwordHash`，并通过当前用户 token 隔离目标、任务、打卡、AI 评分、提醒和微信绑定数据。
-- 已新增 `AuthService quota integration` 导出用例，覆盖 JSON 部分导出、CSV 文件内容、PDF 报告内容、EXCEL 工作簿内容、打卡证据字段、AI 评分、提醒日志、微信绑定、其他用户数据隔离和密码哈希排除。
+- 导出数据不包含 `users.passwordHash`，并通过当前用户 token 隔离目标、任务、打卡、上传证据、AI 评分、提醒和微信绑定数据。
+- 已新增 `AuthService quota integration` 导出用例，覆盖 JSON 部分导出、CSV 文件内容、PDF 报告内容、EXCEL 工作簿内容、打卡证据字段、上传证据元数据、AI 评分、提醒日志、微信绑定、其他用户数据隔离和密码哈希排除。
 
 隐私要求：
 
@@ -1644,8 +1653,9 @@ API 要求：
 - Mock ScoringProvider 已基于完成子项、学习时长、证据数量、题量和正确率生成基础总分、维度评分、证据分析、总结和建议。
 - API 返回按会员状态做付费点控制：免费版返回基础总分、`analysisLevel=BASIC` 和证据摘要，不返回维度评分、证据分析、总结和建议；Pro 返回 `analysisLevel=PRO` 的完整 AI 分析。
 - Web 完成任务弹窗已支持完成子项、实际题量、正确题数、图片 / 文件链接、错题 / 笔记链接、学习状态和主观难度；结果页展示证据摘要，并对免费用户显示 Pro 解锁提示。
+- 已新增独立上传证据 metadata endpoint：`POST /uploads/evidence` 和 `GET /uploads/evidence/:id`；打卡 `evidenceFiles` 可保存 endpoint 返回的上传 metadata，并校验 `uploadId` 属于当前用户。
 - 超级管理员原文查看接口已包含打卡证据字段，仍要求查看原因并写入审计日志。
-- 剩余风险：当前图片 / 文件先以链接或 metadata 保存，尚未实现真实上传 endpoint、对象存储、病毒扫描和文件权限签名 URL；免费版仍保留基础总分，后续可按商业策略进一步收敛为纯完成状态。
+- 剩余风险：当前上传 endpoint 保存 metadata，不处理真实二进制文件；对象存储直传、病毒扫描和文件权限签名 URL 仍待实现。免费版仍保留基础总分，后续可按商业策略进一步收敛为纯完成状态。
 
 阶段 C：真实 worker 和自动轮询。
 
@@ -1686,7 +1696,8 @@ API 要求：
 - 已新增 `wechat_bindings` 表保存 Web 账号与微信 `openId`、可选 `unionId`、昵称和头像的绑定关系。
 - 已提供 `GET /notifications/wechat-binding`、`PUT /notifications/wechat-binding`、`DELETE /notifications/wechat-binding`，支持当前登录用户查询、绑定和解绑微信身份。
 - 提醒生成已兼容微信渠道：用户启用 `WECHAT` 且存在 ACTIVE 微信绑定时，会生成 `channel=WECHAT` 的提醒日志；未绑定时返回明确 skipped 原因。
-- 当前仍不实现真实小程序 UI、微信登录 code2session、上传 endpoint 或微信订阅消息发送，只保留后端接口和数据结构。
+- 已提供 Web / WeChat 通用上传证据 metadata 接口：`POST /uploads/evidence` 和 `GET /uploads/evidence/:id`。
+- 当前仍不实现真实小程序 UI、微信登录 code2session、对象存储直传或微信订阅消息发送，只保留后端接口和数据结构。
 
 阶段 F：导出、隐私和支付预留。
 
