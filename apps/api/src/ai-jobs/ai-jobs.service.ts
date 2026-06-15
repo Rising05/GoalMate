@@ -327,6 +327,71 @@ export class AiJobsService {
     };
   }
 
+  async cancelJob(userId: string, id: string, input: unknown = {}) {
+    const job = await this.prisma.aiJob.findFirst({
+      where: {
+        id,
+        userId
+      },
+      include: {
+        goal: true
+      }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    if (job.status === "CANCELLED") {
+      return {
+        job: this.serializeAiJob(job),
+        cancelled: false,
+        reason: "AI job is already cancelled."
+      };
+    }
+
+    if (job.status !== "QUEUED") {
+      throw new BadRequestException("当前 AI 任务状态不能取消");
+    }
+
+    const reason = this.parseCancelReason(input);
+    const payload = this.jsonObject(job.payload);
+    const nextGoalStatus = this.getCancelledJobGoalStatus(job, payload);
+    const cancelledJob = await this.prisma.$transaction(async (tx) => {
+      if (job.goalId && nextGoalStatus) {
+        await tx.goal.update({
+          where: { id: job.goalId },
+          data: { status: nextGoalStatus }
+        });
+      }
+
+      return tx.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "CANCELLED",
+          error: reason,
+          result: this.toJson({
+            cancelledAt: new Date().toISOString(),
+            reason,
+            restoredGoalStatus: nextGoalStatus
+          }),
+          payload: this.toJson({
+            ...payload,
+            cancellation: {
+              requestedBy: userId,
+              reason
+            }
+          })
+        }
+      });
+    });
+
+    return {
+      job: this.serializeAiJob(cancelledJob),
+      cancelled: true
+    };
+  }
+
   async processQueuedAiJob(id: string) {
     const job = await this.prisma.aiJob.findUnique({
       where: { id },
@@ -513,6 +578,43 @@ export class AiJobsService {
       currentBaseline: currentBaseline || undefined,
       dailyTimeBudgetMinutes
     };
+  }
+
+  private parseCancelReason(input: unknown) {
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const reason = this.cleanText(body.reason, 300);
+
+    return reason || "用户取消 AI 任务";
+  }
+
+  private getCancelledJobGoalStatus(
+    job: AiJob & { goal: Goal | null },
+    payload: Record<string, unknown>
+  ): Goal["status"] | null {
+    if (!job.goal) {
+      return null;
+    }
+
+    if (job.type === GOAL_PLAN_REPLAN) {
+      const previousStatus =
+        typeof payload.previousStatus === "string"
+          ? payload.previousStatus.trim().toUpperCase()
+          : "";
+
+      if (["ACTIVE", "AT_RISK", "REPLANNING"].includes(previousStatus)) {
+        return previousStatus as Goal["status"];
+      }
+
+      return ["ACTIVE", "AT_RISK", "REPLANNING"].includes(job.goal.status)
+        ? job.goal.status
+        : "ACTIVE";
+    }
+
+    if (job.type === GOAL_PLAN_GENERATION) {
+      return "DRAFT";
+    }
+
+    return null;
   }
 
   private async generatePlanWithRetry(jobId: string, goal: Goal) {

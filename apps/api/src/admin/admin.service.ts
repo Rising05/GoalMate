@@ -64,7 +64,8 @@ const AI_JOB_STATUSES = new Set<AiJobStatus>([
   "RUNNING",
   "RETRYING",
   "SUCCEEDED",
-  "FAILED"
+  "FAILED",
+  "CANCELLED"
 ]);
 const EMAIL_LOG_STATUSES = new Set(["QUEUED", "SENT", "FAILED"]);
 const NOTIFICATION_CHANNELS = new Set(["EMAIL", "WECHAT", "WEB"]);

@@ -68,6 +68,7 @@ enum AiJobStatus {
   RETRYING
   SUCCEEDED
   FAILED
+  CANCELLED
 }
 
 model User {

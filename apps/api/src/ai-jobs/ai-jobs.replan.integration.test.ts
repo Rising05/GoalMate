@@ -101,6 +101,116 @@ describe("AiJobsService requestGoalReplan integration", () => {
     );
   });
 
+  it("cancels a queued goal-plan job and prevents worker processing", async () => {
+    const user = await createUser("cancel-generation");
+    const goal = await createDraftGoal(user.id, "取消计划生成目标");
+    await prisma.goal.update({
+      where: { id: goal.id },
+      data: { status: "GENERATING_PLAN" }
+    });
+    const job = await prisma.aiJob.create({
+      data: {
+        userId: user.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_GENERATION",
+        status: "QUEUED",
+        payload: {
+          goalId: goal.id,
+          provider: "mock",
+          source: "cancel-test"
+        }
+      }
+    });
+
+    const cancelled = await aiJobsService.cancelJob(user.id, job.id, {
+      reason: "用户想重新编辑目标"
+    });
+    const workerResult = await aiJobsService.processQueuedAiJob(job.id);
+    const storedGoal = await prisma.goal.findUniqueOrThrow({
+      where: { id: goal.id }
+    });
+
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(cancelled.job.status, "CANCELLED");
+    assert.equal(cancelled.job.error, "用户想重新编辑目标");
+    assert.equal(storedGoal.status, "DRAFT");
+    assert.equal(workerResult.processed, false);
+    assert.equal(workerResult.job.status, "CANCELLED");
+  });
+
+  it("cancels a queued replan job and restores the previous goal status", async () => {
+    const { user, goal } = await createActiveGoalWithPlan("cancel-replan");
+    await prisma.goal.update({
+      where: { id: goal.id },
+      data: { status: "REPLANNING" }
+    });
+    const job = await prisma.aiJob.create({
+      data: {
+        userId: user.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_REPLAN",
+        status: "QUEUED",
+        payload: {
+          goalId: goal.id,
+          previousStatus: "AT_RISK",
+          nextPlanVersion: 2,
+          provider: "mock",
+          source: "cancel-test"
+        }
+      }
+    });
+
+    const cancelled = await aiJobsService.cancelJob(user.id, job.id, {});
+    const repeated = await aiJobsService.cancelJob(user.id, job.id, {});
+    const storedGoal = await prisma.goal.findUniqueOrThrow({
+      where: { id: goal.id }
+    });
+
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(cancelled.job.status, "CANCELLED");
+    assert.equal(cancelled.job.error, "用户取消 AI 任务");
+    assert.equal(storedGoal.status, "AT_RISK");
+    assert.equal(repeated.cancelled, false);
+    assert.equal(repeated.job.status, "CANCELLED");
+  });
+
+  it("protects AI job cancellation by owner and job state", async () => {
+    const user = await createUser("cancel-owner");
+    const otherUser = await createUser("cancel-other");
+    const goal = await createDraftGoal(user.id, "取消权限目标");
+    const queuedJob = await prisma.aiJob.create({
+      data: {
+        userId: user.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_GENERATION",
+        status: "QUEUED",
+        payload: {
+          source: "cancel-test"
+        }
+      }
+    });
+    const succeededJob = await prisma.aiJob.create({
+      data: {
+        userId: user.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_GENERATION",
+        status: "SUCCEEDED",
+        payload: {
+          source: "cancel-test"
+        }
+      }
+    });
+
+    await assert.rejects(
+      () => aiJobsService.cancelJob(otherUser.id, queuedJob.id, {}),
+      NotFoundException
+    );
+    await assert.rejects(
+      () => aiJobsService.cancelJob(user.id, succeededJob.id, {}),
+      BadRequestException
+    );
+  });
+
   it("processes a queued goal-plan job through the worker path", async () => {
     const user = await createUser("worker-success");
     const goal = await createDraftGoal(user.id, "Worker 计划生成目标");

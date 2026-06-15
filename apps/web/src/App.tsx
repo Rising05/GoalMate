@@ -278,10 +278,12 @@ const aiJobTypeLabels: Record<string, string> = {
 };
 
 const aiJobStatusLabels: Record<string, string> = {
-  PENDING: "排队中",
+  QUEUED: "排队中",
   RUNNING: "处理中",
+  RETRYING: "重试中",
   SUCCEEDED: "已完成",
-  FAILED: "失败"
+  FAILED: "失败",
+  CANCELLED: "已取消"
 };
 
 const studyTaskTypeLabels: Record<string, string> = {
@@ -4856,6 +4858,7 @@ export function App() {
                           <option value="RETRYING">RETRYING</option>
                           <option value="SUCCEEDED">SUCCEEDED</option>
                           <option value="FAILED">FAILED</option>
+                          <option value="CANCELLED">CANCELLED</option>
                         </select>
                       </label>
                       <label>

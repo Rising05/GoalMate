@@ -1176,6 +1176,33 @@ export async function fetchAiJob(token: string, jobId: string) {
   return data as { job: AiJob };
 }
 
+export async function cancelAiJob(
+  token: string,
+  jobId: string,
+  payload: { reason?: string } = {}
+) {
+  const response = await fetch(`${API_BASE_URL}/ai-jobs/${jobId}/cancel`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{
+    job: AiJob;
+    cancelled: boolean;
+    reason?: string;
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "AI 任务取消失败"));
+  }
+
+  return data as { job: AiJob; cancelled: boolean; reason?: string };
+}
+
 export async function settleGoal(token: string, goalId: string) {
   const response = await fetch(`${API_BASE_URL}/goals/${goalId}/settle`, {
     method: "POST",

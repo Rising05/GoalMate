@@ -91,6 +91,18 @@ describe("AdminService integration", () => {
         error: "provider timeout"
       }
     });
+    const cancelledJob = await prisma.aiJob.create({
+      data: {
+        userId: member.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_GENERATION",
+        status: "CANCELLED",
+        payload: {
+          source: "admin-filter-test"
+        },
+        error: "user cancelled"
+      }
+    });
     await prisma.emailLog.create({
       data: {
         userId: member.id,
@@ -116,6 +128,9 @@ describe("AdminService integration", () => {
       status: "FAILED",
       type: "GOAL_PLAN_REPLAN"
     });
+    const cancelledJobs = await adminService.listAiJobs(admin.id, {
+      status: "CANCELLED"
+    });
     const failedWechatLogs = await adminService.listEmailLogs(admin.id, {
       query: "后台筛选",
       status: "FAILED",
@@ -130,6 +145,7 @@ describe("AdminService integration", () => {
     assert.equal(failedJobs.total, 1);
     assert.equal(failedJobs.jobs[0].type, "GOAL_PLAN_REPLAN");
     assert.equal(failedJobs.jobs[0].status, "FAILED");
+    assert.ok(cancelledJobs.jobs.some((job) => job.id === cancelledJob.id));
     assert.equal(failedWechatLogs.total, 1);
     assert.equal(failedWechatLogs.logs[0].channel, "WECHAT");
     assert.equal(failedWechatLogs.logs[0].status, "FAILED");
@@ -138,7 +154,7 @@ describe("AdminService integration", () => {
       BadRequestException
     );
     await assert.rejects(
-      () => adminService.listAiJobs(admin.id, { status: "CANCELLED" }),
+      () => adminService.listAiJobs(admin.id, { status: "ABORTED" }),
       BadRequestException
     );
     await assert.rejects(

@@ -1378,7 +1378,9 @@ AI Provider 要求：
 - `AiJobsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `ai-jobs` 队列，并调用 `AiJobsService.processQueuedAiJob(jobId)` 消费 `QUEUED` AI job。
 - `processQueuedAiJob` 已支持 `GOAL_PLAN_GENERATION` 和 `GOAL_PLAN_REPLAN`，会把 job 推进到 `RUNNING / RETRYING / SUCCEEDED / FAILED`，成功时落库新计划，失败时记录错误并把目标置为 `GENERATION_FAILED`。
 - worker 消费具备幂等保护：非 `QUEUED` job 不会重复执行。
-- 已补 `AiJobsService requestGoalReplan integration`，覆盖 worker 成功消费、失败重试耗尽、重复消费幂等；已补 `QueueService integration`，覆盖 BullMQ disabled 时 worker 不启动。
+- 已新增 `20260615113000_add_ai_job_cancelled_status` Prisma migration，`AiJobStatus` 支持 `CANCELLED`。
+- 已新增 `POST /ai-jobs/:id/cancel`：当前用户只能取消自己的 `QUEUED` AI job；取消计划生成会把目标恢复为 `DRAFT`，取消重规划会根据 payload `previousStatus` 恢复原目标状态；已运行、已完成或失败的 job 不允许取消。
+- 已补 `AiJobsService requestGoalReplan integration`，覆盖 worker 成功消费、失败重试耗尽、重复消费幂等、取消 queued job 后 worker 不再处理、取消重规划恢复原状态、跨用户取消隔离和终态 job 不可取消；已补 `QueueService integration`，覆盖 BullMQ disabled 时 worker 不启动。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
 - 已补 `NotificationsService integration`，覆盖单条邮件 worker 路径成功、重复消费幂等、失败保持 queued 等待重试，以及最终 attempt 失败落库。
 - 剩余风险：Report worker 仍待接入 BullMQ 自动消费；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
@@ -1399,6 +1401,7 @@ AI job 状态需要支持：
 - 允许用户在失败后重新发起任务。
 - 管理后台可查看 job payload 摘要、错误、尝试次数和重试入口。
 - 当前已实现管理员手动重试失败 AI job 的接口和 Web 入口；重试后的 `QUEUED` 计划生成 / 重规划 job 可由 AI worker 消费。
+- 当前已实现用户取消 `QUEUED` AI job 的后端接口和 Web API client；Web 管理后台 AI job 状态筛选已支持 `CANCELLED`。
 
 ### 22.8 提醒完整版
 
