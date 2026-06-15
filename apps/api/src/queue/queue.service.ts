@@ -35,6 +35,15 @@ export class QueueService implements OnModuleDestroy {
     return this.enqueue("email", input.type, input);
   }
 
+  async enqueueReportJob(input: {
+    type: string;
+    userId: string;
+    goalId: string;
+    reportDate?: string | null;
+  }) {
+    return this.enqueue("reports", input.type, input);
+  }
+
   createWorker(
     queueName: string,
     processor: (data: Record<string, unknown>, job: Job) => Promise<unknown>

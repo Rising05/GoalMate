@@ -2,7 +2,8 @@ import {
   BadRequestException,
   Inject,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from "@nestjs/common";
 import {
   AiScore,
@@ -17,6 +18,7 @@ import {
   Prisma
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { QueueService } from "../queue/queue.service";
 
 interface CreateGoalPayload {
   title: string;
@@ -142,7 +144,12 @@ interface HealthRescueMetrics {
 
 @Injectable()
 export class GoalsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(QueueService)
+    private readonly queueService?: QueueService
+  ) {}
 
   async createGoal(userId: string, input: unknown) {
     const payload = this.parseCreateGoalPayload(input);
@@ -354,6 +361,95 @@ export class GoalsService {
       goalId: goal.id,
       snapshots: snapshots.map((snapshot) => this.serializeHealthSnapshot(snapshot))
     };
+  }
+
+  async enqueueHealthSnapshotReport(userId: string, id: string, input: unknown = {}) {
+    const goal = await this.getOwnedGoal(userId, id);
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const reportDate =
+      typeof body.reportDate === "string" && body.reportDate.trim()
+        ? body.reportDate.trim().slice(0, 40)
+        : null;
+    const queue = await this.enqueueReportJob({
+      type: "HEALTH_SNAPSHOT",
+      userId,
+      goalId: goal.id,
+      reportDate
+    });
+
+    return {
+      report: {
+        type: "HEALTH_SNAPSHOT",
+        userId,
+        goalId: goal.id,
+        reportDate
+      },
+      queue
+    };
+  }
+
+  async processQueuedReportJob(input: unknown) {
+    const payload = this.parseReportWorkerPayload(input);
+
+    if (payload.type !== "HEALTH_SNAPSHOT") {
+      throw new BadRequestException(`不支持的报告任务类型：${payload.type}`);
+    }
+
+    const result = await this.getGoalHealth(payload.userId, payload.goalId);
+
+    return {
+      processed: true,
+      type: payload.type,
+      goalId: payload.goalId,
+      userId: payload.userId,
+      snapshot: result.snapshot,
+      healthScore: result.healthScore,
+      riskLevel: result.snapshot.riskLevel
+    };
+  }
+
+  private parseReportWorkerPayload(input: unknown) {
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const type = this.cleanText(body.type, 80).toUpperCase();
+    const userId = this.cleanText(body.userId, 191);
+    const goalId = this.cleanText(body.goalId, 191);
+    const reportDate = this.cleanText(body.reportDate, 40) || null;
+
+    if (!type) {
+      throw new BadRequestException("报告任务类型不能为空");
+    }
+
+    if (!userId || !goalId) {
+      throw new BadRequestException("报告任务缺少用户或目标");
+    }
+
+    return {
+      type,
+      userId,
+      goalId,
+      reportDate
+    };
+  }
+
+  private async enqueueReportJob(input: {
+    type: string;
+    userId: string;
+    goalId: string;
+    reportDate: string | null;
+  }) {
+    try {
+      return await this.queueService?.enqueueReportJob(input) ?? {
+        queued: false,
+        queueName: "reports",
+        reason: "Queue service is not configured."
+      };
+    } catch (error) {
+      return {
+        queued: false,
+        queueName: "reports",
+        error: error instanceof Error ? error.message : "Queue enqueue failed"
+      };
+    }
   }
 
   async generateRescueTask(userId: string, id: string) {

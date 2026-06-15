@@ -54,6 +54,33 @@ describe("QueueService integration", () => {
     }
   });
 
+  it("keeps report jobs disabled unless BullMQ is enabled", async () => {
+    const previous = process.env.BULLMQ_ENABLED;
+    process.env.BULLMQ_ENABLED = "false";
+    const queueService = new QueueService();
+
+    try {
+      const result = await queueService.enqueueReportJob({
+        type: "HEALTH_SNAPSHOT",
+        userId: "user-test",
+        goalId: "goal-test",
+        reportDate: "2026-06-15"
+      });
+
+      assert.equal(queueService.isEnabled(), false);
+      assert.equal(result.queued, false);
+      assert.equal(result.queueName, "reports");
+    } finally {
+      await queueService.onModuleDestroy();
+
+      if (previous === undefined) {
+        delete process.env.BULLMQ_ENABLED;
+      } else {
+        process.env.BULLMQ_ENABLED = previous;
+      }
+    }
+  });
+
   it("enqueues AI jobs into BullMQ when enabled", async () => {
     const previousEnabled = process.env.BULLMQ_ENABLED;
     const previousRedisUrl = process.env.REDIS_URL;

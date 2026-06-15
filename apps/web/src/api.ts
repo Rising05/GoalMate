@@ -1160,6 +1160,60 @@ export async function fetchGoalHealthSnapshots(token: string, goalId: string) {
   return data as { goalId: string; snapshots: HealthSnapshot[] };
 }
 
+export async function enqueueHealthSnapshotReport(
+  token: string,
+  goalId: string,
+  payload: { reportDate?: string } = {}
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/goals/${goalId}/health-snapshots/enqueue`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  const data = await parseJson<{
+    report: {
+      type: string;
+      userId: string;
+      goalId: string;
+      reportDate: string | null;
+    };
+    queue: {
+      queued: boolean;
+      queueName: string;
+      reason?: string;
+      error?: string;
+      jobId?: string;
+    };
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "健康快照报告任务入队失败"));
+  }
+
+  return data as {
+    report: {
+      type: string;
+      userId: string;
+      goalId: string;
+      reportDate: string | null;
+    };
+    queue: {
+      queued: boolean;
+      queueName: string;
+      reason?: string;
+      error?: string;
+      jobId?: string;
+    };
+  };
+}
+
 export async function fetchAiJob(token: string, jobId: string) {
   const response = await fetch(`${API_BASE_URL}/ai-jobs/${jobId}`, {
     headers: {

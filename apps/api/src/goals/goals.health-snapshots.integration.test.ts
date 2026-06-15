@@ -1,8 +1,10 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { BadRequestException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
+import { QueueService } from "../queue/queue.service";
 import { GoalsService } from "./goals.service";
 
 loadEnv();
@@ -48,6 +50,63 @@ describe("GoalsService health snapshots integration", () => {
     assert.equal(snapshots.length, 1);
     assert.equal(trend.snapshots.length, 1);
     assert.equal(trend.snapshots[0].id, first.snapshot.id);
+  });
+
+  it("queues and processes a report worker health snapshot job", async () => {
+    const previous = process.env.BULLMQ_ENABLED;
+    process.env.BULLMQ_ENABLED = "false";
+    const queueService = new QueueService();
+    const service = new GoalsService(prisma, queueService);
+    const { goal, todayStart } = await createGoalWithHealthSignals("report-worker");
+
+    try {
+      const queued = await service.enqueueHealthSnapshotReport(goal.userId, goal.id, {
+        reportDate: toDateKey(todayStart)
+      });
+      const processed = await service.processQueuedReportJob({
+        type: "HEALTH_SNAPSHOT",
+        userId: goal.userId,
+        goalId: goal.id,
+        reportDate: toDateKey(todayStart)
+      });
+      const repeated = await service.processQueuedReportJob({
+        type: "HEALTH_SNAPSHOT",
+        userId: goal.userId,
+        goalId: goal.id,
+        reportDate: toDateKey(todayStart)
+      });
+      const snapshots = await prisma.healthSnapshot.findMany({
+        where: { goalId: goal.id }
+      });
+
+      assert.equal(queued.report.type, "HEALTH_SNAPSHOT");
+      assert.equal(queued.queue.queued, false);
+      assert.equal(queued.queue.queueName, "reports");
+      assert.equal(processed.processed, true);
+      assert.equal(processed.snapshot.date, toDateKey(todayStart));
+      assert.equal(processed.snapshot.id, repeated.snapshot.id);
+      assert.equal(snapshots.length, 1);
+    } finally {
+      await queueService.onModuleDestroy();
+
+      if (previous === undefined) {
+        delete process.env.BULLMQ_ENABLED;
+      } else {
+        process.env.BULLMQ_ENABLED = previous;
+      }
+    }
+  });
+
+  it("rejects unsupported report worker jobs", async () => {
+    await assert.rejects(
+      () =>
+        goalsService.processQueuedReportJob({
+          type: "MONTHLY_REPORT",
+          userId: "user-test",
+          goalId: "goal-test"
+        }),
+      BadRequestException
+    );
   });
 });
 

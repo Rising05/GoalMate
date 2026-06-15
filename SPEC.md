@@ -1384,7 +1384,10 @@ AI Provider 要求：
 - Web 最近 AI 任务面板已实现自动轮询：当 job 处于 `QUEUED / RUNNING / RETRYING` 时自动调用 `GET /ai-jobs/:id`，进入 `SUCCEEDED / FAILED / CANCELLED` 后停止；计划生成 / 重规划成功后会刷新目标列表和计划。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
 - 已补 `NotificationsService integration`，覆盖单条邮件 worker 路径成功、重复消费幂等、失败保持 queued 等待重试，以及最终 attempt 失败落库。
-- 剩余风险：Report worker 仍待接入 BullMQ 自动消费；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
+- 已新增 `POST /goals/:id/health-snapshots/enqueue`，当前用户可把自己的目标健康快照报告任务写入 `reports` 队列；当 BullMQ 未启用时返回 disabled queue metadata，便于本地和测试闭环。
+- `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 任务并调用 `GoalsService.processQueuedReportJob` 生成 / 更新当日健康快照。
+- 已补 `GoalsService health snapshots integration` 和 `QueueService integration`，覆盖报告任务入队 disabled metadata、worker 处理健康快照、重复处理幂等 upsert 和不支持的报告任务拒绝。
+- 剩余风险：Report worker 当前只覆盖健康快照，周报、月报和趋势分析仍待补齐；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
 
 AI job 状态需要支持：
 
@@ -1664,10 +1667,10 @@ API 要求：
 
 阶段 C：真实 worker 和自动轮询。
 
-- BullMQ AI worker 已真实消费计划生成和重规划任务；Email worker 已真实消费 EMAIL 提醒日志；报告任务 worker 仍待补齐。
+- BullMQ AI worker 已真实消费计划生成和重规划任务；Email worker 已真实消费 EMAIL 提醒日志；Report worker 已真实消费健康快照任务，周报 / 月报 / 趋势分析仍待补齐。
 - 前端 job 状态自动轮询已完成，终态自动停止并可在计划任务成功后刷新目标 / 计划。
 - 管理后台支持失败 job 重试。
-- 已补 AI worker 成功、失败重试耗尽和幂等测试；已补 Email worker 单条发送、幂等和退避重试状态测试；报告 worker 测试仍待补齐。
+- 已补 AI worker 成功、失败重试耗尽和幂等测试；已补 Email worker 单条发送、幂等和退避重试状态测试；已补 Report worker 健康快照入队、处理、幂等和不支持任务拒绝测试。
 
 阶段 D：提醒完整版。
 
@@ -1686,7 +1689,7 @@ API 要求：
 - 已新增 `NotificationsWorker` 和 `processQueuedEmailLog(emailLogId)`：worker 可按单条 EMAIL 日志消费，成功写入 `SENT`，重复消费保持幂等，失败时在非最终 BullMQ attempt 继续保持 `QUEUED`，最终 attempt 写入 `FAILED`。
 - 已新增 `NotificationsService integration` 用例，覆盖 worker-safe 单条发送、重复消费幂等、失败后等待 BullMQ 退避重试，以及最终失败落库。
 - Web 账号页已提供失败邮件重试按钮、渠道开关、微信绑定表单，并展示邮件日志尝试次数和渠道。
-- 剩余风险：真实邮件服务商、真实微信提醒 provider 和微信订阅消息模板仍待实现；Report worker 仍未接入。
+- 剩余风险：真实邮件服务商、真实微信提醒 provider 和微信订阅消息模板仍待实现；Report worker 的周报 / 月报 / 趋势分析仍待实现。
 
 阶段 E：微信小程序轻量版。
 
