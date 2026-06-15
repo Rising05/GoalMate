@@ -69,6 +69,24 @@ export class GoalsController {
     );
   }
 
+  @Post(":id/reports/enqueue")
+  enqueueReport(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: unknown
+  ) {
+    return this.goalsService.enqueueGoalReport(request.user!.id, id, body);
+  }
+
+  @Post(":id/health-trends")
+  getHealthTrendReport(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: unknown
+  ) {
+    return this.goalsService.getHealthTrendReport(request.user!.id, id, body);
+  }
+
   @Post(":id/settle")
   settle(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.goalsService.settleGoal(request.user!.id, id);

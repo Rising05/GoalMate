@@ -390,6 +390,51 @@ export interface HealthSnapshot {
   updatedAt: string;
 }
 
+export type GoalReportType = "HEALTH_SNAPSHOT" | "WEEKLY_TREND" | "MONTHLY_TREND";
+
+export interface GoalReportQueueResult {
+  report: {
+    type: GoalReportType;
+    userId: string;
+    goalId: string;
+    reportDate: string | null;
+  };
+  queue: {
+    queued: boolean;
+    queueName: string;
+    reason?: string;
+    error?: string;
+    jobId?: string;
+  };
+}
+
+export interface HealthTrendReport {
+  type: Extract<GoalReportType, "WEEKLY_TREND" | "MONTHLY_TREND">;
+  goalId: string;
+  goalTitle: string;
+  range: {
+    startsOn: string;
+    endsOn: string;
+    days: number;
+  };
+  snapshotCount: number;
+  averageHealthScore: number | null;
+  previousAverageHealthScore: number | null;
+  scoreDelta: number | null;
+  trendDirection: "up" | "down" | "flat" | "no_data";
+  minHealthScore: number | null;
+  maxHealthScore: number | null;
+  latestSnapshot: HealthSnapshot | null;
+  riskCounts: {
+    stable: number;
+    warning: number;
+    danger: number;
+  };
+  dominantRiskLevel: "stable" | "warning" | "danger" | "no_data";
+  insights: string[];
+  generatedAt: string;
+}
+
 export interface GoalHealthRisk {
   level: "warning" | "danger";
   title: string;
@@ -1165,8 +1210,19 @@ export async function enqueueHealthSnapshotReport(
   goalId: string,
   payload: { reportDate?: string } = {}
 ) {
+  return enqueueGoalReport(token, goalId, {
+    ...payload,
+    type: "HEALTH_SNAPSHOT"
+  });
+}
+
+export async function enqueueGoalReport(
+  token: string,
+  goalId: string,
+  payload: { type: GoalReportType; reportDate?: string | null }
+) {
   const response = await fetch(
-    `${API_BASE_URL}/goals/${goalId}/health-snapshots/enqueue`,
+    `${API_BASE_URL}/goals/${goalId}/reports/enqueue`,
     {
       method: "POST",
       headers: {
@@ -1177,41 +1233,39 @@ export async function enqueueHealthSnapshotReport(
     }
   );
 
-  const data = await parseJson<{
-    report: {
-      type: string;
-      userId: string;
-      goalId: string;
-      reportDate: string | null;
-    };
-    queue: {
-      queued: boolean;
-      queueName: string;
-      reason?: string;
-      error?: string;
-      jobId?: string;
-    };
-  }>(response);
+  const data = await parseJson<GoalReportQueueResult>(response);
 
   if (!response.ok) {
-    throw new Error(getErrorMessage(data, "健康快照报告任务入队失败"));
+    throw new Error(getErrorMessage(data, "报告任务入队失败"));
   }
 
-  return data as {
-    report: {
-      type: string;
-      userId: string;
-      goalId: string;
-      reportDate: string | null;
-    };
-    queue: {
-      queued: boolean;
-      queueName: string;
-      reason?: string;
-      error?: string;
-      jobId?: string;
-    };
-  };
+  return data as GoalReportQueueResult;
+}
+
+export async function fetchGoalHealthTrend(
+  token: string,
+  goalId: string,
+  payload: {
+    type?: Extract<GoalReportType, "WEEKLY_TREND" | "MONTHLY_TREND">;
+    reportDate?: string | null;
+  } = {}
+) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/health-trends`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<HealthTrendReport>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "健康趋势报告加载失败"));
+  }
+
+  return data as HealthTrendReport;
 }
 
 export async function fetchAiJob(token: string, jobId: string) {

@@ -83,9 +83,82 @@ describe("GoalsService health snapshots integration", () => {
       assert.equal(queued.queue.queued, false);
       assert.equal(queued.queue.queueName, "reports");
       assert.equal(processed.processed, true);
+      assert.ok(processed.snapshot);
+      assert.ok(repeated.snapshot);
       assert.equal(processed.snapshot.date, toDateKey(todayStart));
       assert.equal(processed.snapshot.id, repeated.snapshot.id);
       assert.equal(snapshots.length, 1);
+    } finally {
+      await queueService.onModuleDestroy();
+
+      if (previous === undefined) {
+        delete process.env.BULLMQ_ENABLED;
+      } else {
+        process.env.BULLMQ_ENABLED = previous;
+      }
+    }
+  });
+
+  it("builds weekly trend reports and processes them through the report worker path", async () => {
+    const previous = process.env.BULLMQ_ENABLED;
+    process.env.BULLMQ_ENABLED = "false";
+    const queueService = new QueueService();
+    const service = new GoalsService(prisma, queueService);
+    const { goal, todayStart } = await createGoalWithHealthSignals("weekly-trend");
+
+    try {
+      await prisma.healthSnapshot.createMany({
+        data: [
+          buildHealthSnapshot(goal.id, addDays(todayStart, -8), 50, "warning"),
+          buildHealthSnapshot(goal.id, addDays(todayStart, -7), 60, "warning"),
+          buildHealthSnapshot(goal.id, addDays(todayStart, -2), 70, "stable"),
+          buildHealthSnapshot(goal.id, addDays(todayStart, -1), 80, "warning"),
+          buildHealthSnapshot(goal.id, todayStart, 90, "danger")
+        ]
+      });
+
+      const queued = await service.enqueueGoalReport(goal.userId, goal.id, {
+        type: "WEEKLY_TREND",
+        reportDate: toDateKey(todayStart)
+      });
+      const report = await service.getHealthTrendReport(goal.userId, goal.id, {
+        type: "WEEKLY_TREND",
+        reportDate: toDateKey(todayStart)
+      });
+      const processed = await service.processQueuedReportJob({
+        type: "WEEKLY_TREND",
+        userId: goal.userId,
+        goalId: goal.id,
+        reportDate: toDateKey(todayStart)
+      });
+      const monthlyReport = await service.getHealthTrendReport(goal.userId, goal.id, {
+        type: "MONTHLY_TREND",
+        reportDate: toDateKey(todayStart)
+      });
+      const monthlyProcessed = await service.processQueuedReportJob({
+        type: "MONTHLY_TREND",
+        userId: goal.userId,
+        goalId: goal.id,
+        reportDate: toDateKey(todayStart)
+      });
+
+      assert.equal(queued.report.type, "WEEKLY_TREND");
+      assert.equal(queued.queue.queued, false);
+      assert.equal(report.snapshotCount, 3);
+      assert.equal(report.averageHealthScore, 80);
+      assert.equal(report.previousAverageHealthScore, 55);
+      assert.equal(report.scoreDelta, 25);
+      assert.equal(report.trendDirection, "up");
+      assert.equal(report.riskCounts.danger, 1);
+      assert.equal(report.dominantRiskLevel, "danger");
+      assert.equal(processed.processed, true);
+      assert.ok(processed.report);
+      assert.equal(processed.report.averageHealthScore, 80);
+      assert.equal(monthlyReport.snapshotCount, 5);
+      assert.equal(monthlyReport.averageHealthScore, 70);
+      assert.equal(monthlyReport.trendDirection, "no_data");
+      assert.ok(monthlyProcessed.report);
+      assert.equal(monthlyProcessed.report.snapshotCount, 5);
     } finally {
       await queueService.onModuleDestroy();
 
@@ -109,6 +182,27 @@ describe("GoalsService health snapshots integration", () => {
     );
   });
 });
+
+function buildHealthSnapshot(
+  goalId: string,
+  date: Date,
+  healthScore: number,
+  riskLevel: string
+) {
+  return {
+    goalId,
+    date,
+    healthScore,
+    deviationEventId: null,
+    completionMetrics: {
+      source: "weekly-trend-test"
+    },
+    rescueMetrics: {
+      source: "weekly-trend-test"
+    },
+    riskLevel
+  };
+}
 
 async function cleanupTestUsers() {
   await prisma.user.deleteMany({

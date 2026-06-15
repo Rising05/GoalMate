@@ -76,6 +76,7 @@ const DONE_STATUS = "DONE";
 const RESCUE_TASK_TYPE = "RESCUE";
 const PENDING_STATUS = "PENDING";
 const SETTLEABLE_GOAL_STATUSES: GoalStatus[] = ["ACTIVE", "AT_RISK", "REPLANNING"];
+const REPORT_TYPES = ["HEALTH_SNAPSHOT", "WEEKLY_TREND", "MONTHLY_TREND"] as const;
 
 type HealthTask = DailyTask & {
   checkins: Array<Checkin & { aiScore: AiScore | null }>;
@@ -90,6 +91,7 @@ type GoalFailureReport = FailureReport & {
 };
 
 type DeviationRiskLevel = "stable" | "warning" | "danger";
+type ReportType = typeof REPORT_TYPES[number];
 
 type DeviationReasonCode =
   | "LOW_SCORE"
@@ -364,14 +366,19 @@ export class GoalsService {
   }
 
   async enqueueHealthSnapshotReport(userId: string, id: string, input: unknown = {}) {
+    return this.enqueueGoalReport(userId, id, {
+      ...this.inputObject(input),
+      type: "HEALTH_SNAPSHOT"
+    });
+  }
+
+  async enqueueGoalReport(userId: string, id: string, input: unknown = {}) {
     const goal = await this.getOwnedGoal(userId, id);
-    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
-    const reportDate =
-      typeof body.reportDate === "string" && body.reportDate.trim()
-        ? body.reportDate.trim().slice(0, 40)
-        : null;
+    const body = this.inputObject(input);
+    const type = this.parseReportType(body.type ?? "HEALTH_SNAPSHOT");
+    const reportDate = this.parseOptionalDateKey(body.reportDate);
     const queue = await this.enqueueReportJob({
-      type: "HEALTH_SNAPSHOT",
+      type,
       userId,
       goalId: goal.id,
       reportDate
@@ -379,7 +386,7 @@ export class GoalsService {
 
     return {
       report: {
-        type: "HEALTH_SNAPSHOT",
+        type,
         userId,
         goalId: goal.id,
         reportDate
@@ -388,36 +395,275 @@ export class GoalsService {
     };
   }
 
+  async getHealthTrendReport(userId: string, id: string, input: unknown = {}) {
+    const goal = await this.getOwnedGoal(userId, id);
+    const body = this.inputObject(input);
+    const type = this.parseTrendReportType(body.type ?? "WEEKLY_TREND");
+    const reportDate = this.parseOptionalDateKey(body.reportDate);
+
+    return this.buildHealthTrendReport({
+      goal,
+      type,
+      reportDate
+    });
+  }
+
   async processQueuedReportJob(input: unknown) {
     const payload = this.parseReportWorkerPayload(input);
 
-    if (payload.type !== "HEALTH_SNAPSHOT") {
-      throw new BadRequestException(`不支持的报告任务类型：${payload.type}`);
+    if (payload.type === "HEALTH_SNAPSHOT") {
+      const result = await this.getGoalHealth(payload.userId, payload.goalId);
+
+      return {
+        processed: true,
+        type: payload.type,
+        goalId: payload.goalId,
+        userId: payload.userId,
+        snapshot: result.snapshot,
+        healthScore: result.healthScore,
+        riskLevel: result.snapshot.riskLevel
+      };
     }
 
-    const result = await this.getGoalHealth(payload.userId, payload.goalId);
+    if (payload.type === "WEEKLY_TREND" || payload.type === "MONTHLY_TREND") {
+      const goal = await this.getOwnedGoal(payload.userId, payload.goalId);
+
+      return {
+        processed: true,
+        type: payload.type,
+        goalId: payload.goalId,
+        userId: payload.userId,
+        report: await this.buildHealthTrendReport({
+          goal,
+          type: payload.type,
+          reportDate: payload.reportDate
+        })
+      };
+    }
+
+    throw new BadRequestException(`不支持的报告任务类型：${payload.type}`);
+  }
+
+  private async buildHealthTrendReport(input: {
+    goal: Goal;
+    type: Extract<ReportType, "WEEKLY_TREND" | "MONTHLY_TREND">;
+    reportDate: string | null;
+  }) {
+    const days = input.type === "WEEKLY_TREND" ? 7 : 30;
+    const endDateKey = input.reportDate ?? this.toDateKey(new Date());
+    const endDate = this.parseDateKey(endDateKey);
+    const rangeEndExclusive = addUtcDays(endDate, 1);
+    const rangeStart = addUtcDays(rangeEndExclusive, -days);
+    const previousRangeStart = addUtcDays(rangeStart, -days);
+    const snapshots = await this.prisma.healthSnapshot.findMany({
+      where: {
+        goalId: input.goal.id,
+        date: {
+          gte: rangeStart,
+          lt: rangeEndExclusive
+        }
+      },
+      orderBy: {
+        date: "asc"
+      }
+    });
+    const previousSnapshots = await this.prisma.healthSnapshot.findMany({
+      where: {
+        goalId: input.goal.id,
+        date: {
+          gte: previousRangeStart,
+          lt: rangeStart
+        }
+      },
+      orderBy: {
+        date: "asc"
+      }
+    });
+    const stats = this.summarizeHealthSnapshots(snapshots);
+    const previousStats = this.summarizeHealthSnapshots(previousSnapshots);
+    const scoreDelta =
+      stats.averageHealthScore !== null && previousStats.averageHealthScore !== null
+        ? stats.averageHealthScore - previousStats.averageHealthScore
+        : null;
+    const trendDirection =
+      scoreDelta === null
+        ? "no_data"
+        : scoreDelta >= 5
+          ? "up"
+          : scoreDelta <= -5
+            ? "down"
+            : "flat";
 
     return {
-      processed: true,
-      type: payload.type,
-      goalId: payload.goalId,
-      userId: payload.userId,
-      snapshot: result.snapshot,
-      healthScore: result.healthScore,
-      riskLevel: result.snapshot.riskLevel
+      type: input.type,
+      goalId: input.goal.id,
+      goalTitle: input.goal.title,
+      range: {
+        startsOn: this.toDateKey(rangeStart),
+        endsOn: endDateKey,
+        days
+      },
+      snapshotCount: snapshots.length,
+      averageHealthScore: stats.averageHealthScore,
+      previousAverageHealthScore: previousStats.averageHealthScore,
+      scoreDelta,
+      trendDirection,
+      minHealthScore: stats.minHealthScore,
+      maxHealthScore: stats.maxHealthScore,
+      latestSnapshot: stats.latestSnapshot,
+      riskCounts: stats.riskCounts,
+      dominantRiskLevel: stats.dominantRiskLevel,
+      insights: this.buildHealthTrendInsights({
+        snapshotCount: snapshots.length,
+        days,
+        trendDirection,
+        scoreDelta,
+        riskCounts: stats.riskCounts,
+        dominantRiskLevel: stats.dominantRiskLevel
+      }),
+      generatedAt: new Date().toISOString()
     };
+  }
+
+  private summarizeHealthSnapshots(snapshots: HealthSnapshot[]) {
+    const riskCounts = snapshots.reduce(
+      (counts, snapshot) => {
+        if (snapshot.riskLevel === "danger") {
+          counts.danger += 1;
+        } else if (snapshot.riskLevel === "warning") {
+          counts.warning += 1;
+        } else {
+          counts.stable += 1;
+        }
+
+        return counts;
+      },
+      { stable: 0, warning: 0, danger: 0 }
+    );
+    const scores = snapshots.map((snapshot) => snapshot.healthScore);
+    const averageHealthScore = scores.length
+      ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
+      : null;
+    const dominantRiskLevel =
+      riskCounts.danger >= riskCounts.warning && riskCounts.danger >= riskCounts.stable && riskCounts.danger > 0
+        ? "danger"
+        : riskCounts.warning >= riskCounts.stable && riskCounts.warning > 0
+          ? "warning"
+          : riskCounts.stable > 0
+            ? "stable"
+            : "no_data";
+
+    return {
+      averageHealthScore,
+      minHealthScore: scores.length ? Math.min(...scores) : null,
+      maxHealthScore: scores.length ? Math.max(...scores) : null,
+      latestSnapshot: snapshots.length
+        ? this.serializeHealthSnapshot(snapshots[snapshots.length - 1])
+        : null,
+      riskCounts,
+      dominantRiskLevel
+    };
+  }
+
+  private buildHealthTrendInsights(input: {
+    snapshotCount: number;
+    days: number;
+    trendDirection: string;
+    scoreDelta: number | null;
+    riskCounts: {
+      stable: number;
+      warning: number;
+      danger: number;
+    };
+    dominantRiskLevel: string;
+  }) {
+    if (!input.snapshotCount) {
+      return ["当前周期还没有健康快照，先完成一次健康报告生成。"];
+    }
+
+    const insights = [
+      `本周期已有 ${input.snapshotCount}/${input.days} 天健康快照。`
+    ];
+
+    if (input.scoreDelta !== null) {
+      if (input.trendDirection === "up") {
+        insights.push(`平均健康分较上一周期提升 ${input.scoreDelta} 分。`);
+      } else if (input.trendDirection === "down") {
+        insights.push(`平均健康分较上一周期下降 ${Math.abs(input.scoreDelta)} 分。`);
+      } else {
+        insights.push("平均健康分较上一周期基本持平。");
+      }
+    }
+
+    if (input.riskCounts.danger > 0) {
+      insights.push(`出现 ${input.riskCounts.danger} 天危险状态，建议优先生成救援任务。`);
+    } else if (input.riskCounts.warning > 0) {
+      insights.push(`出现 ${input.riskCounts.warning} 天预警状态，建议降低任务粒度。`);
+    } else if (input.dominantRiskLevel === "stable") {
+      insights.push("本周期风险状态稳定，继续保持当前执行节奏。");
+    }
+
+    return insights;
+  }
+
+  private parseReportType(value: unknown): ReportType {
+    const type = this.cleanText(value, 80).toUpperCase();
+
+    if (!REPORT_TYPES.includes(type as ReportType)) {
+      throw new BadRequestException(`不支持的报告任务类型：${type || "EMPTY"}`);
+    }
+
+    return type as ReportType;
+  }
+
+  private parseTrendReportType(value: unknown): Extract<ReportType, "WEEKLY_TREND" | "MONTHLY_TREND"> {
+    const type = this.parseReportType(value);
+
+    if (type !== "WEEKLY_TREND" && type !== "MONTHLY_TREND") {
+      throw new BadRequestException("趋势报告仅支持 WEEKLY_TREND 或 MONTHLY_TREND");
+    }
+
+    return type;
+  }
+
+  private parseOptionalDateKey(value: unknown) {
+    const dateKey = this.cleanText(value, 40);
+
+    if (!dateKey) {
+      return null;
+    }
+
+    this.parseDateKey(dateKey);
+
+    return dateKey;
+  }
+
+  private parseDateKey(dateKey: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      throw new BadRequestException("报告日期格式必须为 YYYY-MM-DD");
+    }
+
+    const date = new Date(`${dateKey}T00:00:00.000+08:00`);
+
+    if (Number.isNaN(date.getTime()) || this.toDateKey(date) !== dateKey) {
+      throw new BadRequestException("报告日期无效");
+    }
+
+    return date;
+  }
+
+  private inputObject(input: unknown) {
+    return input && typeof input === "object"
+      ? input as Record<string, unknown>
+      : {};
   }
 
   private parseReportWorkerPayload(input: unknown) {
     const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
-    const type = this.cleanText(body.type, 80).toUpperCase();
+    const type = this.parseReportType(body.type);
     const userId = this.cleanText(body.userId, 191);
     const goalId = this.cleanText(body.goalId, 191);
-    const reportDate = this.cleanText(body.reportDate, 40) || null;
-
-    if (!type) {
-      throw new BadRequestException("报告任务类型不能为空");
-    }
+    const reportDate = this.parseOptionalDateKey(body.reportDate);
 
     if (!userId || !goalId) {
       throw new BadRequestException("报告任务缺少用户或目标");
@@ -432,7 +678,7 @@ export class GoalsService {
   }
 
   private async enqueueReportJob(input: {
-    type: string;
+    type: ReportType;
     userId: string;
     goalId: string;
     reportDate: string | null;
@@ -1863,4 +2109,10 @@ export class GoalsService {
       createdAt: task.createdAt.toISOString()
     };
   }
+}
+
+function addUtcDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(date.getUTCDate() + days);
+  return next;
 }
