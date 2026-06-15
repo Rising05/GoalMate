@@ -1381,6 +1381,7 @@ AI Provider 要求：
 - 已新增 `20260615113000_add_ai_job_cancelled_status` Prisma migration，`AiJobStatus` 支持 `CANCELLED`。
 - 已新增 `POST /ai-jobs/:id/cancel`：当前用户只能取消自己的 `QUEUED` AI job；取消计划生成会把目标恢复为 `DRAFT`，取消重规划会根据 payload `previousStatus` 恢复原目标状态；已运行、已完成或失败的 job 不允许取消。
 - 已补 `AiJobsService requestGoalReplan integration`，覆盖 worker 成功消费、失败重试耗尽、重复消费幂等、取消 queued job 后 worker 不再处理、取消重规划恢复原状态、跨用户取消隔离和终态 job 不可取消；已补 `QueueService integration`，覆盖 BullMQ disabled 时 worker 不启动。
+- Web 最近 AI 任务面板已实现自动轮询：当 job 处于 `QUEUED / RUNNING / RETRYING` 时自动调用 `GET /ai-jobs/:id`，进入 `SUCCEEDED / FAILED / CANCELLED` 后停止；计划生成 / 重规划成功后会刷新目标列表和计划。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
 - 已补 `NotificationsService integration`，覆盖单条邮件 worker 路径成功、重复消费幂等、失败保持 queued 等待重试，以及最终 attempt 失败落库。
 - 剩余风险：Report worker 仍待接入 BullMQ 自动消费；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
@@ -1402,6 +1403,7 @@ AI job 状态需要支持：
 - 管理后台可查看 job payload 摘要、错误、尝试次数和重试入口。
 - 当前已实现管理员手动重试失败 AI job 的接口和 Web 入口；重试后的 `QUEUED` 计划生成 / 重规划 job 可由 AI worker 消费。
 - 当前已实现用户取消 `QUEUED` AI job 的后端接口和 Web API client；Web 管理后台 AI job 状态筛选已支持 `CANCELLED`。
+- 当前已实现 Web 最近 AI job 自动轮询和终态停止；仍保留手动刷新按钮作为兜底。
 
 ### 22.8 提醒完整版
 
@@ -1663,7 +1665,7 @@ API 要求：
 阶段 C：真实 worker 和自动轮询。
 
 - BullMQ AI worker 已真实消费计划生成和重规划任务；Email worker 已真实消费 EMAIL 提醒日志；报告任务 worker 仍待补齐。
-- 前端 job 状态自动轮询。
+- 前端 job 状态自动轮询已完成，终态自动停止并可在计划任务成功后刷新目标 / 计划。
 - 管理后台支持失败 job 重试。
 - 已补 AI worker 成功、失败重试耗尽和幂等测试；已补 Email worker 单条发送、幂等和退避重试状态测试；报告 worker 测试仍待补齐。
 

@@ -278,6 +278,7 @@ const aiJobTypeLabels: Record<string, string> = {
 };
 
 const aiJobStatusLabels: Record<string, string> = {
+  PENDING: "排队中",
   QUEUED: "排队中",
   RUNNING: "处理中",
   RETRYING: "重试中",
@@ -285,6 +286,8 @@ const aiJobStatusLabels: Record<string, string> = {
   FAILED: "失败",
   CANCELLED: "已取消"
 };
+const activeAiJobStatuses = new Set(["PENDING", "QUEUED", "RUNNING", "RETRYING"]);
+const terminalAiJobStatuses = new Set(["SUCCEEDED", "FAILED", "CANCELLED"]);
 
 const studyTaskTypeLabels: Record<string, string> = {
   READING: "阅读",
@@ -1091,6 +1094,88 @@ export function App() {
     }
   }, [activePage, session, selectedGoalId, selectedGoal?.status]);
 
+  useEffect(() => {
+    if (!session || !trackedAiJob || !activeAiJobStatuses.has(trackedAiJob.status)) {
+      return;
+    }
+
+    let stopped = false;
+    let inFlight = false;
+
+    async function pollTrackedAiJob() {
+      if (!session || !trackedAiJob || inFlight) {
+        return;
+      }
+
+      inFlight = true;
+
+      try {
+        const response = await fetchAiJob(session.token, trackedAiJob.id);
+
+        if (stopped) {
+          return;
+        }
+
+        setTrackedAiJob(response.job);
+        setCompletionResult((current) =>
+          current?.job.id === response.job.id
+            ? {
+                ...current,
+                job: response.job
+              }
+            : current
+        );
+
+        if (response.job.status !== trackedAiJob.status) {
+          const statusLabel =
+            aiJobStatusLabels[response.job.status] ?? response.job.status;
+          const isTerminal = terminalAiJobStatuses.has(response.job.status);
+
+          setAiJobMessage(
+            isTerminal
+              ? `AI 任务已结束：${statusLabel}`
+              : `AI 任务状态已自动更新：${statusLabel}`
+          );
+        }
+
+        if (
+          response.job.status === "SUCCEEDED" &&
+          response.job.goalId &&
+          ["GOAL_PLAN_GENERATION", "GOAL_PLAN_REPLAN"].includes(response.job.type)
+        ) {
+          void refreshGoals(session.token, response.job.goalId);
+
+          if (!selectedGoalId || selectedGoalId === response.job.goalId) {
+            void loadGoalPlan(session.token, response.job.goalId);
+          }
+        }
+      } catch (error) {
+        if (!stopped) {
+          setAiJobMessage(
+            error instanceof Error ? error.message : "AI 任务自动轮询失败"
+          );
+        }
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    void pollTrackedAiJob();
+    const timer = window.setInterval(pollTrackedAiJob, 4000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    session?.token,
+    trackedAiJob?.id,
+    trackedAiJob?.status,
+    trackedAiJob?.type,
+    trackedAiJob?.goalId,
+    selectedGoalId
+  ]);
+
   async function refreshGoals(token = session?.token, preferredGoalId?: string) {
     if (!token) {
       return;
@@ -1563,7 +1648,7 @@ export function App() {
     }));
   }
 
-  function trackAiJob(job: AiJob, message = "AI 任务状态已记录，可手动刷新。") {
+  function trackAiJob(job: AiJob, message = "AI 任务状态已记录，将自动更新。") {
     setTrackedAiJob(job);
     setAiJobMessage(message);
   }
@@ -1660,7 +1745,7 @@ export function App() {
       });
       setDailyTaskMessage("任务已完成，热力图已更新。");
       setCompletionResult(response);
-      trackAiJob(response.job, "打卡评分任务已记录，可刷新查看最新状态。");
+      trackAiJob(response.job, "打卡评分任务已记录，将自动更新状态。");
       if (completionTask.taskType === "RESCUE") {
         setRescueTask(null);
       }
@@ -1695,7 +1780,7 @@ export function App() {
         }
       );
       setAppealResult(response.appeal);
-      trackAiJob(response.job, "评分复评任务已记录，可刷新查看最新状态。");
+      trackAiJob(response.job, "评分复评任务已记录，将自动更新状态。");
       setCompletionResult((current) =>
         current
           ? {
@@ -1792,7 +1877,7 @@ export function App() {
 
       setCreatedGoal(response.goal);
       setGeneratedPlan(response.plan);
-      trackAiJob(response.job, "计划生成任务已记录，可刷新查看最新状态。");
+      trackAiJob(response.job, "计划生成任务已记录，将自动更新状态。");
       setSelectedGoalId(response.goal.id);
       setGoals((current) =>
         current.some((goal) => goal.id === response.goal.id)
@@ -1844,7 +1929,7 @@ export function App() {
 
       setCreatedGoal(response.goal);
       setGeneratedPlan(response.plan);
-      trackAiJob(response.job, "计划调整任务已记录，可刷新查看最新状态。");
+      trackAiJob(response.job, "计划调整任务已记录，将自动更新状态。");
       setSelectedGoalId(response.goal.id);
       setGoals((current) =>
         current.some((goal) => goal.id === response.goal.id)
