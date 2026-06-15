@@ -17,6 +17,7 @@ import { SCORING_PROVIDER } from "./scoring-provider";
       provide: SCORING_PROVIDER,
       useExisting: MockScoringProvider
     }
-  ]
+  ],
+  exports: [DailyTasksService]
 })
 export class DailyTasksModule {}

@@ -412,6 +412,79 @@ export class DailyTasksService {
     await this.assertEvidenceUploadsOwned(userId, payload.evidenceFiles);
 
     const investedMinutes = payload.investedMinutes ?? task.plannedMinutes ?? 0;
+
+    if (this.shouldQueueCheckinScoring()) {
+      const { completedTask, checkin, job } = await this.prisma.$transaction(
+        async (tx) => {
+          await tx.dailyTask.update({
+            where: { id: task.id },
+            data: { status: DONE_STATUS }
+          });
+
+          const createdCheckin = await tx.checkin.create({
+            data: {
+              userId,
+              goalId: task.goalId,
+              dailyTaskId: task.id,
+              status: "SCORING",
+              content: payload.content,
+              investedMinutes,
+              completedSubtasks: payload.completedSubtasks.length
+                ? this.toJson(payload.completedSubtasks)
+                : undefined,
+              actualQuestionCount: payload.actualQuestionCount,
+              correctQuestionCount: payload.correctQuestionCount,
+              accuracy: payload.accuracy,
+              evidenceFiles: payload.evidenceFiles.length
+                ? this.toJson(payload.evidenceFiles)
+                : undefined,
+              evidenceLinks: payload.evidenceLinks.length
+                ? this.toJson(payload.evidenceLinks)
+                : undefined,
+              studyMood: payload.studyMood,
+              difficultyLevel: payload.difficultyLevel
+            }
+          });
+
+          const createdJob = await tx.aiJob.create({
+            data: {
+              userId,
+              goalId: task.goalId,
+              type: CHECKIN_SCORING,
+              status: "QUEUED",
+              payload: {
+                checkinId: createdCheckin.id,
+                dailyTaskId: task.id,
+                taskType: task.taskType,
+                deviationEventId: task.deviationEventId,
+                provider: this.scoringProvider.name,
+                analysisAccess: hasDetailedAiAnalysis ? "PRO" : "BASIC",
+                evidenceSummary: this.getEvidenceSummary(payload)
+              }
+            }
+          });
+
+          const updatedTask = await tx.dailyTask.findUniqueOrThrow({
+            where: { id: task.id },
+            include: this.taskInclude()
+          });
+
+          return {
+            completedTask: updatedTask,
+            checkin: updatedTask.checkins.find((item) => item.id === createdCheckin.id)!,
+            job: createdJob
+          };
+        }
+      );
+      const queuedJob = await this.attachQueueMetadata(job);
+
+      return {
+        task: this.serializeTask(completedTask, hasDetailedAiAnalysis),
+        checkin: this.serializeCheckin(checkin, hasDetailedAiAnalysis),
+        job: this.serializeAiJob(queuedJob)
+      };
+    }
+
     const score = await this.scoringProvider.score({
       content: payload.content,
       investedMinutes,
@@ -527,6 +600,197 @@ export class DailyTasksService {
       checkin: this.serializeCheckin(checkin, hasDetailedAiAnalysis),
       job: this.serializeAiJob(queuedJob)
     };
+  }
+
+  async processQueuedCheckinScoringJob(id: string) {
+    const job = await this.prisma.aiJob.findUnique({
+      where: { id }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    if (job.type !== CHECKIN_SCORING) {
+      throw new BadRequestException(`不支持的打卡评分任务类型：${job.type}`);
+    }
+
+    if (job.status !== "QUEUED") {
+      return {
+        job: this.serializeAiJob(job),
+        processed: false,
+        reason: "AI job is not queued."
+      };
+    }
+
+    const payload = this.jsonObject(job.payload);
+    const checkinId = typeof payload.checkinId === "string" ? payload.checkinId : "";
+    const checkin = await this.prisma.checkin.findFirst({
+      where: {
+        id: checkinId,
+        userId: job.userId
+      },
+      include: {
+        aiScore: true,
+        dailyTask: true
+      }
+    });
+
+    if (!checkin || !checkin.dailyTask) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: "Queued check-in scoring job is missing its check-in or task."
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        checkin: null
+      };
+    }
+
+    if (checkin.aiScore) {
+      const succeededJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "SUCCEEDED",
+          result: this.toJson({
+            checkinId: checkin.id,
+            aiScoreId: checkin.aiScore.id,
+            totalScore: checkin.aiScore.totalScore,
+            idempotent: true
+          })
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(succeededJob),
+        processed: true,
+        checkin: this.serializeCheckin(
+          checkin,
+          await this.hasDetailedAiAnalysis(job.userId)
+        )
+      };
+    }
+
+    const runningJob = await this.prisma.aiJob.update({
+      where: { id: job.id },
+      data: {
+        status: "RUNNING",
+        attempts: {
+          increment: 1
+        }
+      }
+    });
+
+    try {
+      const score = await this.scoringProvider.score({
+        content: checkin.content,
+        investedMinutes: checkin.investedMinutes ?? checkin.dailyTask.plannedMinutes ?? 0,
+        evidence: {
+          completedSubtasks: this.normalizeStringArray(checkin.completedSubtasks),
+          actualQuestionCount: checkin.actualQuestionCount ?? undefined,
+          correctQuestionCount: checkin.correctQuestionCount ?? undefined,
+          accuracy: checkin.accuracy ?? undefined,
+          evidenceFiles: this.normalizeEvidenceFiles(checkin.evidenceFiles),
+          evidenceLinks: this.normalizeStringArray(checkin.evidenceLinks),
+          studyMood: checkin.studyMood ?? undefined,
+          difficultyLevel: checkin.difficultyLevel ?? undefined
+        },
+        task: checkin.dailyTask
+      });
+      const { updatedCheckin, succeededJob } = await this.prisma.$transaction(
+        async (tx) => {
+          const aiScore = await tx.aiScore.upsert({
+            where: { checkinId: checkin.id },
+            update: {
+              totalScore: score.totalScore,
+              dimensions: this.toJson(score.dimensions),
+              evidence: this.toJson(score.evidence),
+              summary: score.summary,
+              suggestion: score.suggestion
+            },
+            create: {
+              checkinId: checkin.id,
+              totalScore: score.totalScore,
+              dimensions: this.toJson(score.dimensions),
+              evidence: this.toJson(score.evidence),
+              summary: score.summary,
+              suggestion: score.suggestion
+            }
+          });
+          const rescoredCheckin = await tx.checkin.update({
+            where: { id: checkin.id },
+            data: { status: "SCORED" },
+            include: {
+              aiScore: true
+            }
+          });
+          const completedJob = await tx.aiJob.update({
+            where: { id: runningJob.id },
+            data: {
+              status: "SUCCEEDED",
+              result: this.toJson({
+                checkinId: checkin.id,
+                aiScoreId: aiScore.id,
+                totalScore: score.totalScore
+              }),
+              error: null
+            }
+          });
+
+          return {
+            updatedCheckin: rescoredCheckin,
+            succeededJob: completedJob
+          };
+        }
+      );
+
+      return {
+        job: this.serializeAiJob(succeededJob),
+        processed: true,
+        checkin: this.serializeCheckin(
+          updatedCheckin,
+          await this.hasDetailedAiAnalysis(job.userId)
+        )
+      };
+    } catch (error) {
+      const { failedCheckin, failedJob } = await this.prisma.$transaction(
+        async (tx) => {
+          const changedCheckin = await tx.checkin.update({
+            where: { id: checkin.id },
+            data: { status: "SCORE_FAILED" },
+            include: {
+              aiScore: true
+            }
+          });
+          const changedJob = await tx.aiJob.update({
+            where: { id: runningJob.id },
+            data: {
+              status: "FAILED",
+              error: error instanceof Error ? error.message : "Check-in scoring failed"
+            }
+          });
+
+          return {
+            failedCheckin: changedCheckin,
+            failedJob: changedJob
+          };
+        }
+      );
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        checkin: this.serializeCheckin(
+          failedCheckin,
+          await this.hasDetailedAiAnalysis(job.userId)
+        )
+      };
+    }
   }
 
   async appealCheckinScore(userId: string, checkinId: string, input: unknown) {
@@ -667,6 +931,10 @@ export class DailyTasksService {
         }
       });
     }
+  }
+
+  private shouldQueueCheckinScoring() {
+    return process.env.CHECKIN_SCORING_ASYNC === "true";
   }
 
   private taskInclude() {

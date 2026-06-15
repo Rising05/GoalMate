@@ -943,7 +943,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 新增 `GET /ai-jobs/:id`，前端可按 job id 查询自己的 AI 任务状态；跨用户读取返回不存在。
 - 前端计划页和打卡复盘弹窗已接入最近 AI 任务状态面板，计划生成、重规划、打卡评分和评分申诉都会记录最近 job，并可通过刷新按钮调用 `GET /ai-jobs/:id` 获取最新状态。
 - 计划生成和重规划创建 `ai_jobs` 后会尝试写入 BullMQ `ai-jobs` 队列，并把队列结果写入 job payload；队列不可用不会破坏当前同步生成链路。
-- 打卡评分新增 `ScoringProvider` 抽象，默认使用 `MockScoringProvider`；评分创建 `CHECKIN_SCORING` job 后会尝试写入 BullMQ `ai-jobs` 队列，并在 payload 中保留 provider 与 queue 元数据。
+- 打卡评分新增 `ScoringProvider` 抽象，默认使用 `MockScoringProvider`；默认同步评分链路保持可用。设置 `CHECKIN_SCORING_ASYNC=true` 时，完成任务会创建 `SCORING` checkin 和 `QUEUED` `CHECKIN_SCORING` job，并尝试写入 BullMQ `ai-jobs` 队列；AI worker 消费成功后写入 `ai_scores` 并把 checkin 推进到 `SCORED`，provider 失败时写入 `SCORE_FAILED / FAILED`。
 - 邮件提醒新增 `MailProvider` 抽象，默认使用 `MockMailProvider`；邮件日志创建后会尝试写入 BullMQ `email` 队列，邮件处理通过 provider 返回发送成功或失败。
 - 2026-06-12 已补充 AI job provider payload、job 状态权限隔离、评分 provider/queue payload、MailProvider 注入、QueueService 默认关闭、Redis 实际入队测试和前端 job 状态刷新展示；`npm run typecheck`、`npm run test:integration`、`npm run build` 已作为验收命令。
 
@@ -1098,7 +1098,7 @@ MVP 已落地的 AI Provider 和队列基础版：
 - 已实现 AI Provider 抽象层，计划生成可在 Mock 与 DeepSeek provider 间切换。
 - 已接入 DeepSeek provider 配置入口；无 `DEEPSEEK_API_KEY` 时自动 fallback 到 Mock。
 - 已实现计划生成异步任务记录、重试、状态查询和队列入队元数据。
-- 已实现打卡评分异步任务记录、Mock ScoringProvider 和队列入队元数据。
+- 已实现打卡评分异步任务记录、Mock ScoringProvider、队列入队元数据和 opt-in worker 消费路径。
 - 实现评分申诉复评。
 - 实现偏差检测规则。
 - 实现救援任务生成。
@@ -1382,6 +1382,8 @@ AI Provider 要求：
 - 已新增 `POST /ai-jobs/:id/cancel`：当前用户只能取消自己的 `QUEUED` AI job；取消计划生成会把目标恢复为 `DRAFT`，取消重规划会根据 payload `previousStatus` 恢复原目标状态；已运行、已完成或失败的 job 不允许取消。
 - 已补 `AiJobsService requestGoalReplan integration`，覆盖 worker 成功消费、失败重试耗尽、重复消费幂等、取消 queued job 后 worker 不再处理、取消重规划恢复原状态、跨用户取消隔离和终态 job 不可取消；已补 `QueueService integration`，覆盖 BullMQ disabled 时 worker 不启动。
 - Web 最近 AI 任务面板已实现自动轮询：当 job 处于 `QUEUED / RUNNING / RETRYING` 时自动调用 `GET /ai-jobs/:id`，进入 `SUCCEEDED / FAILED / CANCELLED` 后停止；计划生成 / 重规划成功后会刷新目标列表和计划。
+- `AiJobsWorker` 已能按 job type 分发 `CHECKIN_SCORING` 到 `DailyTasksService.processQueuedCheckinScoringJob`；设置 `CHECKIN_SCORING_ASYNC=true` 后，打卡评分由 worker 从 `QUEUED` 推进到 `RUNNING / SUCCEEDED / FAILED`，成功写入 `ai_scores`，失败把 checkin 标记为 `SCORE_FAILED`。
+- 已补 `DailyTasksService scoring worker integration`，覆盖异步打卡创建 queued job、worker 成功评分、终态幂等跳过，以及 provider 失败时 job/checkin 状态落库。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
 - 已补 `NotificationsService integration`，覆盖单条邮件 worker 路径成功、重复消费幂等、失败保持 queued 等待重试，以及最终 attempt 失败落库。
 - 已新增 `POST /goals/:id/health-snapshots/enqueue`，当前用户可把自己的目标健康快照报告任务写入 `reports` 队列；当 BullMQ 未启用时返回 disabled queue metadata，便于本地和测试闭环。
@@ -1389,7 +1391,7 @@ AI Provider 要求：
 - 已新增 `POST /goals/:id/health-trends`，基于已有 `health_snapshots` 返回周 / 月趋势摘要：周期范围、快照数量、平均健康分、上一周期均分、分数变化、趋势方向、风险计数、主导风险、最新快照和简短洞察。
 - `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 生成 / 更新当日健康快照，消费 `WEEKLY_TREND / MONTHLY_TREND` 生成周 / 月趋势摘要。
 - 已补 `GoalsService health snapshots integration` 和 `QueueService integration`，覆盖报告任务入队 disabled metadata、worker 处理健康快照、重复处理幂等 upsert、周 / 月趋势摘要、趋势 worker 路径和不支持的报告任务拒绝。
-- 剩余风险：Report worker 当前趋势摘要暂不持久化报告正文，周报 / 月报的可下载文件、AI 文案润色和长期趋势图仍待补齐；AI worker 当前覆盖计划生成和重规划，打卡评分、申诉复评、救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
+- 剩余风险：Report worker 当前趋势摘要暂不持久化报告正文，周报 / 月报的可下载文件、AI 文案润色和长期趋势图仍待补齐；AI worker 当前覆盖计划生成、重规划和 opt-in 打卡评分，申诉复评、救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
 
 AI job 状态需要支持：
 
@@ -1669,10 +1671,10 @@ API 要求：
 
 阶段 C：真实 worker 和自动轮询。
 
-- BullMQ AI worker 已真实消费计划生成和重规划任务；Email worker 已真实消费 EMAIL 提醒日志；Report worker 已真实消费健康快照和周 / 月趋势摘要任务。
+- BullMQ AI worker 已真实消费计划生成、重规划和 opt-in 打卡评分任务；Email worker 已真实消费 EMAIL 提醒日志；Report worker 已真实消费健康快照和周 / 月趋势摘要任务。
 - 前端 job 状态自动轮询已完成，终态自动停止并可在计划任务成功后刷新目标 / 计划。
 - 管理后台支持失败 job 重试。
-- 已补 AI worker 成功、失败重试耗尽和幂等测试；已补 Email worker 单条发送、幂等和退避重试状态测试；已补 Report worker 健康快照入队、处理、幂等、周 / 月趋势摘要和不支持任务拒绝测试。
+- 已补 AI worker 计划生成成功、失败重试耗尽、幂等、取消和 opt-in 打卡评分成功 / 失败测试；已补 Email worker 单条发送、幂等和退避重试状态测试；已补 Report worker 健康快照入队、处理、幂等、周 / 月趋势摘要和不支持任务拒绝测试。
 
 阶段 D：提醒完整版。
 
