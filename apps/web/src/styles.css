@@ -525,6 +525,12 @@ textarea:focus {
   background: var(--surface);
 }
 
+.ghost-button.danger {
+  color: #9f2f2f;
+  border-color: #e4b9b9;
+  background: #fff7f6;
+}
+
 .ghost-button:disabled {
   opacity: 0.58;
   cursor: not-allowed;

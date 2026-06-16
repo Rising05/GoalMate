@@ -110,6 +110,74 @@ test("admin navigation is only visible to active admin accounts", async ({
   await expect(page.getByRole("button", { name: /后台管理/ })).toBeVisible();
 });
 
+test("queued AI jobs can be cancelled by the owning user", async ({ request }) => {
+  const stamp = Date.now();
+  const password = "Password123!";
+  const email = `e2e-cancel-ai-${stamp}@example.com`;
+  const registered = await registerViaApi(request, {
+    email,
+    password,
+    displayName: "Cancel AI User"
+  });
+  const session = await loginViaApi(request, {
+    email,
+    password
+  });
+  const now = new Date();
+  const endDate = new Date(now);
+  endDate.setDate(now.getDate() + 7);
+  const goal = await prisma.goal.create({
+    data: {
+      userId: registered.user.id,
+      title: `E2E Cancel AI ${stamp}`,
+      description: "用于验证排队 AI 任务取消后目标状态恢复。",
+      status: "GENERATING_PLAN",
+      startDate: now,
+      endDate,
+      toleranceDaysAllowed: 1,
+      dailyTimeBudgetMinutes: 30
+    }
+  });
+  const job = await prisma.aiJob.create({
+    data: {
+      userId: registered.user.id,
+      goalId: goal.id,
+      type: "GOAL_PLAN_GENERATION",
+      status: "QUEUED",
+      attempts: 0,
+      payload: {
+        goalId: goal.id,
+        provider: "e2e"
+      }
+    }
+  });
+
+  const cancelResponse = await request.post(`${apiUrl}/ai-jobs/${job.id}/cancel`, {
+    headers: {
+      Authorization: `Bearer ${session.token}`
+    },
+    data: {
+      reason: "E2E 用户取消排队任务"
+    }
+  });
+
+  expect(cancelResponse.ok()).toBeTruthy();
+  const cancelBody = (await cancelResponse.json()) as {
+    cancelled: boolean;
+    job: { status: string; error: string | null };
+  };
+  const [cancelledJob, restoredGoal] = await Promise.all([
+    prisma.aiJob.findUniqueOrThrow({ where: { id: job.id } }),
+    prisma.goal.findUniqueOrThrow({ where: { id: goal.id } })
+  ]);
+
+  expect(cancelBody.cancelled).toBeTruthy();
+  expect(cancelBody.job.status).toBe("CANCELLED");
+  expect(cancelledJob.status).toBe("CANCELLED");
+  expect(cancelledJob.error).toBe("E2E 用户取消排队任务");
+  expect(restoredGoal.status).toBe("DRAFT");
+});
+
 test("new user completes the core GoalPilot MVP loop", async ({ page, request }) => {
   const stamp = Date.now();
   const email = `e2e-core-${stamp}@example.com`;

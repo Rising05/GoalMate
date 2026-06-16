@@ -56,6 +56,7 @@ import {
   WechatBinding,
   appealCheckinScore,
   bindWechat,
+  cancelAiJob,
   confirmGoalPlan,
   completeDailyTask,
   createPreviewEmailLog,
@@ -762,6 +763,7 @@ export function App() {
   const [aiJobMessage, setAiJobMessage] =
     useState("完成 AI 操作后可查看最近任务状态。");
   const [isRefreshingAiJob, setIsRefreshingAiJob] = useState(false);
+  const [isCancellingAiJob, setIsCancellingAiJob] = useState(false);
 
   const isAdminUser = Boolean(session?.user.adminRole);
   const visibleNavItems = isAdminUser
@@ -1684,6 +1686,55 @@ export function App() {
     }
   }
 
+  async function handleCancelTrackedAiJob() {
+    if (!session || !trackedAiJob) {
+      setAiJobMessage("暂无可取消的 AI 任务。");
+      return;
+    }
+
+    if (trackedAiJob.status !== "QUEUED") {
+      setAiJobMessage("只有排队中的 AI 任务可以取消。");
+      return;
+    }
+
+    const confirmed = window.confirm("确认取消当前排队中的 AI 任务？");
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsCancellingAiJob(true);
+
+    try {
+      const result = await cancelAiJob(session.token, trackedAiJob.id, {
+        reason: "用户在 Web 端取消排队任务"
+      });
+      setTrackedAiJob(result.job);
+      setCompletionResult((current) =>
+        current?.job.id === result.job.id
+          ? {
+              ...current,
+              job: result.job
+            }
+          : current
+      );
+
+      if (result.job.goalId) {
+        void refreshGoals(session.token, result.job.goalId);
+      }
+
+      setAiJobMessage(
+        result.cancelled
+          ? "AI 任务已取消。"
+          : `AI 任务已是${aiJobStatusLabels[result.job.status] ?? result.job.status}。`
+      );
+    } catch (error) {
+      setAiJobMessage(error instanceof Error ? error.message : "AI 任务取消失败");
+    } finally {
+      setIsCancellingAiJob(false);
+    }
+  }
+
   async function handleCompleteDailyTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -2141,6 +2192,18 @@ export function App() {
           >
             {isRefreshingAiJob ? "刷新中" : "刷新状态"}
             <RefreshCw size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="ghost-button danger"
+            disabled={
+              !trackedAiJob ||
+              trackedAiJob.status !== "QUEUED" ||
+              isCancellingAiJob
+            }
+            type="button"
+            onClick={handleCancelTrackedAiJob}
+          >
+            {isCancellingAiJob ? "取消中" : "取消任务"}
           </button>
           <span className="form-message">{aiJobMessage}</span>
         </div>

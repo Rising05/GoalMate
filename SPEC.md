@@ -1397,6 +1397,7 @@ AI Provider 要求：
 - 已新增 `POST /ai-jobs/:id/cancel`：当前用户只能取消自己的 `QUEUED` AI job；取消计划生成会把目标恢复为 `DRAFT`，取消重规划会根据 payload `previousStatus` 恢复原目标状态；已运行、已完成或失败的 job 不允许取消。
 - 已补 `AiJobsService requestGoalReplan integration`，覆盖 worker 成功消费、失败重试耗尽、重复消费幂等、取消 queued job 后 worker 不再处理、取消重规划恢复原状态、跨用户取消隔离和终态 job 不可取消；已补 `QueueService integration`，覆盖 BullMQ disabled 时 worker 不启动。
 - Web 最近 AI 任务面板已实现自动轮询：当 job 处于 `QUEUED / RUNNING / RETRYING` 时自动调用 `GET /ai-jobs/:id`，进入 `SUCCEEDED / FAILED / CANCELLED` 后停止；计划生成 / 重规划成功后会刷新目标列表和计划。
+- Web 最近 AI 任务面板已提供“取消任务”入口，仅允许当前用户取消 `QUEUED` job；取消成功后同步刷新 job 状态、关联目标和提示文案，并补充 e2e 覆盖 queued AI job 取消后目标恢复为 `DRAFT`。
 - `AiJobsWorker` 已能按 job type 分发 `CHECKIN_SCORING` 到 `DailyTasksService.processQueuedCheckinScoringJob`；设置 `CHECKIN_SCORING_ASYNC=true` 后，打卡评分由 worker 从 `QUEUED` 推进到 `RUNNING / SUCCEEDED / FAILED`，成功写入 `ai_scores`，失败把 checkin 标记为 `SCORE_FAILED`。
 - 已补 `DailyTasksService scoring worker integration`，覆盖异步打卡创建 queued job、worker 成功评分、终态幂等跳过，以及 provider 失败时 job/checkin 状态落库。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
