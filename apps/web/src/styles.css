@@ -19,8 +19,27 @@
   --soft: rgba(255, 255, 255, 0.42);
   --accent: #1f5f46;
   --accent-soft: #e7f0eb;
+  --stable: #1f6b4c;
+  --stable-soft: rgba(231, 240, 235, 0.78);
   --warning: #8a5a12;
   --warning-soft: #f5ead6;
+  --danger: #9f2f2f;
+  --danger-soft: rgba(250, 228, 226, 0.78);
+  --pro: #4a517a;
+  --pro-soft: rgba(229, 232, 246, 0.78);
+  --admin: #36485f;
+  --admin-soft: rgba(225, 233, 242, 0.78);
+  --glass-light: rgba(255, 255, 255, 0.54);
+  --glass-action: rgba(255, 255, 255, 0.68);
+  --glass-emphasis: rgba(255, 255, 255, 0.76);
+  --glass-border: rgba(255, 255, 255, 0.58);
+  --glass-highlight: rgba(255, 255, 255, 0.78);
+  --glass-shadow: 0 16px 44px rgba(32, 33, 36, 0.1);
+  --glass-shadow-strong: 0 20px 58px rgba(32, 33, 36, 0.14);
+  --motion-hover: 160ms ease;
+  --motion-click: 90ms ease;
+  --motion-complete: 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-rescue: 380ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 * {
@@ -46,6 +65,168 @@ body::before {
     linear-gradient(240deg, rgba(214, 224, 235, 0.46), rgba(245, 245, 241, 0.6));
   background-size: 180% 180%;
   animation: ambient-shift 18s ease-in-out infinite;
+}
+
+.glass-wrapper {
+  position: relative;
+  min-width: 0;
+}
+
+.glass-wrapper > div:not(.glass-liquid) {
+  display: none;
+}
+
+.glass-wrapper.glass-tone-stable {
+  --glass-tone: var(--stable);
+  --glass-tone-soft: var(--stable-soft);
+}
+
+.glass-wrapper.glass-tone-warning {
+  --glass-tone: var(--warning);
+  --glass-tone-soft: rgba(245, 234, 214, 0.78);
+}
+
+.glass-wrapper.glass-tone-danger {
+  --glass-tone: var(--danger);
+  --glass-tone-soft: var(--danger-soft);
+}
+
+.glass-wrapper.glass-tone-pro {
+  --glass-tone: var(--pro);
+  --glass-tone-soft: var(--pro-soft);
+}
+
+.glass-wrapper.glass-tone-admin {
+  --glass-tone: var(--admin);
+  --glass-tone-soft: var(--admin-soft);
+}
+
+.glass-wrapper.glass-tone-neutral {
+  --glass-tone: var(--accent);
+  --glass-tone-soft: rgba(255, 255, 255, 0.62);
+}
+
+.glass-liquid {
+  position: relative !important;
+  top: 0 !important;
+  left: 0 !important;
+  transform: none !important;
+  width: 100%;
+  transition: none !important;
+}
+
+.glass-liquid svg,
+.glass-liquid .glass__warp {
+  pointer-events: none;
+}
+
+.glass-liquid > .glass {
+  width: 100%;
+  display: block !important;
+  border: 1px solid color-mix(in srgb, var(--glass-tone) 20%, var(--glass-border));
+  background:
+    linear-gradient(135deg, var(--glass-highlight), transparent 44%),
+    var(--glass-tone-soft);
+  box-shadow: var(--glass-shadow) !important;
+}
+
+.glass-layer-action .glass-liquid > .glass {
+  box-shadow: var(--glass-shadow-strong) !important;
+}
+
+.glass-layer-emphasis .glass-liquid > .glass {
+  border-color: color-mix(in srgb, var(--glass-tone) 28%, var(--glass-border));
+  box-shadow: var(--glass-shadow-strong) !important;
+}
+
+.glass-liquid > .glass > div:last-child {
+  width: 100%;
+  font: inherit !important;
+}
+
+.glass-content {
+  min-width: 0;
+}
+
+.glass-button-wrapper {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.glass-button-wrapper .glass-liquid > .glass {
+  border-radius: 999px;
+}
+
+.glass-button-native {
+  transition:
+    transform var(--motion-click),
+    background var(--motion-hover),
+    border-color var(--motion-hover),
+    box-shadow var(--motion-hover);
+}
+
+.glass-button-wrapper:active .glass-button-native {
+  transform: translateY(1px) scale(0.99);
+}
+
+.glass-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 26px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.68);
+  font-size: 0.78rem;
+  font-weight: 760;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.glass-status-badge.glass-tone-stable {
+  color: var(--stable);
+  border-color: rgba(31, 107, 76, 0.22);
+  background: var(--stable-soft);
+}
+
+.glass-status-badge.glass-tone-warning {
+  color: var(--warning);
+  border-color: rgba(138, 90, 18, 0.24);
+  background: rgba(245, 234, 214, 0.78);
+}
+
+.glass-status-badge.glass-tone-danger {
+  color: var(--danger);
+  border-color: rgba(159, 47, 47, 0.24);
+  background: var(--danger-soft);
+}
+
+.glass-status-badge.glass-tone-pro {
+  color: var(--pro);
+  border-color: rgba(74, 81, 122, 0.24);
+  background: var(--pro-soft);
+}
+
+.glass-status-badge.glass-tone-admin {
+  color: var(--admin);
+  border-color: rgba(54, 72, 95, 0.24);
+  background: var(--admin-soft);
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .glass-liquid > .glass,
+  .workspace-panel,
+  .app-sidebar,
+  .page-surface,
+  .panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(255, 255, 255, 0.86);
+  }
 }
 
 button,
@@ -661,7 +842,8 @@ textarea:focus {
   gap: 10px;
 }
 
-.dashboard-metrics div {
+.dashboard-metrics > div:not(.glass-wrapper),
+.dashboard-metrics .glass-content {
   display: grid;
   gap: 8px;
   min-height: 82px;
@@ -706,6 +888,17 @@ textarea:focus {
 
 .next-action-card .primary-button {
   min-width: 146px;
+}
+
+.next-action-card .glass-button-wrapper {
+  min-width: 146px;
+}
+
+.next-action-card .glass-button-wrapper .primary-button,
+.rescue-card .glass-button-wrapper .ghost-button,
+.deviation-alert .glass-button-wrapper .primary-button,
+.task-row .glass-button-wrapper .ghost-button {
+  width: 100%;
 }
 
 .dashboard-jumps {
@@ -1055,6 +1248,11 @@ textarea:focus {
   background: rgba(255, 255, 255, 0.48);
 }
 
+.glass-content.metric-card {
+  border-color: transparent;
+  background: transparent;
+}
+
 .metric-card span {
   color: var(--muted);
   font-size: 0.78rem;
@@ -1068,6 +1266,20 @@ textarea:focus {
 
 .metric-card.good {
   background: var(--accent-soft);
+}
+
+.glass-tone-stable .metric-card {
+  background: transparent;
+}
+
+.glass-tone-warning .metric-card strong,
+.glass-tone-warning .metric-card span {
+  color: var(--warning);
+}
+
+.glass-tone-danger .metric-card strong,
+.glass-tone-danger .metric-card span {
+  color: var(--danger);
 }
 
 .timeline-list,
@@ -2574,6 +2786,7 @@ button.heat-cell:disabled {
   }
 
   .next-action-card .primary-button,
+  .next-action-card .glass-button-wrapper,
   .dashboard-jumps .ghost-button {
     width: 100%;
   }
@@ -2595,7 +2808,8 @@ button.heat-cell:disabled {
     grid-template-columns: 28px minmax(0, 1fr);
   }
 
-  .task-row .ghost-button {
+  .task-row .ghost-button,
+  .task-row .glass-button-wrapper {
     grid-column: 1 / -1;
     width: 100%;
   }
@@ -2606,8 +2820,26 @@ button.heat-cell:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
   body::before {
     animation: none;
+  }
+
+  .glass-button-wrapper:active .glass-button-native,
+  .label-nav button:hover,
+  .goal-record:hover,
+  .record-card:hover,
+  .task-row:hover,
+  .weekly-plan-list article:hover {
+    transform: none;
   }
 }
 

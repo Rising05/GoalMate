@@ -19,6 +19,13 @@ import {
 } from "lucide-react";
 import { AuthPanel } from "./AuthPanel";
 import {
+  GlassButton,
+  GlassMetricCard,
+  GlassPanel,
+  GlassStatusBadge,
+  type GlassTone
+} from "./components/glass";
+import {
   AuthResponse,
   ActivityDay,
   AdminAiJob,
@@ -477,6 +484,42 @@ function getTimelineBadge(item: TimelineItem) {
   }
 
   return item.aiScore ? `AI ${item.aiScore.totalScore}` : "待评分";
+}
+
+function getGoalStatusTone(status: string): GlassTone {
+  if (["ACTIVE", "COMPLETED"].includes(status)) {
+    return "stable";
+  }
+
+  if (["AT_RISK", "GENERATION_FAILED", "FAILED"].includes(status)) {
+    return "danger";
+  }
+
+  if (["GENERATING_PLAN", "WAITING_CONFIRMATION", "REPLANNING"].includes(status)) {
+    return "warning";
+  }
+
+  return "neutral";
+}
+
+function getAiJobStatusTone(status: string): GlassTone {
+  if (status === "SUCCEEDED") {
+    return "stable";
+  }
+
+  if (["FAILED", "CANCELLED"].includes(status)) {
+    return "danger";
+  }
+
+  if (["QUEUED", "RUNNING", "RETRYING", "PENDING"].includes(status)) {
+    return "warning";
+  }
+
+  return "neutral";
+}
+
+function getMetricTone(tone: string): GlassTone {
+  return tone === "good" ? "stable" : "neutral";
 }
 
 const healthMetrics = [
@@ -2147,7 +2190,11 @@ export function App() {
 
   function renderAiJobStatusPanel() {
     return (
-      <section className="ai-job-status">
+      <GlassPanel
+        className="ai-job-status"
+        layer="emphasis"
+        tone={trackedAiJob ? getAiJobStatusTone(trackedAiJob.status) : "neutral"}
+      >
         <div>
           <p className="eyebrow">AI job</p>
           <h2>最近 AI 任务</h2>
@@ -2163,9 +2210,9 @@ export function App() {
               </span>
               <span>
                 状态
-                <strong>
+                <GlassStatusBadge tone={getAiJobStatusTone(trackedAiJob.status)}>
                   {aiJobStatusLabels[trackedAiJob.status] ?? trackedAiJob.status}
-                </strong>
+                </GlassStatusBadge>
               </span>
               <span>
                 尝试
@@ -2184,7 +2231,7 @@ export function App() {
           <p className="muted-text">完成计划生成、重规划、打卡评分或复评后显示。</p>
         )}
         <div className="form-actions">
-          <button
+          <GlassButton
             className="ghost-button"
             disabled={!trackedAiJob || isRefreshingAiJob}
             type="button"
@@ -2192,8 +2239,8 @@ export function App() {
           >
             {isRefreshingAiJob ? "刷新中" : "刷新状态"}
             <RefreshCw size={16} aria-hidden="true" />
-          </button>
-          <button
+          </GlassButton>
+          <GlassButton
             className="ghost-button danger"
             disabled={
               !trackedAiJob ||
@@ -2204,10 +2251,10 @@ export function App() {
             onClick={handleCancelTrackedAiJob}
           >
             {isCancellingAiJob ? "取消中" : "取消任务"}
-          </button>
+          </GlassButton>
           <span className="form-message">{aiJobMessage}</span>
         </div>
-      </section>
+      </GlassPanel>
     );
   }
 
@@ -3020,7 +3067,11 @@ export function App() {
               )}
 
               {selectedGoal ? (
-                <article className="record-card goal-dashboard">
+                <GlassPanel
+                  className="record-card goal-dashboard"
+                  layer="emphasis"
+                  tone={getGoalStatusTone(selectedGoal.status)}
+                >
                   <div className="dashboard-hero">
                     <div>
                       <p className="eyebrow">Goal cockpit</p>
@@ -3028,30 +3079,49 @@ export function App() {
                       <p>{selectedGoal.description}</p>
                     </div>
                     <div className="dashboard-status">
-                      <span>{selectedGoalStatus}</span>
+                      <GlassStatusBadge tone={getGoalStatusTone(selectedGoal.status)}>
+                        {selectedGoalStatus}
+                      </GlassStatusBadge>
                       <strong>{selectedGoal.status}</strong>
                     </div>
                   </div>
 
                   <div className="dashboard-metrics">
-                    <div>
-                      <span>健康度</span>
-                      <strong>{goalHealth?.healthScore ?? "-"}</strong>
-                    </div>
-                    <div>
-                      <span>今日任务</span>
-                      <strong>
-                        {todayTaskCount ? `${todayCompletedCount}/${todayTaskCount}` : "待生成"}
-                      </strong>
-                    </div>
-                    <div>
-                      <span>计划任务</span>
-                      <strong>{selectedPlanTaskCount ? `${selectedPlanTaskCount} 个` : "待排期"}</strong>
-                    </div>
-                    <div>
-                      <span>容错剩余</span>
-                      <strong>{goalHealth?.toleranceRemaining ?? selectedGoal.toleranceDaysAllowed}</strong>
-                    </div>
+                    <GlassMetricCard
+                      label="健康度"
+                      tone={
+                        goalHealth?.healthScore && goalHealth.healthScore < 60
+                          ? "danger"
+                          : "stable"
+                      }
+                      value={goalHealth?.healthScore ?? "-"}
+                    />
+                    <GlassMetricCard
+                      label="今日任务"
+                      tone={todayTaskCount && todayCompletedCount < todayTaskCount ? "warning" : "stable"}
+                      value={
+                        todayTaskCount
+                          ? `${todayCompletedCount}/${todayTaskCount}`
+                          : "待生成"
+                      }
+                    />
+                    <GlassMetricCard
+                      label="计划任务"
+                      value={selectedPlanTaskCount ? `${selectedPlanTaskCount} 个` : "待排期"}
+                    />
+                    <GlassMetricCard
+                      label="容错剩余"
+                      tone={
+                        (goalHealth?.toleranceRemaining ??
+                          selectedGoal.toleranceDaysAllowed) <= 1
+                          ? "warning"
+                          : "stable"
+                      }
+                      value={
+                        goalHealth?.toleranceRemaining ??
+                        selectedGoal.toleranceDaysAllowed
+                      }
+                    />
                   </div>
 
                   <section className="next-action-card">
@@ -3060,7 +3130,7 @@ export function App() {
                       <h2>{dashboardAction.label}</h2>
                       <p>{dashboardAction.description}</p>
                     </div>
-                    <button
+                    <GlassButton
                       className="primary-button"
                       disabled={dashboardAction.disabled}
                       type="button"
@@ -3070,7 +3140,7 @@ export function App() {
                     >
                       {dashboardAction.label}
                       <dashboardAction.icon size={16} aria-hidden="true" />
-                    </button>
+                    </GlassButton>
                   </section>
 
                   <div className="dashboard-jumps" aria-label="当前目标快捷入口">
@@ -3217,7 +3287,7 @@ export function App() {
                       </section>
                     </div>
                   ) : null}
-                </article>
+                </GlassPanel>
               ) : null}
             </section>
             <aside className="stack">
@@ -3225,10 +3295,12 @@ export function App() {
                 <p className="eyebrow">Health</p>
                 <div className="metric-grid">
                   {healthPanelMetrics.map((metric) => (
-                    <div className={`metric-card ${metric.tone}`} key={metric.label}>
-                      <span>{metric.label}</span>
-                      <strong>{metric.value}</strong>
-                    </div>
+                    <GlassMetricCard
+                      key={metric.label}
+                      label={metric.label}
+                      tone={getMetricTone(metric.tone)}
+                      value={metric.value}
+                    />
                   ))}
                 </div>
               </section>
@@ -3308,26 +3380,34 @@ export function App() {
                 </div>
               ) : (
                 <div className="plan-review">
-                  <section className="plan-review-hero">
+                  <GlassPanel
+                    className="plan-review-hero"
+                    layer="emphasis"
+                    tone={selectedGeneratedPlan.isActive ? "stable" : "warning"}
+                  >
                     <div>
                       <p className="eyebrow">Plan summary</p>
                       <h2>{selectedGoal.title}</h2>
                       <p>{selectedGeneratedPlan.summary}</p>
                     </div>
                     <div className="dashboard-status">
-                      <span>
+                      <GlassStatusBadge
+                        tone={selectedGeneratedPlan.isActive ? "stable" : "warning"}
+                      >
                         {selectedGeneratedPlan.isActive ? "已确认" : "待确认"}
-                      </span>
+                      </GlassStatusBadge>
                       <strong>v{selectedGeneratedPlan.version}</strong>
                     </div>
-                  </section>
+                  </GlassPanel>
 
                   <div className="dashboard-metrics">
                     {planReviewStats.map((stat) => (
-                      <div key={stat.label}>
-                        <span>{stat.label}</span>
-                        <strong>{stat.value}</strong>
-                      </div>
+                      <GlassMetricCard
+                        key={stat.label}
+                        label={stat.label}
+                        tone={stat.label === "计划状态" ? "warning" : "neutral"}
+                        value={stat.value}
+                      />
                     ))}
                   </div>
 
@@ -3396,7 +3476,7 @@ export function App() {
                   </section>
 
                   <div className="form-actions">
-                    <button
+                    <GlassButton
                       className="primary-button"
                       disabled={
                         isConfirmingPlan ||
@@ -3408,7 +3488,7 @@ export function App() {
                     >
                       {isConfirmingPlan ? "确认中" : "确认计划并开始执行"}
                       <CheckCircle2 size={16} aria-hidden="true" />
-                    </button>
+                    </GlassButton>
                     <button
                       className="ghost-button"
                       disabled={isGeneratingPlan || selectedGeneratedPlan.isActive}
@@ -3553,7 +3633,11 @@ export function App() {
               <h1>今日任务</h1>
               <p className="form-message">{dailyTaskMessage}</p>
               {goalHealth && deviationLevel !== "stable" ? (
-                <section className={`deviation-alert ${deviationLevel}`}>
+                <GlassPanel
+                  className={`deviation-alert ${deviationLevel}`}
+                  layer="emphasis"
+                  tone={deviationLevel === "danger" ? "danger" : "warning"}
+                >
                   <div>
                     <p className="eyebrow">Deviation alert</p>
                     <h2>
@@ -3563,7 +3647,7 @@ export function App() {
                       {deviationReasons.map((reason) => reason.label).join("、")}
                     </p>
                   </div>
-                  <button
+                  <GlassButton
                     className="primary-button"
                     disabled={isGeneratingRescueTask}
                     type="button"
@@ -3571,11 +3655,11 @@ export function App() {
                   >
                     {isGeneratingRescueTask ? "生成中" : "生成救援任务"}
                     <Sparkles size={16} aria-hidden="true" />
-                  </button>
-                </section>
+                  </GlassButton>
+                </GlassPanel>
               ) : null}
               {rescueTask ? (
-                <section className="rescue-card">
+                <GlassPanel className="rescue-card" layer="action" tone="stable">
                   <div>
                     <p className="eyebrow">Rescue task</p>
                     <h2>{rescueTask.title}</h2>
@@ -3584,15 +3668,15 @@ export function App() {
                       {rescueTask.estimatedMinutes} 分钟 · {rescueTask.reason}
                     </span>
                   </div>
-                  <button
+                  <GlassButton
                     className="ghost-button"
                     disabled={rescueTask.status === "DONE"}
                     type="button"
                     onClick={() => openCompletionDialog(rescueTask as TodayDailyTask)}
                   >
                     {rescueTask.status === "DONE" ? "已完成" : "完成救援任务"}
-                  </button>
-                </section>
+                  </GlassButton>
+                </GlassPanel>
               ) : null}
               <div className="task-list">
                 {visiblePlannedTasks.map((task, index) => (
@@ -3640,7 +3724,7 @@ export function App() {
                         </div>
                       ) : null}
                     </div>
-                    <button
+                    <GlassButton
                       className="ghost-button"
                       disabled={
                         isLoadingDailyTasks ||
@@ -3658,7 +3742,7 @@ export function App() {
                             : task.taskType === "RESCUE"
                               ? "完成救援"
                               : "完成"}
-                    </button>
+                    </GlassButton>
                   </article>
                 ))}
               </div>
@@ -3690,10 +3774,12 @@ export function App() {
                 <p className="eyebrow">Signals</p>
                 <div className="metric-grid">
                   {healthPanelMetrics.map((metric) => (
-                    <div className={`metric-card ${metric.tone}`} key={metric.label}>
-                      <span>{metric.label}</span>
-                      <strong>{metric.value}</strong>
-                    </div>
+                    <GlassMetricCard
+                      key={metric.label}
+                      label={metric.label}
+                      tone={getMetricTone(metric.tone)}
+                      value={metric.value}
+                    />
                   ))}
                 </div>
               </section>
@@ -4144,14 +4230,15 @@ export function App() {
                   <div className="timeline-day-summary">
                     <h2>{formatActivityDate(selectedTimelineDay.date)}</h2>
                     <div className="metric-grid">
-                      <div className="metric-card">
-                        <span>复盘</span>
-                        <strong>{selectedTimelineDay.items.length}</strong>
-                      </div>
-                      <div className="metric-card">
-                        <span>投入</span>
-                        <strong>{selectedTimelineDay.investedMinutes}</strong>
-                      </div>
+                      <GlassMetricCard
+                        label="复盘"
+                        value={selectedTimelineDay.items.length}
+                      />
+                      <GlassMetricCard
+                        label="投入"
+                        tone="stable"
+                        value={selectedTimelineDay.investedMinutes}
+                      />
                     </div>
                     <span>
                       {selectedTimelineDay.averageScore !== null
@@ -4215,7 +4302,12 @@ export function App() {
               {rewardCardsForGoal.length ? (
                 <div className="reward-board-grid">
                   {rewardCardsForGoal.map((card) => (
-                    <article className="reward-card reward-board-card" key={card.id}>
+                    <GlassPanel
+                      className="reward-card reward-board-card"
+                      key={card.id}
+                      layer="light"
+                      tone={card.sourceType === "CUSTOM" ? "pro" : "warning"}
+                    >
                       <div className="reward-card-head">
                         {card.cardType === "IMAGE" ? (
                           <Gift size={18} aria-hidden="true" />
@@ -4276,7 +4368,7 @@ export function App() {
                           删除
                         </button>
                       </div>
-                    </article>
+                    </GlassPanel>
                   ))}
                 </div>
               ) : (
@@ -4535,12 +4627,12 @@ export function App() {
                   <p>{session.user.membership?.plan ?? "FREE"} 计划</p>
                   <div className="metric-grid">
                     {accountQuotaMetrics.map(([label, quota]) => (
-                      <div className="metric-card neutral" key={label}>
-                        <span>{label}</span>
-                        <strong>
-                          {quota.used}/{quota.limit}
-                        </strong>
-                      </div>
+                      <GlassMetricCard
+                        key={label}
+                        label={label}
+                        tone={quota.used >= quota.limit ? "warning" : "neutral"}
+                        value={`${quota.used}/${quota.limit}`}
+                      />
                     ))}
                   </div>
                   <div className="data-export-box">
@@ -4874,10 +4966,12 @@ export function App() {
                         ["待发邮件", adminOverview.metrics.queuedEmails],
                         ["后台角色", adminOverview.admin.role]
                       ].map(([label, value]) => (
-                        <div className="metric-card" key={label}>
-                          <span>{label}</span>
-                          <strong>{value}</strong>
-                        </div>
+                        <GlassMetricCard
+                          key={String(label)}
+                          label={String(label)}
+                          tone={label === "风险目标" || label === "失败 AI 任务" ? "warning" : "neutral"}
+                          value={value}
+                        />
                       ))}
                     </div>
                   </section>

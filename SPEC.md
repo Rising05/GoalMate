@@ -1738,11 +1738,11 @@ API 要求：
 
 阶段 G：Web UI 和动效产品化。
 
-- 基于 React / Vite 现有前端引入 `liquid-glass-react`，封装项目内部 Glass 组件层，避免业务代码直接依赖第三方参数。
-- 重构视觉基础：颜色 token、层级 token、阴影 / 高光 token、动效 token、响应式布局约束和 `prefers-reduced-motion` 降级。
-- 重点升级目标驾驶舱、今日任务、计划确认、健康报告、成长时间线、奖励愿景板、账号页和移动端导航。
-- 管理后台只做导航、筛选、表格、状态徽标和审计详情的可读性优化，不套用强玻璃视觉。
-- 补 Playwright 视觉巡检：桌面 / 移动端打开核心页面，检查文本不重叠、按钮可点击、玻璃背景可读、管理员入口权限展示正确。
+- 已基于 React / Vite 前端引入 `liquid-glass-react`，并新增内部 `GlassPanel / GlassButton / GlassNav / GlassMetricCard / GlassStatusBadge` 封装层，业务页面不直接散落第三方折射参数。
+- 已落地颜色 token、稳定 / 预警 / 危险 / Pro / 管理后台语义色、轻玻璃 / 操作玻璃 / 强调玻璃层级、阴影 / 高光 / 边框 token、hover / click / 完成 / 救援动效 token，以及 Safari / Firefox / 无 backdrop-filter fallback 和 `prefers-reduced-motion` 降级。
+- 已重点升级目标驾驶舱、AI job 状态面板、计划确认摘要与统计、今日偏差提醒、救援任务卡、完成按钮、健康指标、成长时间线日汇总、奖励愿景板卡片、账号额度和后台摘要指标；热力图格子和长列表仍保持普通高可读容器。
+- 管理后台保持低装饰、高信息密度，仅复用轻量指标卡和状态语义，不套强玻璃视觉。
+- 已通过 Browser 桌面 / 390px 移动视口检查基础页面无水平溢出；已通过 Playwright e2e 覆盖普通用户后台入口不可见、ACTIVE 管理员后台入口可见、AI job 取消和新用户核心闭环，验证按钮可点击且玻璃层未拦截交互。
 
 阶段 H：完整版最终闭合。
 
@@ -1757,16 +1757,16 @@ API 要求：
 
 以下清单是从当前实现到完整版完成的剩余工作顺序。每一项完成后都必须同步 SPEC、补测试、运行验收命令、提交并推送 `main`。
 
-1. UI 设计系统和 Liquid Glass 基础层
-   - 引入 `liquid-glass-react`。
-   - 封装内部 `GlassPanel / GlassButton / GlassNav / GlassMetricCard`。
-   - 建立颜色、层级、动效、降级和可访问性 token。
-   - 验收：核心页面在 Chrome 桌面 / 移动截图无遮挡、无不可读文本，`prefers-reduced-motion` 生效。
+1. UI 设计系统和 Liquid Glass 基础层（已完成本阶段）
+   - 已引入 `liquid-glass-react`。
+   - 已封装内部 `GlassPanel / GlassButton / GlassNav / GlassMetricCard / GlassStatusBadge`。
+   - 已建立颜色、层级、动效、降级和可访问性 token。
+   - 验收：`npm run typecheck`、`npm run build`、`npm run test:e2e` 已通过；Browser 桌面 / 390px 移动视口基础检查无水平溢出。
 
-2. 核心 Web 页面视觉升级
-   - 目标驾驶舱、目标切换、今日任务、计划确认、AI job 状态、健康报告、热力图、成长时间线、奖励愿景板升级为统一视觉。
+2. 核心 Web 页面视觉升级（已完成本阶段）
+   - 已升级目标驾驶舱、目标切换、今日任务、计划确认、AI job 状态、健康报告指标、成长时间线日汇总、奖励愿景板、账号页和后台摘要；热力图格子不启用 Liquid Glass。
    - 管理后台保持低装饰、高信息密度。
-   - 验收：Playwright 走核心页面并截图；普通用户仍不显示后台入口，ACTIVE 管理员显示入口。
+   - 验收：Playwright 核心页面流程通过；普通用户仍不显示后台入口，ACTIVE 管理员显示入口。
 
 3. AI worker 补齐
    - `CHECKIN_SCORE_APPEAL` 改为 worker 可消费。

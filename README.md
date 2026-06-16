@@ -28,7 +28,8 @@ The MVP now covers the core GoalPilot AI loop:
 4. Health report rescue metrics and daily `health_snapshots` for future trend charts.
 5. AI provider abstraction with Mock default, optional DeepSeek provider, AI job status lookup/cancellation with web polling, scoring/mail provider abstractions, BullMQ/Redis queue metadata, and opt-in AI/email/report workers for plan, check-in scoring, reminder, health snapshot, and trend summary jobs.
 6. Privacy deletion endpoints, current-user data export, and upload evidence metadata endpoints for Web/WeChat check-in evidence.
-7. Playwright E2E coverage for the new-user MVP loop from registration through plan confirmation, check-in, rescue task, heatmap, timeline, and API data assertions.
+7. Liquid Glass web foundation with internal Glass components, semantic status/metric tokens, reduced-motion/fallback styling, and upgraded goal cockpit, plan review, today tasks, AI job status, timeline, rewards, account, and admin summary surfaces.
+8. Playwright E2E coverage for the new-user MVP loop from registration through plan confirmation, check-in, rescue task, heatmap, timeline, and API data assertions.
 
 Useful optional environment variables for the API:
 
