@@ -4,6 +4,7 @@ import { QueueService } from "../queue/queue.service";
 import { AiJobsService } from "./ai-jobs.service";
 
 const CHECKIN_SCORING = "CHECKIN_SCORING";
+const CHECKIN_SCORE_APPEAL = "CHECKIN_SCORE_APPEAL";
 
 @Injectable()
 export class AiJobsWorker implements OnModuleInit {
@@ -30,6 +31,10 @@ export class AiJobsWorker implements OnModuleInit {
 
       if (data.type === CHECKIN_SCORING) {
         return this.dailyTasksService.processQueuedCheckinScoringJob(jobId);
+      }
+
+      if (data.type === CHECKIN_SCORE_APPEAL) {
+        return this.dailyTasksService.processQueuedScoreAppealJob(jobId);
       }
 
       return this.aiJobsService.processQueuedAiJob(jobId);

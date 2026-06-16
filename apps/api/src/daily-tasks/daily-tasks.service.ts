@@ -821,6 +821,51 @@ export class DailyTasksService {
       throw new NotFoundException("复盘评分不存在");
     }
 
+    if (this.shouldQueueScoreAppeal()) {
+      const { appeal, job } = await this.prisma.$transaction(async (tx) => {
+        const createdAppeal = await tx.scoreAppeal.create({
+          data: {
+            userId,
+            checkinId: checkin.id,
+            reason: payload.reason,
+            addedFacts: payload.addedFacts,
+            status: "PENDING",
+            originalScore: checkin.aiScore!.totalScore,
+            newScore: checkin.aiScore!.totalScore,
+            evidence: {
+              queued: true,
+              provider: "mock"
+            }
+          }
+        });
+        const createdJob = await tx.aiJob.create({
+          data: {
+            userId,
+            goalId: checkin.goalId,
+            type: CHECKIN_SCORE_APPEAL,
+            status: "QUEUED",
+            payload: {
+              checkinId: checkin.id,
+              appealId: createdAppeal.id,
+              provider: "mock"
+            }
+          }
+        });
+
+        return {
+          appeal: createdAppeal,
+          job: createdJob
+        };
+      });
+      const queuedJob = await this.attachQueueMetadata(job);
+
+      return {
+        appeal: this.serializeScoreAppeal(appeal),
+        checkin: this.serializeCheckin(checkin, hasDetailedAiAnalysis),
+        job: this.serializeAiJob(queuedJob)
+      };
+    }
+
     const appealResult = this.getMockAppealResult(payload, checkin.aiScore.totalScore);
     const { appeal, updatedCheckin, job } = await this.prisma.$transaction(async (tx) => {
       const createdAppeal = await tx.scoreAppeal.create({
@@ -892,6 +937,197 @@ export class DailyTasksService {
     };
   }
 
+  async processQueuedScoreAppealJob(id: string) {
+    const job = await this.prisma.aiJob.findUnique({
+      where: { id }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    if (job.type !== CHECKIN_SCORE_APPEAL) {
+      throw new BadRequestException(`不支持的评分申诉任务类型：${job.type}`);
+    }
+
+    if (job.status !== "QUEUED") {
+      return {
+        job: this.serializeAiJob(job),
+        processed: false,
+        reason: "AI job is not queued."
+      };
+    }
+
+    const payload = this.jsonObject(job.payload);
+    const checkinId = typeof payload.checkinId === "string" ? payload.checkinId : "";
+    const appealId = typeof payload.appealId === "string" ? payload.appealId : "";
+    const [checkin, appeal] = await Promise.all([
+      this.prisma.checkin.findFirst({
+        where: {
+          id: checkinId,
+          userId: job.userId
+        },
+        include: {
+          aiScore: true
+        }
+      }),
+      this.prisma.scoreAppeal.findFirst({
+        where: {
+          id: appealId,
+          userId: job.userId,
+          checkinId
+        }
+      })
+    ]);
+
+    if (!checkin || !checkin.aiScore || !appeal) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: "Queued score appeal job is missing its check-in, score, or appeal."
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        appeal: appeal ? this.serializeScoreAppeal(appeal) : null,
+        checkin: null
+      };
+    }
+
+    if (["RESCORED", "APPEAL_REJECTED"].includes(appeal.status)) {
+      const succeededJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "SUCCEEDED",
+          result: this.toJson({
+            checkinId: checkin.id,
+            appealId: appeal.id,
+            status: appeal.status,
+            originalScore: appeal.originalScore,
+            newScore: appeal.newScore,
+            idempotent: true
+          }),
+          error: null
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(succeededJob),
+        processed: true,
+        appeal: this.serializeScoreAppeal(appeal),
+        checkin: this.serializeCheckin(
+          checkin,
+          await this.hasDetailedAiAnalysis(job.userId)
+        )
+      };
+    }
+
+    const runningJob = await this.prisma.aiJob.update({
+      where: { id: job.id },
+      data: {
+        status: "RUNNING",
+        attempts: {
+          increment: 1
+        }
+      }
+    });
+
+    try {
+      const appealResult = this.getMockAppealResult(
+        {
+          reason: appeal.reason,
+          addedFacts: appeal.addedFacts
+        },
+        checkin.aiScore.totalScore
+      );
+      const { changedAppeal, changedCheckin, succeededJob } =
+        await this.prisma.$transaction(async (tx) => {
+          const updatedAppeal = await tx.scoreAppeal.update({
+            where: { id: appeal.id },
+            data: {
+              status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED",
+              newScore: appealResult.newScore,
+              evidence: appealResult.evidence
+            }
+          });
+
+          if (appealResult.accepted) {
+            await tx.aiScore.update({
+              where: { id: checkin.aiScore!.id },
+              data: {
+                totalScore: appealResult.newScore,
+                dimensions: appealResult.dimensions,
+                evidence: appealResult.evidence,
+                summary: appealResult.summary,
+                suggestion: appealResult.suggestion
+              }
+            });
+          }
+
+          const updatedCheckin = await tx.checkin.update({
+            where: { id: checkin.id },
+            data: {
+              status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED"
+            },
+            include: {
+              aiScore: true
+            }
+          });
+          const completedJob = await tx.aiJob.update({
+            where: { id: runningJob.id },
+            data: {
+              status: "SUCCEEDED",
+              result: this.toJson({
+                checkinId: checkin.id,
+                appealId: appeal.id,
+                accepted: appealResult.accepted,
+                originalScore: checkin.aiScore!.totalScore,
+                newScore: appealResult.newScore
+              }),
+              error: null
+            }
+          });
+
+          return {
+            changedAppeal: updatedAppeal,
+            changedCheckin: updatedCheckin,
+            succeededJob: completedJob
+          };
+        });
+
+      return {
+        job: this.serializeAiJob(succeededJob),
+        processed: true,
+        appeal: this.serializeScoreAppeal(changedAppeal),
+        checkin: this.serializeCheckin(
+          changedCheckin,
+          await this.hasDetailedAiAnalysis(job.userId)
+        )
+      };
+    } catch (error) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: runningJob.id },
+        data: {
+          status: "FAILED",
+          error: error instanceof Error ? error.message : "Score appeal failed"
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        appeal: this.serializeScoreAppeal(appeal),
+        checkin: this.serializeCheckin(
+          checkin,
+          await this.hasDetailedAiAnalysis(job.userId)
+        )
+      };
+    }
+  }
+
   private async attachQueueMetadata(job: AiJob) {
     const payload = this.jsonObject(job.payload);
 
@@ -935,6 +1171,10 @@ export class DailyTasksService {
 
   private shouldQueueCheckinScoring() {
     return process.env.CHECKIN_SCORING_ASYNC === "true";
+  }
+
+  private shouldQueueScoreAppeal() {
+    return process.env.SCORE_APPEAL_ASYNC === "true";
   }
 
   private taskInclude() {
