@@ -281,6 +281,7 @@ const aiJobTypeLabels: Record<string, string> = {
   GOAL_PLAN_REPLAN: "计划调整",
   CHECKIN_SCORING: "打卡评分",
   CHECKIN_SCORE_APPEAL: "评分复评",
+  RESCUE_TASK_GENERATION: "救援任务",
   SCORE_CHECKIN: "打卡评分",
   SEND_EMAIL: "邮件发送"
 };
@@ -1194,6 +1195,18 @@ export function App() {
             void loadGoalPlan(session.token, response.job.goalId);
           }
         }
+
+        if (
+          response.job.status === "SUCCEEDED" &&
+          response.job.goalId &&
+          response.job.type === "RESCUE_TASK_GENERATION"
+        ) {
+          void refreshDailyTaskData(
+            session.token,
+            heatmapYear,
+            response.job.goalId
+          );
+        }
       } catch (error) {
         if (!stopped) {
           setAiJobMessage(
@@ -2095,14 +2108,30 @@ export function App() {
     try {
       const response = await generateRescueTask(session.token, goalId);
 
-      setRescueTask(response.rescueTask);
+      if (response.job) {
+        setTrackedAiJob(response.job);
+        setAiJobMessage(
+          response.job.status === "QUEUED"
+            ? "救援任务已进入 AI 队列，完成后会刷新今日任务。"
+            : `救援任务 AI job：${aiJobStatusLabels[response.job.status] ?? response.job.status}`
+        );
+      }
+
+      if (response.rescueTask) {
+        setRescueTask(response.rescueTask);
+      }
+
       setGoalHealth((current) =>
         current && current.goalId === response.goalId
           ? { ...current, deviation: response.deviation }
           : current
       );
       await refreshDailyTaskData(session.token, heatmapYear, response.goalId);
-      setDailyTaskMessage("救援任务已保存到今日任务，可以直接完成。");
+      setDailyTaskMessage(
+        response.rescueTask
+          ? "救援任务已保存到今日任务，可以直接完成。"
+          : "救援任务已进入生成队列，请稍后查看今日任务。"
+      );
     } catch (error) {
       setDailyTaskMessage(
         error instanceof Error ? error.message : "救援任务生成失败"

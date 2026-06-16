@@ -1,6 +1,7 @@
-import { Module } from "@nestjs/common";
+import { forwardRef, Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { DailyTasksModule } from "../daily-tasks/daily-tasks.module";
+import { GoalsModule } from "../goals/goals.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { QueueModule } from "../queue/queue.module";
 import { AiJobsController } from "./ai-jobs.controller";
@@ -11,7 +12,13 @@ import { MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER } from "./plan-provider";
 
 @Module({
-  imports: [AuthModule, PrismaModule, QueueModule, DailyTasksModule],
+  imports: [
+    AuthModule,
+    PrismaModule,
+    QueueModule,
+    DailyTasksModule,
+    forwardRef(() => GoalsModule)
+  ],
   controllers: [AiJobsController],
   providers: [
     AiJobsService,

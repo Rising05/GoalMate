@@ -6,6 +6,7 @@ import {
   Optional
 } from "@nestjs/common";
 import {
+  AiJob,
   AiScore,
   Checkin,
   DailyTask,
@@ -74,6 +75,7 @@ const CATEGORY_MAP: Record<string, GoalCategory> = {
 
 const DONE_STATUS = "DONE";
 const RESCUE_TASK_TYPE = "RESCUE";
+const RESCUE_TASK_GENERATION = "RESCUE_TASK_GENERATION";
 const PENDING_STATUS = "PENDING";
 const SETTLEABLE_GOAL_STATUSES: GoalStatus[] = ["ACTIVE", "AT_RISK", "REPLANNING"];
 const REPORT_TYPES = ["HEALTH_SNAPSHOT", "WEEKLY_TREND", "MONTHLY_TREND"] as const;
@@ -142,6 +144,16 @@ interface HealthRescueMetrics {
   rescueNextDayRecovered: boolean | null;
   nextDayNormalTaskCompletionRate: number | null;
   lastCompletedRescueTaskId: string | null;
+}
+
+interface RescueTaskGenerationContext {
+  goal: Goal;
+  todayStart: Date;
+  todayEnd: Date;
+  deviation: DeviationSignal;
+  sourceTask: DailyTask | null;
+  existingRescueTask: DailyTask | null;
+  deviationEvent: DeviationEvent | null;
 }
 
 @Injectable()
@@ -698,7 +710,235 @@ export class GoalsService {
     }
   }
 
+  private async attachAiJobQueueMetadata(job: AiJob) {
+    const payload = this.jsonObject(job.payload);
+
+    try {
+      const queue = await this.queueService?.enqueueAiJob({
+        jobId: job.id,
+        type: job.type,
+        goalId: job.goalId,
+        userId: job.userId
+      });
+
+      return this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          payload: this.toJson({
+            ...payload,
+            queue: queue ?? {
+              queued: false,
+              queueName: "ai-jobs",
+              reason: "Queue service is not configured."
+            }
+          })
+        }
+      });
+    } catch (error) {
+      return this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          payload: this.toJson({
+            ...payload,
+            queue: {
+              queued: false,
+              queueName: "ai-jobs",
+              error: error instanceof Error ? error.message : "Queue enqueue failed"
+            }
+          })
+        }
+      });
+    }
+  }
+
+  private shouldQueueRescueTask() {
+    return process.env.RESCUE_TASK_ASYNC === "true";
+  }
+
   async generateRescueTask(userId: string, id: string) {
+    const context = await this.getRescueTaskGenerationContext(userId, id);
+
+    if (this.shouldQueueRescueTask()) {
+      const job = await this.prisma.aiJob.create({
+        data: {
+          userId,
+          goalId: context.goal.id,
+          type: RESCUE_TASK_GENERATION,
+          status: "QUEUED",
+          payload: {
+            goalId: context.goal.id,
+            deviationEventId: context.deviationEvent?.id ?? null,
+            riskLevel: context.deviation.riskLevel,
+            triggerReason: context.deviation.reasons[0]?.label ?? null,
+            triggerCode: context.deviation.reasons[0]?.code ?? null,
+            provider: "mock-rescue"
+          }
+        }
+      });
+      const queuedJob = await this.attachAiJobQueueMetadata(job);
+
+      return {
+        goalId: context.goal.id,
+        goalTitle: context.goal.title,
+        deviation: this.serializeDeviationSignal(
+          context.deviation,
+          context.deviationEvent
+        ),
+        rescueTask: null as never,
+        job: this.serializeAiJob(queuedJob)
+      };
+    }
+
+    const result = await this.persistRescueTaskFromContext(context);
+    const job = await this.prisma.aiJob.create({
+      data: {
+        userId,
+        goalId: context.goal.id,
+        type: RESCUE_TASK_GENERATION,
+        status: "SUCCEEDED",
+        attempts: 1,
+        payload: {
+          goalId: context.goal.id,
+          deviationEventId: context.deviationEvent?.id ?? null,
+          riskLevel: context.deviation.riskLevel,
+          triggerReason: context.deviation.reasons[0]?.label ?? null,
+          triggerCode: context.deviation.reasons[0]?.code ?? null,
+          provider: "mock-rescue",
+          mode: "sync-compatible"
+        },
+        result: {
+          rescueTaskId: result.rescueTask.id,
+          deviationEventId: result.deviation.eventId,
+          riskLevel: result.deviation.riskLevel,
+          fallback: false
+        }
+      }
+    });
+
+    return {
+      ...result,
+      job: this.serializeAiJob(job)
+    };
+  }
+
+  async processQueuedRescueTaskJob(id: string) {
+    const job = await this.prisma.aiJob.findUnique({
+      where: { id }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    if (job.type !== RESCUE_TASK_GENERATION) {
+      throw new BadRequestException(`不支持的救援任务类型：${job.type}`);
+    }
+
+    if (job.status !== "QUEUED") {
+      return {
+        job: this.serializeAiJob(job),
+        processed: false,
+        reason: "AI job is not queued."
+      };
+    }
+
+    const payload = this.jsonObject(job.payload);
+    const goalId = typeof payload.goalId === "string" ? payload.goalId : job.goalId;
+
+    if (!goalId) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: "Queued rescue task job is missing goalId."
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        rescueTask: null
+      };
+    }
+
+    let context: RescueTaskGenerationContext;
+
+    try {
+      context = await this.getRescueTaskGenerationContext(job.userId, goalId);
+    } catch (error) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "FAILED",
+          error: error instanceof Error ? error.message : "Rescue task context failed"
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        rescueTask: null
+      };
+    }
+
+    const runningJob = await this.prisma.aiJob.update({
+      where: { id: job.id },
+      data: {
+        status: "RUNNING",
+        attempts: {
+          increment: 1
+        }
+      }
+    });
+    const providerError =
+      payload.simulateProviderFailure === true
+        ? "simulated rescue provider failure"
+        : null;
+
+    try {
+      const result = await this.persistRescueTaskFromContext(context);
+      const succeededJob = await this.prisma.aiJob.update({
+        where: { id: runningJob.id },
+        data: {
+          status: "SUCCEEDED",
+          result: {
+            rescueTaskId: result.rescueTask.id,
+            deviationEventId: result.deviation.eventId,
+            riskLevel: result.deviation.riskLevel,
+            fallback: Boolean(providerError),
+            providerError
+          },
+          error: providerError
+        }
+      });
+
+      return {
+        ...result,
+        job: this.serializeAiJob(succeededJob),
+        processed: true,
+        fallback: Boolean(providerError)
+      };
+    } catch (error) {
+      const failedJob = await this.prisma.aiJob.update({
+        where: { id: runningJob.id },
+        data: {
+          status: "FAILED",
+          error: error instanceof Error ? error.message : "Rescue task generation failed"
+        }
+      });
+
+      return {
+        job: this.serializeAiJob(failedJob),
+        processed: true,
+        rescueTask: null
+      };
+    }
+  }
+
+  private async getRescueTaskGenerationContext(
+    userId: string,
+    id: string
+  ): Promise<RescueTaskGenerationContext> {
     const context = await this.getGoalHealthContext(userId, id);
     const {
       goal,
@@ -758,6 +998,22 @@ export class GoalsService {
         todayStart,
         todayEnd: context.todayEnd
       }));
+    return {
+      goal,
+      todayStart,
+      todayEnd: context.todayEnd,
+      deviation,
+      sourceTask,
+      existingRescueTask,
+      deviationEvent
+    };
+  }
+
+  private async persistRescueTaskFromContext(
+    context: RescueTaskGenerationContext
+  ) {
+    const { goal, todayStart, deviation, sourceTask, existingRescueTask, deviationEvent } =
+      context;
     const rescueTaskDraft = this.buildMockRescueTask(goal, deviation);
     const rescueTask = existingRescueTask
       ? existingRescueTask.deviationEventId || !deviationEvent
@@ -1992,6 +2248,22 @@ export class GoalsService {
     return `${year}-${month}-${day}`;
   }
 
+  private serializeAiJob(job: AiJob) {
+    return {
+      id: job.id,
+      userId: job.userId,
+      goalId: job.goalId,
+      type: job.type,
+      status: job.status,
+      attempts: job.attempts,
+      payload: job.payload,
+      result: job.result,
+      error: job.error,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString()
+    };
+  }
+
   private serializeGoal(goal: Goal) {
     return {
       id: goal.id,
@@ -2044,8 +2316,10 @@ export class GoalsService {
     return Array.isArray(value) ? value : [];
   }
 
-  private jsonObject(value: unknown) {
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  private jsonObject(value: unknown): Record<string, unknown> {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
   }
 
   private serializeDeviationSignal(

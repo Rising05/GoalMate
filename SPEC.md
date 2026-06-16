@@ -348,6 +348,7 @@ MVP 新增接口：
 - `POST /goals/:id/rescue-task`
 - 请求需要登录态，不需要请求体。
 - 响应包含 `goalId`、`goalTitle`、最新 `deviation` 和 `rescueTask`。
+- 当 `RESCUE_TASK_ASYNC=true` 时，接口会先创建 `RESCUE_TASK_GENERATION` AI job 并返回 `job`，此时 `rescueTask` 可为 `null`；worker 成功后救援任务会作为 `taskType=RESCUE` 的每日任务落库，前端通过 AI job 轮询刷新今日任务。
 
 MVP `rescueTask` 字段：
 
@@ -1402,6 +1403,8 @@ AI Provider 要求：
 - 已补 `DailyTasksService scoring worker integration`，覆盖异步打卡创建 queued job、worker 成功评分、终态幂等跳过，以及 provider 失败时 job/checkin 状态落库。
 - `AiJobsWorker` 已能按 job type 分发 `CHECKIN_SCORE_APPEAL` 到 `DailyTasksService.processQueuedScoreAppealJob`；设置 `SCORE_APPEAL_ASYNC=true` 后，评分申诉会先创建 `PENDING` appeal 和 `QUEUED` AI job，由 worker 推进到 `RUNNING / SUCCEEDED / FAILED`，成功时更新 appeal、checkin 和 ai_score。
 - 已补 `DailyTasksService score appeal integration`，覆盖同步兼容路径、异步申诉 worker 成功复评、终态重复消费幂等跳过、缺失 payload 失败落库，以及跨用户 payload 隔离。
+- `AiJobsWorker` 已能按 job type 分发 `RESCUE_TASK_GENERATION` 到 `GoalsService.processQueuedRescueTaskJob`；设置 `RESCUE_TASK_ASYNC=true` 后，救援任务生成会先创建 `QUEUED` AI job，由 worker 推进到 `RUNNING / SUCCEEDED / FAILED`，成功时创建或复用当日救援任务，provider 失败时落库错误并使用规则兜底生成救援任务。
+- 已补 `GoalsService rescue task integration`，覆盖异步救援任务入队、worker 成功生成、provider 失败规则兜底、终态重复消费幂等和跨用户 job owner 隔离。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
 - 已补 `NotificationsService integration`，覆盖单条邮件 worker 路径成功、重复消费幂等、失败保持 queued 等待重试，以及最终 attempt 失败落库。
 - 已新增 `POST /goals/:id/health-snapshots/enqueue`，当前用户可把自己的目标健康快照报告任务写入 `reports` 队列；当 BullMQ 未启用时返回 disabled queue metadata，便于本地和测试闭环。
@@ -1409,7 +1412,7 @@ AI Provider 要求：
 - 已新增 `POST /goals/:id/health-trends`，基于已有 `health_snapshots` 返回周 / 月趋势摘要：周期范围、快照数量、平均健康分、上一周期均分、分数变化、趋势方向、风险计数、主导风险、最新快照和简短洞察。
 - `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 生成 / 更新当日健康快照，消费 `WEEKLY_TREND / MONTHLY_TREND` 生成周 / 月趋势摘要。
 - 已补 `GoalsService health snapshots integration` 和 `QueueService integration`，覆盖报告任务入队 disabled metadata、worker 处理健康快照、重复处理幂等 upsert、周 / 月趋势摘要、趋势 worker 路径和不支持的报告任务拒绝。
-- 剩余风险：Report worker 当前趋势摘要暂不持久化报告正文，周报 / 月报的可下载文件、AI 文案润色和长期趋势图仍待补齐；AI worker 当前覆盖计划生成、重规划、opt-in 打卡评分和 opt-in 申诉复评，救援建议、失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
+- 剩余风险：Report worker 当前趋势摘要暂不持久化报告正文，周报 / 月报的可下载文件、AI 文案润色和长期趋势图仍待补齐；AI worker 当前覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评和 opt-in 救援任务生成，失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
 
 AI job 状态需要支持：
 
@@ -1772,9 +1775,11 @@ API 要求：
 
 3. AI worker 补齐
    - `CHECKIN_SCORE_APPEAL` 改为 worker 可消费。（已完成）
-   - 救援任务建议和失败复盘生成支持 AI job、重试、失败落库和管理员重试。
+   - `RESCUE_TASK_GENERATION` 改为 worker 可消费，支持 job 状态流转、失败落库、规则兜底和前端轮询刷新。（已完成）
+   - 失败复盘生成支持 AI job、重试、失败落库和管理员重试。
    - 周 / 月报告增加 AI 文案润色和可下载报告 artifact。
    - 申诉 worker 验收：`node --import tsx --test src/daily-tasks/daily-tasks.appeal.integration.test.ts` 已覆盖成功、失败、幂等和跨用户隔离；管理员重试随通用 AI job retry 保留。
+   - 救援任务 worker 验收：`node --import tsx --test src/goals/goals.service.integration.test.ts` 已覆盖入队、worker 成功、provider 失败兜底和跨用户隔离；管理员重试随通用 AI job retry 保留。
 
 4. 真实提醒 provider
    - 接入真实邮件 provider 抽象实现，配置发件人、模板、失败原因和退避重试。

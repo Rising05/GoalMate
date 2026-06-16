@@ -1878,7 +1878,8 @@ export async function generateRescueTask(token: string, goalId: string) {
     goalId: string;
     goalTitle: string;
     deviation: DeviationSignal;
-    rescueTask: RescueTask;
+    rescueTask: RescueTask | null;
+    job?: AiJob;
   }>(response);
 
   if (!response.ok) {
@@ -1889,7 +1890,8 @@ export async function generateRescueTask(token: string, goalId: string) {
     goalId: string;
     goalTitle: string;
     deviation: DeviationSignal;
-    rescueTask: RescueTask;
+    rescueTask: RescueTask | null;
+    job?: AiJob;
   };
 }
 

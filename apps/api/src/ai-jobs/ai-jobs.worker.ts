@@ -1,10 +1,12 @@
 import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
 import { DailyTasksService } from "../daily-tasks/daily-tasks.service";
+import { GoalsService } from "../goals/goals.service";
 import { QueueService } from "../queue/queue.service";
 import { AiJobsService } from "./ai-jobs.service";
 
 const CHECKIN_SCORING = "CHECKIN_SCORING";
 const CHECKIN_SCORE_APPEAL = "CHECKIN_SCORE_APPEAL";
+const RESCUE_TASK_GENERATION = "RESCUE_TASK_GENERATION";
 
 @Injectable()
 export class AiJobsWorker implements OnModuleInit {
@@ -14,7 +16,9 @@ export class AiJobsWorker implements OnModuleInit {
     @Inject(AiJobsService)
     private readonly aiJobsService: AiJobsService,
     @Inject(DailyTasksService)
-    private readonly dailyTasksService: DailyTasksService
+    private readonly dailyTasksService: DailyTasksService,
+    @Inject(GoalsService)
+    private readonly goalsService: GoalsService
   ) {}
 
   onModuleInit() {
@@ -35,6 +39,10 @@ export class AiJobsWorker implements OnModuleInit {
 
       if (data.type === CHECKIN_SCORE_APPEAL) {
         return this.dailyTasksService.processQueuedScoreAppealJob(jobId);
+      }
+
+      if (data.type === RESCUE_TASK_GENERATION) {
+        return this.goalsService.processQueuedRescueTaskJob(jobId);
       }
 
       return this.aiJobsService.processQueuedAiJob(jobId);

@@ -4,6 +4,7 @@ import { after, before, describe, it } from "node:test";
 import { DailyTasksService } from "../daily-tasks/daily-tasks.service";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
+import { QueueService } from "../queue/queue.service";
 import { GoalsService } from "./goals.service";
 
 loadEnv();
@@ -149,6 +150,129 @@ describe("GoalsService.generateRescueTask integration", () => {
     assert.equal(rescueReviewItem.checkin?.id, completed.checkin.id);
     assert.equal(rescueReviewItem.aiScore?.totalScore, completed.checkin.aiScore?.totalScore);
   });
+
+  it("queues rescue task generation and processes it through the worker path", async () => {
+    const previousAsync = process.env.RESCUE_TASK_ASYNC;
+    const previousBullMq = process.env.BULLMQ_ENABLED;
+    process.env.RESCUE_TASK_ASYNC = "true";
+    process.env.BULLMQ_ENABLED = "false";
+    const queueService = new QueueService();
+    const service = new GoalsService(prisma, queueService);
+    const { goal } = await createActiveGoalWithTodayTask("async-worker");
+
+    try {
+      const queued = await service.generateRescueTask(goal.userId, goal.id);
+      const queuedJob = await prisma.aiJob.findUniqueOrThrow({
+        where: { id: queued.job.id }
+      });
+      const processed = await service.processQueuedRescueTaskJob(queued.job.id);
+      const repeated = await service.processQueuedRescueTaskJob(queued.job.id);
+      const storedJob = await prisma.aiJob.findUniqueOrThrow({
+        where: { id: queued.job.id }
+      });
+
+      assert.equal(queued.rescueTask, null);
+      assert.equal(queued.job.type, "RESCUE_TASK_GENERATION");
+      assert.equal(queued.job.status, "QUEUED");
+      assert.equal(
+        (queuedJob.payload as { riskLevel?: string }).riskLevel,
+        "danger"
+      );
+      assert.equal(
+        (queuedJob.payload as { triggerCode?: string }).triggerCode,
+        "LOW_INVESTMENT"
+      );
+      assert.equal(processed.processed, true);
+      assert.equal(processed.job.status, "SUCCEEDED");
+      assert.equal(processed.rescueTask?.taskType, "RESCUE");
+      assert.equal(processed.rescueTask?.deviationEventId, queued.deviation.eventId);
+      assert.equal(storedJob.status, "SUCCEEDED");
+      assert.equal(
+        (storedJob.result as { rescueTaskId?: string }).rescueTaskId,
+        processed.rescueTask?.id
+      );
+      assert.equal(repeated.processed, false);
+    } finally {
+      await queueService.onModuleDestroy();
+      restoreEnv("RESCUE_TASK_ASYNC", previousAsync);
+      restoreEnv("BULLMQ_ENABLED", previousBullMq);
+    }
+  });
+
+  it("falls back to rule rescue task generation when the rescue provider fails", async () => {
+    const previousAsync = process.env.RESCUE_TASK_ASYNC;
+    const previousBullMq = process.env.BULLMQ_ENABLED;
+    process.env.RESCUE_TASK_ASYNC = "true";
+    process.env.BULLMQ_ENABLED = "false";
+    const queueService = new QueueService();
+    const service = new GoalsService(prisma, queueService);
+    const { goal } = await createActiveGoalWithTodayTask("async-fallback");
+
+    try {
+      const queued = await service.generateRescueTask(goal.userId, goal.id);
+      const payload = await prisma.aiJob.findUniqueOrThrow({
+        where: { id: queued.job.id },
+        select: { payload: true }
+      });
+      await prisma.aiJob.update({
+        where: { id: queued.job.id },
+        data: {
+          payload: {
+            ...(payload.payload as Record<string, unknown>),
+            simulateProviderFailure: true
+          }
+        }
+      });
+
+      const processed = await service.processQueuedRescueTaskJob(queued.job.id);
+      const storedJob = await prisma.aiJob.findUniqueOrThrow({
+        where: { id: queued.job.id }
+      });
+
+      assert.equal(processed.processed, true);
+      assert.equal(processed.job.status, "SUCCEEDED");
+      assert.equal((processed as { fallback?: boolean }).fallback, true);
+      assert.equal(processed.rescueTask?.taskType, "RESCUE");
+      assert.equal(
+        (storedJob.result as { fallback?: boolean }).fallback,
+        true
+      );
+      assert.match(storedJob.error ?? "", /simulated rescue provider failure/);
+    } finally {
+      await queueService.onModuleDestroy();
+      restoreEnv("RESCUE_TASK_ASYNC", previousAsync);
+      restoreEnv("BULLMQ_ENABLED", previousBullMq);
+    }
+  });
+
+  it("keeps queued rescue task processing isolated by job owner", async () => {
+    const owner = await createActiveGoalWithTodayTask("async-owner");
+    const other = await createActiveGoalWithTodayTask("async-other");
+    const job = await prisma.aiJob.create({
+      data: {
+        userId: owner.goal.userId,
+        goalId: other.goal.id,
+        type: "RESCUE_TASK_GENERATION",
+        status: "QUEUED",
+        payload: {
+          goalId: other.goal.id,
+          provider: "mock-rescue"
+        }
+      }
+    });
+
+    const processed = await goalsService.processQueuedRescueTaskJob(job.id);
+    const otherRescueTaskCount = await prisma.dailyTask.count({
+      where: {
+        goalId: other.goal.id,
+        taskType: "RESCUE"
+      }
+    });
+
+    assert.equal(processed.processed, true);
+    assert.equal(processed.job.status, "FAILED");
+    assert.equal(otherRescueTaskCount, 0);
+  });
 });
 
 async function cleanupTestUsers() {
@@ -218,6 +342,15 @@ function toDateKey(date: Date) {
 
 function toBeijingDate(dateKey: string) {
   return new Date(`${dateKey}T00:00:00.000+08:00`);
+}
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+
+  process.env[key] = value;
 }
 
 function addDays(date: Date, days: number) {
