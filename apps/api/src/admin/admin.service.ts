@@ -134,6 +134,7 @@ export class AdminService {
   async listUsers(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
     const filters = this.parseUserSearchFilters(input);
+    const pagination = this.parsePagination(input);
     const where: Prisma.UserWhereInput = {
       ...(filters.query
         ? {
@@ -176,7 +177,8 @@ export class AdminService {
       this.prisma.user.findMany({
         where,
         orderBy: { createdAt: "desc" },
-        take: 100,
+        skip: pagination.skip,
+        take: pagination.pageSize,
         include: {
           membership: true,
           adminProfile: true,
@@ -194,6 +196,8 @@ export class AdminService {
 
     return {
       total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
       filters,
       users: users.map((user) => ({
         id: user.id,
@@ -217,6 +221,7 @@ export class AdminService {
   async listGoals(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
     const filters = this.parseGoalFilters(input);
+    const pagination = this.parsePagination(input);
     const where: Prisma.GoalWhereInput = {
       ...(filters.query
         ? {
@@ -235,7 +240,8 @@ export class AdminService {
       this.prisma.goal.findMany({
         where,
         orderBy: { updatedAt: "desc" },
-        take: 100,
+        skip: pagination.skip,
+        take: pagination.pageSize,
         include: {
           _count: {
             select: {
@@ -261,6 +267,8 @@ export class AdminService {
 
     return {
       total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
       filters,
       goals: goals.map((goal) =>
         this.serializeAdminGoal(goal, usersById.get(goal.userId))
@@ -271,6 +279,7 @@ export class AdminService {
   async listAiJobs(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
     const filters = this.parseAiJobFilters(input);
+    const pagination = this.parsePagination(input);
     const where: Prisma.AiJobWhereInput = {
       ...(filters.query
         ? {
@@ -289,7 +298,8 @@ export class AdminService {
       this.prisma.aiJob.findMany({
         where,
         orderBy: { createdAt: "desc" },
-        take: 100,
+        skip: pagination.skip,
+        take: pagination.pageSize,
         include: {
           user: { select: { email: true, displayName: true } },
           goal: { select: { title: true, status: true } }
@@ -300,6 +310,8 @@ export class AdminService {
 
     return {
       total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
       filters,
       jobs: jobs.map((job) => this.serializeAiJob(job))
     };
@@ -376,6 +388,7 @@ export class AdminService {
   async listEmailLogs(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
     const filters = this.parseEmailLogFilters(input);
+    const pagination = this.parsePagination(input);
     const where: Prisma.EmailLogWhereInput = {
       ...(filters.query
         ? {
@@ -396,7 +409,8 @@ export class AdminService {
       this.prisma.emailLog.findMany({
         where,
         orderBy: { createdAt: "desc" },
-        take: 100,
+        skip: pagination.skip,
+        take: pagination.pageSize,
         include: {
           user: { select: { email: true, displayName: true } }
         }
@@ -406,9 +420,117 @@ export class AdminService {
 
     return {
       total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
       filters,
       logs: logs.map((log) => this.serializeEmailLog(log, log.user))
     };
+  }
+
+  async listUploadAssets(actorUserId: string, input: unknown = {}) {
+    await this.assertAdmin(actorUserId);
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const pagination = this.parsePagination(input);
+    const query = this.cleanOptionalFilterText(body.query);
+    const status = this.cleanOptionalFilterText(body.status)?.toUpperCase();
+    const where: Prisma.UploadAssetWhereInput = {
+      ...(query ? { OR: [
+        { fileName: { contains: query } },
+        { mimeType: { contains: query } },
+        { user: { email: { contains: query } } }
+      ] } : {}),
+      ...(status ? { status } : {})
+    };
+    const [assets, total] = await Promise.all([
+      this.prisma.uploadAsset.findMany({
+        where, skip: pagination.skip, take: pagination.pageSize,
+        orderBy: { createdAt: "desc" },
+        include: { user: { select: { email: true, displayName: true } } }
+      }),
+      this.prisma.uploadAsset.count({ where })
+    ]);
+    return {
+      total, page: pagination.page, pageSize: pagination.pageSize,
+      assets: assets.map((asset) => ({
+        id: asset.id, userId: asset.userId, userEmail: asset.user.email,
+        fileName: asset.fileName, mimeType: asset.mimeType, sizeBytes: asset.sizeBytes,
+        source: asset.source, purpose: asset.purpose, status: asset.status,
+        scanStatus: asset.scanStatus, storageProvider: asset.storageProvider,
+        createdAt: asset.createdAt.toISOString()
+      }))
+    };
+  }
+
+  async listPaymentEvents(actorUserId: string, input: unknown = {}) {
+    await this.assertAdmin(actorUserId);
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const pagination = this.parsePagination(input);
+    const provider = this.cleanOptionalFilterText(body.provider)?.toUpperCase();
+    const type = this.cleanOptionalFilterText(body.type);
+    const where: Prisma.PaymentEventWhereInput = {
+      ...(provider ? { provider } : {}), ...(type ? { type: { contains: type } } : {})
+    };
+    const [events, total] = await Promise.all([
+      this.prisma.paymentEvent.findMany({
+        where, skip: pagination.skip, take: pagination.pageSize,
+        orderBy: { createdAt: "desc" },
+        include: { user: { select: { email: true } }, order: { select: { status: true, amountCents: true, currency: true } } }
+      }),
+      this.prisma.paymentEvent.count({ where })
+    ]);
+    return {
+      total, page: pagination.page, pageSize: pagination.pageSize,
+      events: events.map((event) => ({
+        id: event.id, orderId: event.orderId, userEmail: event.user.email,
+        provider: event.provider, providerEventId: event.providerEventId,
+        type: event.type, orderStatus: event.order?.status ?? null,
+        amountCents: event.order?.amountCents ?? null, currency: event.order?.currency ?? null,
+        processedAt: event.processedAt?.toISOString() ?? null,
+        createdAt: event.createdAt.toISOString()
+      }))
+    };
+  }
+
+  async listMembershipAudits(actorUserId: string, input: unknown = {}) {
+    await this.assertAdmin(actorUserId);
+    const pagination = this.parsePagination(input);
+    const audits = await this.prisma.membershipAudit.findMany({
+      skip: pagination.skip, take: pagination.pageSize, orderBy: { createdAt: "desc" },
+      include: { user: { select: { email: true } }, actor: { select: { email: true } } }
+    });
+    const total = await this.prisma.membershipAudit.count();
+    return {
+      total, page: pagination.page, pageSize: pagination.pageSize,
+      audits: audits.map((audit) => ({
+        id: audit.id, userEmail: audit.user.email, actorEmail: audit.actor?.email ?? null,
+        action: audit.action, fromPlan: audit.fromPlan, toPlan: audit.toPlan,
+        fromStatus: audit.fromStatus, toStatus: audit.toStatus,
+        expiresAt: audit.expiresAt?.toISOString() ?? null, reason: audit.reason,
+        createdAt: audit.createdAt.toISOString()
+      }))
+    };
+  }
+
+  async retryEmailLog(actorUserId: string, logId: string, input: unknown) {
+    await this.assertAdmin(actorUserId);
+    const payload = this.parseAdminRetryPayload(input);
+    const log = await this.prisma.emailLog.findUnique({ where: { id: logId } });
+    if (!log) throw new NotFoundException("提醒日志不存在");
+    if (log.status !== "FAILED" || log.attempts >= 3) {
+      throw new BadRequestException("只有未耗尽重试次数的失败提醒可以重试");
+    }
+    const updated = await this.prisma.emailLog.update({
+      where: { id: log.id },
+      data: { status: "QUEUED", error: null, errorCode: null, scheduledFor: new Date() }
+    });
+    const queue = await this.queueService?.enqueueEmailLog({
+      emailLogId: updated.id, userId: updated.userId, type: updated.type
+    });
+    await this.createAuditLog(actorUserId, {
+      action: "NOTIFICATION_RETRY", targetType: "EMAIL_LOG", targetId: log.id,
+      reason: payload.reason, metadata: { channel: log.channel, attempts: log.attempts, queue: queue ?? null }
+    });
+    return { log: this.serializeEmailLog(updated), queue: queue ?? null };
   }
 
   async updateMembership(
@@ -686,6 +808,13 @@ export class AdminService {
       plan,
       adminRole
     };
+  }
+
+  private parsePagination(input: unknown) {
+    const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    const page = Math.max(1, Number.isInteger(Number(body.page)) ? Number(body.page) : 1);
+    const pageSize = Math.min(100, Math.max(1, Number.isInteger(Number(body.pageSize)) ? Number(body.pageSize) : 20));
+    return { page, pageSize, skip: (page - 1) * pageSize };
   }
 
   private parseOptionalUserStatus(value: unknown) {

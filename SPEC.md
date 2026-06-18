@@ -1572,10 +1572,10 @@ API 要求：
 当前实现进度：
 
 - 已新增 `20260615103000_add_upload_assets` Prisma migration 和 `upload_assets` 表，保存当前用户上传证据元数据。
-- 已新增 `UploadsModule`：`POST /uploads/evidence` 创建上传证据元数据，`GET /uploads/evidence/:id` 仅允许上传所属用户读取。
+- 已新增 `UploadsModule`：`POST /uploads/evidence` 创建真实上传资产和签名上传 URL，`GET /uploads/evidence/:id` 仅允许上传所属用户读取并返回签名下载 URL。
 - `POST /daily-tasks/:id/complete` 的 `evidenceFiles` 已支持字符串链接或上传 metadata 对象；当传入 `uploadId` 时会校验该上传证据必须属于当前用户且状态为 `READY`。
 - 已补 `UploadsService integration`，覆盖上传 metadata 创建、当前用户读取隔离和非法 MIME / 大小 / URL 校验；已补 `DailyTasksService check-in evidence integration`，覆盖打卡引用本人上传证据和拒绝他人上传证据。
-- 当前仍不实现真实小程序 UI、微信登录 code2session、对象存储直传、病毒扫描或签名 URL 下载；接口和数据结构已为 Web / WeChat 共用上传证据预留。
+- 当前仍不实现真实小程序 UI和微信登录 code2session；Web / WeChat 共用上传资产状态机、签名 URL 和 owner 权限模型已经落地，生产病毒扫描引擎仍需部署时接入。
 
 ### 22.11 管理后台完整版
 
@@ -1605,7 +1605,10 @@ API 要求：
 - 已实现 `GET /admin/goals`、`GET /admin/ai-jobs` 和 `GET /admin/email-logs` 后台筛选参数。
 - 已实现 `POST /admin/ai-jobs/:jobId/retry`；只允许重试 `FAILED` job，要求填写原因，重试动作会写入 `AI_JOB_RETRY` 审计日志。
 - Web 后台 AI jobs 列表已为失败任务提供重试按钮。
-- 当前仍缺复杂报表、筛选结果分页和真实 AI worker 消费重试任务。
+- 用户、目标、AI job、邮件 / 微信提醒日志列表已支持 `page/pageSize` 服务端分页。
+- 已新增后台上传资产、支付事件、会员变更审计列表；Web 后台统一展示资产扫描状态、支付状态和权益变更来源。
+- 已新增失败提醒单条管理员重试，要求原因、校验剩余尝试次数、重新入队并写入 `NOTIFICATION_RETRY` 审计日志；失败 AI / 报告任务继续使用通用 AI job 重试。
+- 当前不做复杂 BI 报表；用户增长、活跃、付费、AI 成本和提醒成功率继续由 overview 指标预留。
 
 超级管理员能力：
 
@@ -1651,7 +1654,7 @@ API 要求：
 - 健康趋势。
 - 救援任务。
 - 失败复盘。
-- 当前实现的导出范围还包括账号资料、会员状态、里程碑、评分申诉、AI job、提醒偏好、邮件 / 微信提醒日志、微信绑定、上传证据元数据、后台身份和当前账号产生的审计日志。
+- 当前实现的导出范围还包括账号资料、会员状态、里程碑、评分申诉、AI job、提醒偏好、邮件 / 微信提醒日志、微信绑定、上传证据元数据、周月报告 artifact、支付订单、支付事件、会员变更、后台身份和当前账号产生的审计日志。
 
 导出格式：
 
@@ -1670,6 +1673,7 @@ API 要求：
 - 用户可以传入 `fullExport=true` 一键完整导出，也可以传入 `fullExport=false` 和 `scopes` 做部分导出。
 - 导出数据不包含 `users.passwordHash`，并通过当前用户 token 隔离目标、任务、打卡、上传证据、AI 评分、提醒和微信绑定数据。
 - 已新增 `AuthService quota integration` 导出用例，覆盖 JSON 部分导出、CSV 文件内容、PDF 报告内容、EXCEL 工作簿内容、打卡证据字段、上传证据元数据、AI 评分、提醒日志、微信绑定、其他用户数据隔离和密码哈希排除。
+- 完整导出只包含当前用户拥有的数据和资产 metadata，不包含私有文件字节、上传签名密钥、密码哈希或他人数据；报告 artifact 正文和支付 / 会员历史可独立选择。
 
 隐私要求：
 
@@ -1832,16 +1836,19 @@ API 要求：
    - 后台手动开通继续可用并写两类审计；支付成功按当前有效到期日顺延，失败支付不授予权益。
    - 验收：2026-06-18 Billing / Admin 定向测试 10/10 通过；Playwright 覆盖 HTTP 创建订单、支付回调和 webhook 重放不重复开通。
 
-7. 管理后台完整版
+7. 管理后台完整版（已完成本阶段）
    - 用户、目标、AI jobs、邮件 / 微信日志、上传资产、会员、支付事件、审计日志分页和筛选。
    - 原文查看继续强制 super-admin + reason + audit log。
    - 管理员重试失败 AI / 邮件 / 报告任务。
+   - 已补用户、目标、AI jobs、邮件 / 微信日志的服务端分页，并新增上传资产、支付事件、会员变更审计列表。
+   - 原文查看继续强制 super-admin + reason + audit log；失败 AI / 报告和提醒支持带原因的管理员重试。
    - 验收：普通用户 API 拒绝；管理员和超级管理员权限分层测试覆盖。
 
-8. 数据导出最终版
+8. 数据导出最终版（已完成本阶段）
    - JSON / CSV / PDF / EXCEL 保持。
    - 增加报告 artifact 下载入口，导出范围可选择任务、打卡、AI 分析、提醒、上传资产、失败复盘、审计相关个人数据。
-   - 验收：不泄露 password hash、他人数据或后台-only 字段。
+   - 已增加报告 artifact、支付订单、支付事件和会员变更导出范围；JSON / CSV / PDF / EXCEL 保持可选范围和完整导出。
+   - 验收：不泄露 password hash、上传签名密钥、私有文件字节、他人数据或后台-only 字段。
 
 9. 完整 E2E 和发布前验收
    - 新用户学习目标完整闭环：注册、创建目标、生成计划、确认计划、今日任务、证据打卡、AI 评分、偏差检测、救援任务、健康报告、热力图、成长时间线、奖励、完成 / 失败复盘、导出。

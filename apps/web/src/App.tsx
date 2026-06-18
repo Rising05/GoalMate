@@ -37,6 +37,9 @@ import {
   AdminGoalFilters,
   AdminOverview,
   AdminRawContent,
+  AdminUploadAsset,
+  AdminPaymentEvent,
+  AdminMembershipAudit,
   AdminSystemConfig,
   AdminUser,
   BillingOrder,
@@ -84,6 +87,9 @@ import {
   fetchAdminGoals,
   fetchAdminOverview,
   fetchAdminRawContent,
+  fetchAdminUploadAssets,
+  fetchAdminPaymentEvents,
+  fetchAdminMembershipAudits,
   fetchAdminSystemConfigs,
   fetchAdminUsers,
   fetchAiJob,
@@ -106,6 +112,7 @@ import {
   listGoals,
   processQueuedEmailLogs,
   retryAdminAiJob,
+  retryAdminEmailLog,
   requestGoalReplan,
   restartGoal,
   retryFailedEmailLogs,
@@ -215,6 +222,7 @@ const dataExportScopeOptions: Array<{
   { code: "scoreAppeals", label: "评分申诉" },
   { code: "deviationEvents", label: "偏差事件" },
   { code: "healthSnapshots", label: "健康趋势" },
+  { code: "reportArtifacts", label: "周月报告" },
   { code: "rewardCards", label: "奖励愿景板" },
   { code: "failureReports", label: "失败复盘" },
   { code: "aiJobs", label: "AI 任务" },
@@ -698,6 +706,9 @@ export function App() {
   const [adminAiJobs, setAdminAiJobs] = useState<AdminAiJob[]>([]);
   const [adminAiJobTotal, setAdminAiJobTotal] = useState(0);
   const [adminEmailLogs, setAdminEmailLogs] = useState<AdminEmailLog[]>([]);
+  const [adminUploadAssets, setAdminUploadAssets] = useState<AdminUploadAsset[]>([]);
+  const [adminPaymentEvents, setAdminPaymentEvents] = useState<AdminPaymentEvent[]>([]);
+  const [adminMembershipAudits, setAdminMembershipAudits] = useState<AdminMembershipAudit[]>([]);
   const [adminEmailLogTotal, setAdminEmailLogTotal] = useState(0);
   const [adminAuditLogs, setAdminAuditLogs] = useState<AdminAuditLog[]>([]);
   const [adminSystemConfigs, setAdminSystemConfigs] = useState<
@@ -2733,7 +2744,10 @@ export function App() {
         jobsResponse,
         logsResponse,
         auditResponse,
-        configsResponse
+        configsResponse,
+        assetsResponse,
+        paymentsResponse,
+        membershipAuditsResponse
       ] = await Promise.all([
         fetchAdminOverview(token),
         fetchAdminUsers(token, adminUserFilters),
@@ -2741,7 +2755,10 @@ export function App() {
         fetchAdminAiJobs(token, adminAiJobFilters),
         fetchAdminEmailLogs(token, adminEmailLogFilters),
         fetchAdminAuditLogs(token),
-        fetchAdminSystemConfigs(token)
+        fetchAdminSystemConfigs(token),
+        fetchAdminUploadAssets(token),
+        fetchAdminPaymentEvents(token),
+        fetchAdminMembershipAudits(token)
       ]);
 
       setAdminOverview(overview);
@@ -2755,6 +2772,9 @@ export function App() {
       setAdminEmailLogTotal(logsResponse.total);
       setAdminAuditLogs(auditResponse.logs);
       setAdminSystemConfigs(configsResponse.configs);
+      setAdminUploadAssets(assetsResponse.assets);
+      setAdminPaymentEvents(paymentsResponse.events);
+      setAdminMembershipAudits(membershipAuditsResponse.audits);
       setAdminMessage("后台数据已加载。");
       setAdminRawForm((current) => ({
         ...current,
@@ -2764,6 +2784,20 @@ export function App() {
       setAdminMessage(error instanceof Error ? error.message : "后台数据加载失败");
     } finally {
       setIsLoadingAdmin(false);
+    }
+  }
+
+  async function handleRetryAdminEmailLog(log: AdminEmailLog) {
+    if (!session) return;
+    const reason = window.prompt("填写提醒重试原因（至少 6 个字符）", "后台排查服务商失败后重试");
+    if (!reason) return;
+    try {
+      await retryAdminEmailLog(session.token, log.id, reason);
+      const response = await fetchAdminEmailLogs(session.token, adminEmailLogFilters);
+      setAdminEmailLogs(response.logs);
+      setAdminMessage("失败提醒已重新排队并写入审计日志。");
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "提醒重试失败");
     }
   }
 
@@ -5560,12 +5594,42 @@ export function App() {
                               <span>消息 ID：{log.providerMessageId}</span>
                             ) : null}
                             {log.errorCode ? <span>错误码：{log.errorCode}</span> : null}
+                            {log.status === "FAILED" && log.attempts < 3 ? (
+                              <button className="ghost-button" type="button" onClick={() => void handleRetryAdminEmailLog(log)}>
+                                重试提醒
+                              </button>
+                            ) : null}
                           </article>
                         ))}
                       </div>
                     ) : (
                       <p className="muted-text">暂无邮件日志。</p>
                     )}
+                  </section>
+
+                  <section>
+                    <p className="eyebrow">Assets & Billing</p>
+                    <h2>资产与支付</h2>
+                    <div className="admin-table-list">
+                      {adminUploadAssets.slice(0, 5).map((asset) => (
+                        <article key={asset.id}>
+                          <div><strong>{asset.fileName}</strong><span>{asset.userEmail} · {asset.mimeType}</span></div>
+                          <span>{asset.status} · 扫描 {asset.scanStatus} · {asset.storageProvider}</span>
+                        </article>
+                      ))}
+                      {adminPaymentEvents.slice(0, 5).map((event) => (
+                        <article key={event.id}>
+                          <div><strong>{event.provider} · {event.type}</strong><span>{event.userEmail}</span></div>
+                          <span>{event.orderStatus ?? "UNKNOWN"} · {event.providerEventId}</span>
+                        </article>
+                      ))}
+                      {adminMembershipAudits.slice(0, 5).map((audit) => (
+                        <article key={audit.id}>
+                          <div><strong>{audit.action}</strong><span>{audit.userEmail}</span></div>
+                          <span>{audit.fromPlan ?? "NONE"} → {audit.toPlan} · {audit.toStatus}</span>
+                        </article>
+                      ))}
+                    </div>
                   </section>
 
                   <section>

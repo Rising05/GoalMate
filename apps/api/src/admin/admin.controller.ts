@@ -67,6 +67,26 @@ export class AdminController {
     return this.adminService.listEmailLogs(request.user!.id, query);
   }
 
+  @Post("email-logs/:logId/retry")
+  retryEmailLog(@Req() request: AuthenticatedRequest, @Param("logId") logId: string, @Body() body: unknown) {
+    return this.adminService.retryEmailLog(request.user!.id, logId, body);
+  }
+
+  @Get("upload-assets")
+  listUploadAssets(@Req() request: AuthenticatedRequest, @Query() query: Record<string, unknown>) {
+    return this.adminService.listUploadAssets(request.user!.id, query);
+  }
+
+  @Get("payment-events")
+  listPaymentEvents(@Req() request: AuthenticatedRequest, @Query() query: Record<string, unknown>) {
+    return this.adminService.listPaymentEvents(request.user!.id, query);
+  }
+
+  @Get("membership-audits")
+  listMembershipAudits(@Req() request: AuthenticatedRequest, @Query() query: Record<string, unknown>) {
+    return this.adminService.listMembershipAudits(request.user!.id, query);
+  }
+
   @Patch("users/:userId/membership")
   updateMembership(
     @Req() request: AuthenticatedRequest,

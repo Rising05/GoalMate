@@ -447,6 +447,39 @@ describe("AdminService integration", () => {
       BadRequestException
     );
   });
+
+  it("paginates operational assets and retries failed notifications with audit", async () => {
+    const { user: admin } = await createUser("ops-admin");
+    const { user: member } = await createUser("ops-member");
+    await prisma.adminUser.create({ data: { userId: admin.id, role: "OPERATOR", status: "ACTIVE" } });
+    await prisma.uploadAsset.create({
+      data: {
+        userId: member.id, fileName: "ops-proof.png", mimeType: "image/png",
+        sizeBytes: 128, storageProvider: "LOCAL", objectKey: `ops/${member.id}/proof.png`,
+        status: "READY", scanStatus: "CLEAN"
+      }
+    });
+    const failedLog = await prisma.emailLog.create({
+      data: {
+        userId: member.id, type: "DAILY_TASK", recipientEmail: member.email,
+        subject: "失败提醒", content: "重试", status: "FAILED", attempts: 1,
+        error: "provider failed", errorCode: "TEST_FAILURE"
+      }
+    });
+    const assets = await adminService.listUploadAssets(admin.id, { page: "1", pageSize: "1", query: "ops-proof" });
+    const retried = await adminService.retryEmailLog(admin.id, failedLog.id, {
+      reason: "服务商恢复后重新发送"
+    });
+    const audit = await prisma.auditLog.findFirst({
+      where: { actorUserId: admin.id, action: "NOTIFICATION_RETRY", targetId: failedLog.id }
+    });
+
+    assert.equal(assets.page, 1);
+    assert.equal(assets.pageSize, 1);
+    assert.equal(assets.assets[0].userEmail, member.email);
+    assert.equal(retried.log.status, "QUEUED");
+    assert.ok(audit);
+  });
 });
 
 async function cleanupTestData() {

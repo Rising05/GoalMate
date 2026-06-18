@@ -695,6 +695,7 @@ export type DataExportScope =
   | "scoreAppeals"
   | "deviationEvents"
   | "healthSnapshots"
+  | "reportArtifacts"
   | "rewardCards"
   | "failureReports"
   | "aiJobs"
@@ -926,6 +927,24 @@ export interface AdminRawContent {
       detectedAt: string;
     }>;
   }>;
+}
+
+export interface AdminUploadAsset {
+  id: string; userEmail: string; fileName: string; mimeType: string;
+  sizeBytes: number; status: string; scanStatus: string; storageProvider: string;
+  createdAt: string;
+}
+
+export interface AdminPaymentEvent {
+  id: string; orderId: string | null; userEmail: string; provider: string;
+  providerEventId: string; type: string; orderStatus: string | null;
+  amountCents: number | null; currency: string | null; createdAt: string;
+}
+
+export interface AdminMembershipAudit {
+  id: string; userEmail: string; actorEmail: string | null; action: string;
+  fromPlan: string | null; toPlan: string; fromStatus: string | null;
+  toStatus: string; reason: string | null; createdAt: string;
 }
 
 export interface CreateGoalInput {
@@ -1940,6 +1959,38 @@ export async function fetchAdminEmailLogs(
     total: number;
     filters: AdminEmailLogFilters;
   };
+}
+
+export async function fetchAdminUploadAssets(token: string) {
+  return fetchAdminCollection<{ assets: AdminUploadAsset[]; total: number }>(token, "upload-assets", "后台上传资产加载失败");
+}
+
+export async function fetchAdminPaymentEvents(token: string) {
+  return fetchAdminCollection<{ events: AdminPaymentEvent[]; total: number }>(token, "payment-events", "后台支付事件加载失败");
+}
+
+export async function fetchAdminMembershipAudits(token: string) {
+  return fetchAdminCollection<{ audits: AdminMembershipAudit[]; total: number }>(token, "membership-audits", "后台会员审计加载失败");
+}
+
+export async function retryAdminEmailLog(token: string, logId: string, reason: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/email-logs/${logId}/retry`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ reason })
+  });
+  const data = await parseJson<{ log: AdminEmailLog }>(response);
+  if (!response.ok) throw new Error(getErrorMessage(data, "后台提醒重试失败"));
+  return data as { log: AdminEmailLog };
+}
+
+async function fetchAdminCollection<T>(token: string, path: string, fallback: string) {
+  const response = await fetch(`${API_BASE_URL}/admin/${path}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await parseJson<T>(response);
+  if (!response.ok) throw new Error(getErrorMessage(data, fallback));
+  return data as T;
 }
 
 export async function updateAdminMembership(

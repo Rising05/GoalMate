@@ -32,6 +32,7 @@ const EXPORT_SCOPES = [
   "scoreAppeals",
   "deviationEvents",
   "healthSnapshots",
+  "reportArtifacts",
   "rewardCards",
   "failureReports",
   "aiJobs",
@@ -376,6 +377,13 @@ export class AuthService {
       data.healthSnapshots = await this.prisma.healthSnapshot.findMany({
         where: { goalId: { in: goalIds } },
         orderBy: { date: "asc" }
+      });
+    }
+
+    if (scopeSet.has("reportArtifacts")) {
+      data.reportArtifacts = await this.prisma.reportArtifact.findMany({
+        where: { goalId: { in: goalIds } },
+        orderBy: { createdAt: "asc" }
       });
     }
 
