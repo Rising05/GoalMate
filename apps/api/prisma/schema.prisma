@@ -213,6 +213,10 @@ model UploadAsset {
   objectKey       String   @unique
   publicUrl       String?  @db.Text
   status          String   @default("READY")
+  scanStatus      String   @default("NOT_REQUIRED")
+  scanResult      String?  @db.Text
+  uploadedAt      DateTime?
+  deletedAt       DateTime?
   metadata        Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

@@ -2,6 +2,7 @@ import { forwardRef, Module } from "@nestjs/common";
 import { AiJobsModule } from "../ai-jobs/ai-jobs.module";
 import { AuthModule } from "../auth/auth.module";
 import { QueueModule } from "../queue/queue.module";
+import { UploadsModule } from "../uploads/uploads.module";
 import { DeepSeekReportNarrativeProvider } from "./deepseek-report-narrative.provider";
 import { GoalsController } from "./goals.controller";
 import { GoalsReportWorker } from "./goals.report.worker";
@@ -10,7 +11,7 @@ import { MockReportNarrativeProvider } from "./mock-report-narrative.provider";
 import { REPORT_NARRATIVE_PROVIDER } from "./report-narrative.provider";
 
 @Module({
-  imports: [AuthModule, forwardRef(() => AiJobsModule), QueueModule],
+  imports: [AuthModule, forwardRef(() => AiJobsModule), QueueModule, UploadsModule],
   controllers: [GoalsController],
   providers: [
     GoalsService,

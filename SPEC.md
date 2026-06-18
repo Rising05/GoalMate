@@ -1707,9 +1707,12 @@ API 要求：
 - Mock ScoringProvider 已基于完成子项、学习时长、证据数量、题量和正确率生成基础总分、维度评分、证据分析、总结和建议。
 - API 返回按会员状态做付费点控制：免费版返回基础总分、`analysisLevel=BASIC` 和证据摘要，不返回维度评分、证据分析、总结和建议；Pro 返回 `analysisLevel=PRO` 的完整 AI 分析。
 - Web 完成任务弹窗已支持完成子项、实际题量、正确题数、图片 / 文件链接、错题 / 笔记链接、学习状态和主观难度；结果页展示证据摘要，并对免费用户显示 Pro 解锁提示。
-- 已新增独立上传证据 metadata endpoint：`POST /uploads/evidence` 和 `GET /uploads/evidence/:id`；打卡 `evidenceFiles` 可保存 endpoint 返回的上传 metadata，并校验 `uploadId` 属于当前用户。
+- 已新增真实上传证据链路：`POST /uploads/evidence` 创建 `PENDING_UPLOAD` 资产和短时签名 PUT URL，上传完成后校验大小、MIME 魔数和 SHA-256 并转为 `READY`；`GET /uploads/evidence/:id` 返回 owner 专属短时签名下载 URL。
+- 已新增本地对象存储 provider 抽象和 `UPLOAD_STORAGE_PATH` 配置，Web 打卡可选择图片、截图或 PDF 并在提交复盘前完成真实上传；仍兼容已有外部 URL 证据。
+- `upload_assets` 已增加 `scanStatus`、`scanResult`、`uploadedAt` 和 `deletedAt` 生命周期字段；当前内置文件签名检查作为病毒扫描前置校验，并为后续异步 AV provider 保留状态。
+- 资产上传、读取、下载和删除均校验当前用户；删除资产会同步删除本地对象，删除账号会清理当前用户本地对象，删除目标会清理 metadata 关联到该目标的对象。
 - 超级管理员原文查看接口已包含打卡证据字段，仍要求查看原因并写入审计日志。
-- 剩余风险：当前上传 endpoint 保存 metadata，不处理真实二进制文件；对象存储直传、病毒扫描和文件权限签名 URL 仍待实现。免费版仍保留基础总分，后续可按商业策略进一步收敛为纯完成状态。
+- 剩余风险：生产环境仍需将本地存储 provider 替换为云对象存储，并接入真实病毒扫描引擎；免费版仍保留基础总分，后续可按商业策略进一步收敛为纯完成状态。
 
 阶段 C：真实 worker 和自动轮询。
 
@@ -1810,11 +1813,12 @@ API 要求：
    - 已补齐偏差、救援任务、周报、月报和考前冲刺提醒候选，并统一处理 EMAIL / WECHAT 队列日志。
    - 验收：2026-06-18 `npm run typecheck` 和 `npm run test:integration`（88/88）通过；Mock provider 全自动测试，真实 provider 通过配置开关启用，不影响本地无 key 环境。
 
-5. 上传证据真实文件链路
-   - 对象存储 provider 抽象。
-   - 签名上传 URL、签名下载 URL、文件权限隔离、大小 / MIME 校验、病毒扫描预留字段。
-   - 打卡证据从 URL metadata 扩展到真实上传资产状态流转。
-   - 验收：用户只能读写自己的证据；导出包含证据 metadata；删除账号 / 目标后的资产权限处理明确。
+5. 上传证据真实文件链路（已完成本阶段）
+   - 已实现本地对象存储 provider 抽象，可通过 `UPLOAD_STORAGE_PATH` 配置存储目录。
+   - 已实现 HMAC 短时签名上传 / 下载 URL、owner 隔离、大小 / MIME 魔数 / SHA-256 校验和病毒扫描预留字段。
+   - 打卡证据已从 URL metadata 扩展到 `PENDING_UPLOAD -> READY / REJECTED / DELETED` 状态流转，Web 支持真实文件选择和上传。
+   - 删除单个资产、账号或 metadata 关联目标时会清理本地对象；数据导出继续包含资产 metadata，不包含私有文件字节和签名密钥。
+   - 验收：2026-06-18 定向上传、打卡证据、隐私删除和账户导出测试 18/18 通过；完整 Playwright 闭环覆盖浏览器真实 PNG 上传。
 
 6. 支付和会员闭环
    - 新增订单、支付事件、会员变更审计模型。

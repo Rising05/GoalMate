@@ -49,6 +49,8 @@ Useful optional environment variables for the API:
 - `WECHAT_APP_ID=...`
 - `WECHAT_APP_SECRET=...`
 - `WECHAT_TEMPLATE_ID=...`
+- `UPLOAD_STORAGE_PATH=.data/uploads`
+- `UPLOAD_SIGNING_SECRET=...`
 - `REDIS_URL=redis://127.0.0.1:6379`
 
 Core validation commands:

@@ -1,11 +1,23 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual
+} from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
+import {
+  LocalStorageProvider,
+  STORAGE_PROVIDER,
+  StorageProvider
+} from "./storage-provider";
 
 const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = new Set([
@@ -20,7 +32,13 @@ const ALLOWED_PURPOSES = new Set(["CHECKIN_EVIDENCE", "ERROR_NOTE", "STUDY_NOTE"
 
 @Injectable()
 export class UploadsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService)
+    private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(STORAGE_PROVIDER)
+    private readonly storage: StorageProvider = new LocalStorageProvider()
+  ) {}
 
   async createEvidenceUpload(userId: string, input: unknown) {
     const payload = this.parseUploadPayload(input);
@@ -33,16 +51,19 @@ export class UploadsService {
         mimeType: payload.mimeType,
         sizeBytes: payload.sizeBytes,
         checksumSha256: payload.checksumSha256,
-        storageProvider: "LOCAL_PLACEHOLDER",
+        storageProvider: payload.publicUrl ? "EXTERNAL" : this.storage.name,
         objectKey: this.buildObjectKey(userId, payload.fileName),
         publicUrl: payload.publicUrl,
+        status: payload.publicUrl ? "READY" : "PENDING_UPLOAD",
+        scanStatus: payload.publicUrl ? "NOT_REQUIRED" : "PENDING",
         metadata: payload.metadata
       }
     });
 
     return {
       asset: this.serializeUploadAsset(asset),
-      evidenceFile: this.toEvidenceFile(asset)
+      evidenceFile: this.toEvidenceFile(asset),
+      upload: payload.publicUrl ? null : this.buildSignedRequest(asset, "upload")
     };
   }
 
@@ -60,8 +81,178 @@ export class UploadsService {
 
     return {
       asset: this.serializeUploadAsset(asset),
-      evidenceFile: this.toEvidenceFile(asset)
+      evidenceFile: this.toEvidenceFile(asset),
+      download: asset.status === "READY" && !asset.publicUrl
+        ? this.buildSignedRequest(asset, "download")
+        : null
     };
+  }
+
+  async storeEvidenceContent(
+    userId: string,
+    uploadId: string,
+    expires: string,
+    signature: string,
+    contentType: string | undefined,
+    content: Buffer
+  ) {
+    const asset = await this.getOwnedAsset(userId, uploadId);
+    this.assertSignature(asset, "upload", expires, signature);
+
+    if (asset.status !== "PENDING_UPLOAD") {
+      throw new BadRequestException("上传资产当前不可写入");
+    }
+
+    if (content.length !== asset.sizeBytes) {
+      throw new BadRequestException("实际文件大小与声明不一致");
+    }
+
+    if ((contentType ?? "").split(";")[0].trim().toLowerCase() !== asset.mimeType) {
+      throw new BadRequestException("实际文件类型与声明不一致");
+    }
+
+    if (!this.matchesMagicBytes(asset.mimeType, content)) {
+      await this.prisma.uploadAsset.update({
+        where: { id: asset.id },
+        data: {
+          status: "REJECTED",
+          scanStatus: "REJECTED",
+          scanResult: "File signature does not match declared MIME type"
+        }
+      });
+      throw new BadRequestException("文件内容与声明类型不匹配");
+    }
+
+    const checksum = createHash("sha256").update(content).digest("hex");
+
+    if (asset.checksumSha256 && checksum !== asset.checksumSha256) {
+      throw new BadRequestException("文件 SHA-256 校验失败");
+    }
+
+    await this.storage.put(asset.objectKey, content);
+    const ready = await this.prisma.uploadAsset.update({
+      where: { id: asset.id },
+      data: {
+        checksumSha256: checksum,
+        status: "READY",
+        scanStatus: "CLEAN",
+        scanResult: "Built-in file signature validation passed",
+        uploadedAt: new Date()
+      }
+    });
+
+    return {
+      asset: this.serializeUploadAsset(ready),
+      evidenceFile: this.toEvidenceFile(ready),
+      download: this.buildSignedRequest(ready, "download")
+    };
+  }
+
+  async readEvidenceContent(
+    userId: string,
+    uploadId: string,
+    expires: string,
+    signature: string
+  ) {
+    const asset = await this.getOwnedAsset(userId, uploadId);
+    this.assertSignature(asset, "download", expires, signature);
+
+    if (asset.status !== "READY" || asset.publicUrl) {
+      throw new NotFoundException("上传证据内容不存在");
+    }
+
+    return {
+      asset,
+      content: await this.storage.get(asset.objectKey)
+    };
+  }
+
+  async deleteEvidenceUpload(userId: string, uploadId: string) {
+    const asset = await this.getOwnedAsset(userId, uploadId);
+
+    if (asset.storageProvider === this.storage.name) {
+      await this.storage.delete(asset.objectKey);
+    }
+
+    const deleted = await this.prisma.uploadAsset.update({
+      where: { id: asset.id },
+      data: { status: "DELETED", deletedAt: new Date() }
+    });
+
+    return { asset: this.serializeUploadAsset(deleted) };
+  }
+
+  private async getOwnedAsset(userId: string, uploadId: string) {
+    const asset = await this.prisma.uploadAsset.findFirst({
+      where: { id: uploadId, userId, status: { not: "DELETED" } }
+    });
+
+    if (!asset) {
+      throw new NotFoundException("上传证据不存在");
+    }
+
+    return asset;
+  }
+
+  private buildSignedRequest(
+    asset: { id: string; userId: string },
+    action: "upload" | "download"
+  ) {
+    const ttl = Math.max(60, Number(process.env.UPLOAD_URL_TTL_SECONDS ?? 900));
+    const expires = Math.floor(Date.now() / 1000) + ttl;
+    const signature = this.sign(asset.userId, asset.id, action, expires);
+
+    return {
+      method: action === "upload" ? "PUT" : "GET",
+      url: `/uploads/evidence/${asset.id}/${action}?expires=${expires}&signature=${signature}`,
+      expiresAt: new Date(expires * 1000).toISOString()
+    };
+  }
+
+  private assertSignature(
+    asset: { id: string; userId: string },
+    action: "upload" | "download",
+    expiresValue: string,
+    signature: string
+  ) {
+    const expires = Number(expiresValue);
+    const expected = this.sign(asset.userId, asset.id, action, expires);
+    const valid = Number.isInteger(expires) &&
+      expires >= Math.floor(Date.now() / 1000) &&
+      signature.length === expected.length &&
+      timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+
+    if (!valid) {
+      throw new BadRequestException("上传签名无效或已过期");
+    }
+  }
+
+  private sign(userId: string, assetId: string, action: string, expires: number) {
+    const secret = process.env.UPLOAD_SIGNING_SECRET || process.env.SESSION_SECRET;
+
+    if (!secret) {
+      throw new Error("UPLOAD_SIGNING_SECRET or SESSION_SECRET is required");
+    }
+
+    return createHmac("sha256", secret)
+      .update(`${userId}:${assetId}:${action}:${expires}`)
+      .digest("hex");
+  }
+
+  private matchesMagicBytes(mimeType: string, content: Buffer) {
+    const hex = content.subarray(0, 12).toString("hex");
+    const ascii = content.subarray(0, 6).toString("ascii");
+
+    if (mimeType === "image/png") return hex.startsWith("89504e470d0a1a0a");
+    if (mimeType === "image/jpeg") return hex.startsWith("ffd8ff");
+    if (mimeType === "image/gif") return ascii === "GIF87a" || ascii === "GIF89a";
+    if (mimeType === "application/pdf") return content.subarray(0, 5).toString() === "%PDF-";
+    if (mimeType === "image/webp") {
+      return content.subarray(0, 4).toString() === "RIFF" &&
+        content.subarray(8, 12).toString() === "WEBP";
+    }
+
+    return false;
   }
 
   private parseUploadPayload(input: unknown) {
@@ -177,6 +368,10 @@ export class UploadsService {
     objectKey: string;
     publicUrl: string | null;
     status: string;
+    scanStatus: string;
+    scanResult: string | null;
+    uploadedAt: Date | null;
+    deletedAt: Date | null;
     metadata: Prisma.JsonValue | null;
     createdAt: Date;
     updatedAt: Date;
@@ -194,6 +389,10 @@ export class UploadsService {
       objectKey: asset.objectKey,
       publicUrl: asset.publicUrl,
       status: asset.status,
+      scanStatus: asset.scanStatus,
+      scanResult: asset.scanResult,
+      uploadedAt: asset.uploadedAt?.toISOString() ?? null,
+      deletedAt: asset.deletedAt?.toISOString() ?? null,
       metadata: asset.metadata,
       createdAt: asset.createdAt.toISOString(),
       updatedAt: asset.updatedAt.toISOString()

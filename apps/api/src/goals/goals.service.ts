@@ -21,6 +21,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
+import { STORAGE_PROVIDER, StorageProvider } from "../uploads/storage-provider";
 import { MockReportNarrativeProvider } from "./mock-report-narrative.provider";
 import {
   REPORT_NARRATIVE_PROVIDER,
@@ -200,7 +201,10 @@ export class GoalsService {
     private readonly queueService?: QueueService,
     @Optional()
     @Inject(REPORT_NARRATIVE_PROVIDER)
-    private readonly reportNarrativeProvider?: ReportNarrativeProvider
+    private readonly reportNarrativeProvider?: ReportNarrativeProvider,
+    @Optional()
+    @Inject(STORAGE_PROVIDER)
+    private readonly storage?: StorageProvider
   ) {}
 
   async createGoal(userId: string, input: unknown) {
@@ -268,6 +272,25 @@ export class GoalsService {
 
   async deleteGoal(userId: string, id: string) {
     const goal = await this.getOwnedGoal(userId, id);
+    const assets = await this.prisma.uploadAsset.findMany({
+      where: { userId },
+      select: { id: true, objectKey: true, storageProvider: true, metadata: true }
+    });
+    const goalAssets = assets.filter((asset) => {
+      const metadata = asset.metadata && typeof asset.metadata === "object" &&
+        !Array.isArray(asset.metadata)
+        ? asset.metadata as Record<string, unknown>
+        : {};
+      return metadata.goalId === goal.id;
+    });
+
+    if (this.storage) {
+      await Promise.all(
+        goalAssets
+          .filter((asset) => asset.storageProvider === this.storage!.name)
+          .map((asset) => this.storage!.delete(asset.objectKey))
+      );
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.emailLog.updateMany({
@@ -278,6 +301,10 @@ export class GoalsService {
         data: {
           goalId: null
         }
+      });
+
+      await tx.uploadAsset.deleteMany({
+        where: { id: { in: goalAssets.map((asset) => asset.id) } }
       });
 
       await tx.goal.delete({

@@ -200,6 +200,8 @@ export interface UploadAsset {
 export interface EvidenceUploadResponse {
   asset: UploadAsset;
   evidenceFile: Exclude<EvidenceFile, string>;
+  upload?: { method: "PUT"; url: string; expiresAt: string } | null;
+  download?: { method: "GET"; url: string; expiresAt: string } | null;
 }
 
 export interface ScoreAppeal {
@@ -1059,6 +1061,39 @@ export async function getEvidenceUpload(token: string, uploadId: string) {
 
   if (!response.ok) {
     throw new Error(getErrorMessage(data, "上传证据读取失败"));
+  }
+
+  return data as EvidenceUploadResponse;
+}
+
+export async function uploadEvidenceFile(
+  token: string,
+  file: File,
+  metadata?: Record<string, unknown>
+) {
+  const registered = await createEvidenceUpload(token, {
+    fileName: file.name,
+    mimeType: file.type,
+    sizeBytes: file.size,
+    metadata
+  });
+
+  if (!registered.upload) {
+    throw new Error("上传地址生成失败");
+  }
+
+  const response = await fetch(`${API_BASE_URL}${registered.upload.url}`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": file.type
+    },
+    body: file
+  });
+  const data = await parseJson<EvidenceUploadResponse>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "证据文件上传失败"));
   }
 
   return data as EvidenceUploadResponse;

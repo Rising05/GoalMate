@@ -111,6 +111,7 @@ import {
   updateAdminMembership,
   updateNotificationPreference,
   updateRewardCard,
+  uploadEvidenceFile,
   upsertAdminSystemConfig
 } from "./api";
 
@@ -746,6 +747,7 @@ export function App() {
     studyMood: "",
     difficultyLevel: ""
   });
+  const [completionFiles, setCompletionFiles] = useState<File[]>([]);
   const [appealForm, setAppealForm] = useState({
     reason: "",
     addedFacts: ""
@@ -1776,6 +1778,7 @@ export function App() {
     setCompletionResult(null);
     setAppealResult(null);
     setAppealMessage("");
+    setCompletionFiles([]);
     setAppealForm({
       reason: "",
       addedFacts: ""
@@ -1938,7 +1941,7 @@ export function App() {
       ? Number(completionForm.correctQuestionCount)
       : undefined;
     const completedSubtasks = splitFormList(completionForm.completedSubtasks);
-    const evidenceFiles = splitFormList(completionForm.evidenceFiles);
+    const linkedEvidenceFiles = splitFormList(completionForm.evidenceFiles);
     const evidenceLinks = splitFormList(completionForm.evidenceLinks);
     const content = [
       `完成内容：${completedContent}`,
@@ -1956,6 +1959,16 @@ export function App() {
     setDailyTaskMessage("正在提交今日完成记录...");
 
     try {
+      const uploadedEvidenceFiles = await Promise.all(
+        completionFiles.map(async (file) => {
+          const upload = await uploadEvidenceFile(session.token, file, {
+            goalId: completionTask.goalId,
+            dailyTaskId: completionTask.id
+          });
+          return upload.evidenceFile;
+        })
+      );
+      const evidenceFiles = [...linkedEvidenceFiles, ...uploadedEvidenceFiles];
       const response = await completeDailyTask(session.token, completionTask.id, {
         content,
         investedMinutes,
@@ -6080,7 +6093,21 @@ export function App() {
                   />
                 </label>
                 <label>
-                  <span>图片或截图链接</span>
+                  <span>上传图片、截图或 PDF</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif,application/pdf"
+                    multiple
+                    onChange={(event) =>
+                      setCompletionFiles(Array.from(event.target.files ?? []))
+                    }
+                  />
+                  {completionFiles.length ? (
+                    <small>已选择 {completionFiles.length} 个文件，提交时安全上传。</small>
+                  ) : null}
+                </label>
+                <label>
+                  <span>外部图片或文件链接</span>
                   <textarea
                     rows={2}
                     value={completionForm.evidenceFiles}

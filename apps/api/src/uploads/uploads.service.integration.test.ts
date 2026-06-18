@@ -5,13 +5,14 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { UploadsService } from "./uploads.service";
+import { LocalStorageProvider } from "./storage-provider";
 
 loadEnv();
 
 const TEST_EMAIL_PREFIX = "uploads-integration-";
 
 const prisma = new PrismaService();
-const uploadsService = new UploadsService(prisma);
+const uploadsService = new UploadsService(prisma, new LocalStorageProvider());
 
 describe("UploadsService integration", () => {
   before(async () => {
@@ -48,11 +49,111 @@ describe("UploadsService integration", () => {
     assert.equal(result.asset.purpose, "CHECKIN_EVIDENCE");
     assert.equal(result.asset.mimeType, "image/png");
     assert.equal(result.asset.sizeBytes, 512_000);
-    assert.equal(result.asset.storageProvider, "LOCAL_PLACEHOLDER");
+    assert.equal(result.asset.storageProvider, "EXTERNAL");
     assert.match(result.asset.objectKey, new RegExp(`^evidence/${user.id}/`));
     assert.equal(result.evidenceFile.uploadId, result.asset.id);
     assert.equal(result.evidenceFile.url, "https://example.com/mock-review.png");
     assert.equal(stored.userId, user.id);
+  });
+
+  it("uploads and downloads signed local evidence with content validation", async () => {
+    const owner = await createUser("signed-owner");
+    const other = await createUser("signed-other");
+    const content = Buffer.concat([
+      Buffer.from("89504e470d0a1a0a", "hex"),
+      Buffer.from("goalmate-test-image")
+    ]);
+    const registered = await uploadsService.createEvidenceUpload(owner.id, {
+      fileName: "proof.png",
+      mimeType: "image/png",
+      sizeBytes: content.length
+    });
+    const uploadUrl = new URL(registered.upload!.url, "http://localhost");
+    const expires = uploadUrl.searchParams.get("expires")!;
+    const signature = uploadUrl.searchParams.get("signature")!;
+
+    await assert.rejects(
+      () => uploadsService.storeEvidenceContent(
+        other.id,
+        registered.asset.id,
+        expires,
+        signature,
+        "image/png",
+        content
+      ),
+      NotFoundException
+    );
+    await assert.rejects(
+      () => uploadsService.storeEvidenceContent(
+        owner.id,
+        registered.asset.id,
+        expires,
+        `${signature.slice(0, -1)}${signature.endsWith("0") ? "1" : "0"}`,
+        "image/png",
+        content
+      ),
+      BadRequestException
+    );
+
+    const uploaded = await uploadsService.storeEvidenceContent(
+      owner.id,
+      registered.asset.id,
+      expires,
+      signature,
+      "image/png",
+      content
+    );
+    const downloadUrl = new URL(uploaded.download.url, "http://localhost");
+    const downloaded = await uploadsService.readEvidenceContent(
+      owner.id,
+      registered.asset.id,
+      downloadUrl.searchParams.get("expires")!,
+      downloadUrl.searchParams.get("signature")!
+    );
+
+    assert.equal(uploaded.asset.status, "READY");
+    assert.equal(uploaded.asset.scanStatus, "CLEAN");
+    assert.deepEqual(downloaded.content, content);
+
+    await uploadsService.deleteEvidenceUpload(owner.id, registered.asset.id);
+    await assert.rejects(
+      () => uploadsService.readEvidenceContent(
+        owner.id,
+        registered.asset.id,
+        downloadUrl.searchParams.get("expires")!,
+        downloadUrl.searchParams.get("signature")!
+      ),
+      NotFoundException
+    );
+  });
+
+  it("rejects uploaded bytes that do not match the declared MIME type", async () => {
+    const user = await createUser("magic-mismatch");
+    const content = Buffer.from("this is not a png");
+    const registered = await uploadsService.createEvidenceUpload(user.id, {
+      fileName: "fake.png",
+      mimeType: "image/png",
+      sizeBytes: content.length
+    });
+    const uploadUrl = new URL(registered.upload!.url, "http://localhost");
+
+    await assert.rejects(
+      () => uploadsService.storeEvidenceContent(
+        user.id,
+        registered.asset.id,
+        uploadUrl.searchParams.get("expires")!,
+        uploadUrl.searchParams.get("signature")!,
+        "image/png",
+        content
+      ),
+      BadRequestException
+    );
+    const rejected = await prisma.uploadAsset.findUniqueOrThrow({
+      where: { id: registered.asset.id }
+    });
+
+    assert.equal(rejected.status, "REJECTED");
+    assert.equal(rejected.scanStatus, "REJECTED");
   });
 
   it("returns upload metadata only to the owning user", async () => {

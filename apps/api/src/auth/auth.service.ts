@@ -2,11 +2,17 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Optional,
   UnauthorizedException
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { PasswordService } from "./password.service";
 import { SessionTokenService } from "./session-token.service";
+import {
+  LocalStorageProvider,
+  STORAGE_PROVIDER,
+  StorageProvider
+} from "../uploads/storage-provider";
 
 interface AuthPayload {
   email: string;
@@ -60,7 +66,10 @@ export class AuthService {
     @Inject(PasswordService)
     private readonly passwordService: PasswordService,
     @Inject(SessionTokenService)
-    private readonly sessionTokenService: SessionTokenService
+    private readonly sessionTokenService: SessionTokenService,
+    @Optional()
+    @Inject(STORAGE_PROVIDER)
+    private readonly storage: StorageProvider = new LocalStorageProvider()
   ) {}
 
   async register(input: unknown) {
@@ -150,6 +159,11 @@ export class AuthService {
       throw new UnauthorizedException("登录状态已失效");
     }
 
+    const assets = await this.prisma.uploadAsset.findMany({
+      where: { userId: user.id, storageProvider: this.storage.name },
+      select: { objectKey: true }
+    });
+    await Promise.all(assets.map((asset) => this.storage.delete(asset.objectKey)));
     await this.prisma.user.delete({
       where: { id: user.id }
     });

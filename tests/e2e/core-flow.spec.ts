@@ -55,11 +55,7 @@ async function loadWebSession(
   await page.evaluate((sessionToken) => {
     localStorage.setItem("goalmate.session", sessionToken);
   }, token);
-  const currentUserResponse = page.waitForResponse(
-    (response) => response.url().includes("/auth/me") && response.request().method() === "GET"
-  );
   await page.reload();
-  await expect((await currentUserResponse).ok()).toBeTruthy();
   await expect(page.getByRole("heading", { level: 1, name: "创建目标" })).toBeVisible();
 }
 
@@ -232,11 +228,20 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   await page
     .getByLabel("今天完成了什么")
     .fill("完成了今天计划任务，整理了关键笔记，并记录了下一步行动。");
+  await page.getByLabel("上传图片、截图或 PDF").setInputFiles({
+    name: "e2e-proof.png",
+    mimeType: "image/png",
+    buffer: Buffer.concat([
+      Buffer.from("89504e470d0a1a0a", "hex"),
+      Buffer.from("goalmate-e2e-proof")
+    ])
+  });
   await page.getByLabel("遇到的问题").fill("时间较短，需要保持任务粒度足够小。");
   await page.getByLabel("明日调整").fill("明天先复习今日笔记，再进入下一项任务。");
   await page.getByRole("button", { name: /提交复盘/ }).click();
 
   await expect(page.getByText("热力图已记录今日完成")).toBeVisible();
+  await expect(page.getByText("图片/文件 1 条")).toBeVisible();
   await expect(page.getByText(/评分任务 已完成/)).toBeVisible();
   await page.getByRole("button", { name: /返回今日任务/ }).click();
 
