@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
@@ -131,6 +131,12 @@ describe("GoalsService health snapshots integration", () => {
         goalId: goal.id,
         reportDate: toDateKey(todayStart)
       });
+      const repeatedProcessed = await service.processQueuedReportJob({
+        type: "WEEKLY_TREND",
+        userId: goal.userId,
+        goalId: goal.id,
+        reportDate: toDateKey(todayStart)
+      });
       const monthlyReport = await service.getHealthTrendReport(goal.userId, goal.id, {
         type: "MONTHLY_TREND",
         reportDate: toDateKey(todayStart)
@@ -141,6 +147,15 @@ describe("GoalsService health snapshots integration", () => {
         goalId: goal.id,
         reportDate: toDateKey(todayStart)
       });
+      assert.ok(processed.artifact);
+      assert.ok(repeatedProcessed.artifact);
+      assert.ok(monthlyProcessed.artifact);
+      const artifacts = await service.listGoalReportArtifacts(goal.userId, goal.id);
+      const download = await service.downloadGoalReportArtifact(
+        goal.userId,
+        goal.id,
+        processed.artifact.id
+      );
 
       assert.equal(queued.report.type, "WEEKLY_TREND");
       assert.equal(queued.queue.queued, false);
@@ -154,11 +169,18 @@ describe("GoalsService health snapshots integration", () => {
       assert.equal(processed.processed, true);
       assert.ok(processed.report);
       assert.equal(processed.report.averageHealthScore, 80);
+      assert.equal(processed.artifact.type, "WEEKLY_TREND");
+      assert.equal(processed.artifact.provider, "mock-report");
+      assert.equal(repeatedProcessed.artifact.id, processed.artifact.id);
       assert.equal(monthlyReport.snapshotCount, 5);
       assert.equal(monthlyReport.averageHealthScore, 70);
       assert.equal(monthlyReport.trendDirection, "no_data");
       assert.ok(monthlyProcessed.report);
       assert.equal(monthlyProcessed.report.snapshotCount, 5);
+      assert.equal(monthlyProcessed.artifact.type, "MONTHLY_TREND");
+      assert.equal(artifacts.artifacts.length, 2);
+      assert.equal(download.download.contentType, "text/markdown; charset=utf-8");
+      assert.match(download.download.content, /执行摘要/);
     } finally {
       await queueService.onModuleDestroy();
 
@@ -168,6 +190,44 @@ describe("GoalsService health snapshots integration", () => {
         process.env.BULLMQ_ENABLED = previous;
       }
     }
+  });
+
+  it("falls back to mock report narrative and isolates artifact downloads", async () => {
+    const failingProvider = {
+      name: "failing-report-provider",
+      model: "failure-test",
+      generate() {
+        throw new Error("simulated report narrative failure");
+      }
+    };
+    const service = new GoalsService(prisma, undefined, failingProvider);
+    const owner = await createGoalWithHealthSignals("artifact-owner");
+    const foreign = await createGoalWithHealthSignals("artifact-foreign");
+    const generated = await service.generateGoalReportArtifact(
+      owner.goal.userId,
+      owner.goal.id,
+      {
+        type: "WEEKLY_TREND",
+        reportDate: toDateKey(owner.todayStart)
+      }
+    );
+    const stored = await prisma.reportArtifact.findUniqueOrThrow({
+      where: { id: generated.artifact.id }
+    });
+
+    assert.equal(generated.artifact.provider, "mock-report");
+    assert.match(generated.artifact.error ?? "", /simulated report narrative failure/);
+    assert.equal(stored.status, "READY");
+    assert.match(stored.body, /下一步建议/);
+    await assert.rejects(
+      () =>
+        service.downloadGoalReportArtifact(
+          foreign.goal.userId,
+          owner.goal.id,
+          generated.artifact.id
+        ),
+      NotFoundException
+    );
   });
 
   it("rejects unsupported report worker jobs", async () => {

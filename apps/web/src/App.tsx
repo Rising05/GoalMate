@@ -51,6 +51,7 @@ import {
   GoalPlan,
   NotificationChannel,
   NotificationPreference,
+  ReportArtifact,
   RewardBoard,
   RewardCard,
   ReminderType,
@@ -72,6 +73,7 @@ import {
   deleteCurrentAccount,
   deleteGoal,
   deleteRewardCard,
+  downloadGoalReportArtifact,
   enqueueDueEmailLogs,
   exportCurrentAccountData,
   fetchAdminAiJobs,
@@ -88,6 +90,7 @@ import {
   fetchFailureReport,
   fetchGoalPlan,
   fetchGoalHealth,
+  fetchGoalReportArtifacts,
   fetchNotificationPreference,
   fetchRewardBoard,
   fetchTaskActivity,
@@ -95,6 +98,7 @@ import {
   fetchTodayTasks,
   fetchWechatBinding,
   generateGoalPlan,
+  generateGoalReportArtifact,
   generateRescueTask,
   listGoals,
   processQueuedEmailLogs,
@@ -671,6 +675,7 @@ export function App() {
   const [activityDays, setActivityDays] = useState<ActivityDay[]>([]);
   const [timelineDays, setTimelineDays] = useState<TimelineDay[]>([]);
   const [goalHealth, setGoalHealth] = useState<GoalHealth | null>(null);
+  const [reportArtifacts, setReportArtifacts] = useState<ReportArtifact[]>([]);
   const [rescueTask, setRescueTask] = useState<RescueTask | null>(null);
   const [rewardBoard, setRewardBoard] = useState<RewardBoard | null>(null);
   const [failureReport, setFailureReport] = useState<FailureReport | null>(null);
@@ -697,6 +702,9 @@ export function App() {
   const [timelineMessage, setTimelineMessage] = useState("登录后可查看成长时间线。");
   const [rewardMessage, setRewardMessage] = useState("选择目标后可维护奖励愿景板。");
   const [failureMessage, setFailureMessage] = useState("选择失败目标后可查看失败复盘。");
+  const [reportArtifactMessage, setReportArtifactMessage] = useState(
+    "生成周报或月报后可下载 Markdown 文件。"
+  );
   const [notificationMessage, setNotificationMessage] =
     useState("登录后可设置邮件提醒。");
   const [adminMessage, setAdminMessage] = useState("管理员账号登录后可查看后台。");
@@ -714,6 +722,12 @@ export function App() {
     useState<string | null>(null);
   const [adminRetryingAiJobId, setAdminRetryingAiJobId] = useState<string | null>(null);
   const [isGeneratingRescueTask, setIsGeneratingRescueTask] = useState(false);
+  const [generatingReportType, setGeneratingReportType] = useState<
+    "WEEKLY_TREND" | "MONTHLY_TREND" | null
+  >(null);
+  const [downloadingReportArtifactId, setDownloadingReportArtifactId] = useState<
+    string | null
+  >(null);
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() =>
     toDateKey(new Date())
   );
@@ -1034,6 +1048,7 @@ export function App() {
       setActivityDays([]);
       setTimelineDays([]);
       setGoalHealth(null);
+      setReportArtifacts([]);
       setRescueTask(null);
       setRewardBoard(null);
       setFailureReport(null);
@@ -1057,6 +1072,7 @@ export function App() {
       setTimelineMessage("登录后可查看成长时间线。");
       setRewardMessage("登录后可维护奖励愿景板。");
       setFailureMessage("登录后可查看失败复盘。");
+      setReportArtifactMessage("登录后可生成趋势报告。");
       setNotificationMessage("登录后可设置邮件提醒。");
       setDataExportMessage("选择范围后可导出当前账号数据。");
       setAdminMessage("管理员账号登录后可查看后台。");
@@ -1070,6 +1086,8 @@ export function App() {
     setRescueTask(null);
     setRewardBoard(null);
     setFailureReport(null);
+    setReportArtifacts([]);
+    setReportArtifactMessage("生成周报或月报后可下载 Markdown 文件。");
   }, [selectedGoalId]);
 
   useEffect(() => {
@@ -1410,9 +1428,15 @@ export function App() {
           : "暂无复盘记录，先完成今日任务生成第一条时间线。"
       );
       if (healthGoalId) {
-        setGoalHealth(await fetchGoalHealth(token, healthGoalId));
+        const [health, artifactResponse] = await Promise.all([
+          fetchGoalHealth(token, healthGoalId),
+          fetchGoalReportArtifacts(token, healthGoalId)
+        ]);
+        setGoalHealth(health);
+        setReportArtifacts(artifactResponse.artifacts);
       } else {
         setGoalHealth(null);
+        setReportArtifacts([]);
       }
       setDailyTaskMessage(
         todayResponse.tasks.length
@@ -1429,6 +1453,72 @@ export function App() {
     } finally {
       setIsLoadingDailyTasks(false);
       setIsLoadingTimeline(false);
+    }
+  }
+
+  async function handleGenerateReportArtifact(
+    type: "WEEKLY_TREND" | "MONTHLY_TREND"
+  ) {
+    if (!session || !selectedGoalId) {
+      setReportArtifactMessage("请先登录并选择目标。");
+      return;
+    }
+
+    setGeneratingReportType(type);
+
+    try {
+      const result = await generateGoalReportArtifact(
+        session.token,
+        selectedGoalId,
+        { type }
+      );
+      const artifacts = await fetchGoalReportArtifacts(
+        session.token,
+        selectedGoalId
+      );
+      setReportArtifacts(artifacts.artifacts);
+      setReportArtifactMessage(
+        `${result.artifact.title} 已生成，可下载 Markdown 文件。`
+      );
+    } catch (error) {
+      setReportArtifactMessage(
+        error instanceof Error ? error.message : "趋势报告生成失败"
+      );
+    } finally {
+      setGeneratingReportType(null);
+    }
+  }
+
+  async function handleDownloadReportArtifact(artifact: ReportArtifact) {
+    if (!session || !selectedGoalId) {
+      setReportArtifactMessage("请先登录并选择目标。");
+      return;
+    }
+
+    setDownloadingReportArtifactId(artifact.id);
+
+    try {
+      const result = await downloadGoalReportArtifact(
+        session.token,
+        selectedGoalId,
+        artifact.id
+      );
+      const blob = new Blob([result.download.content], {
+        type: result.download.contentType
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.download.filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      setReportArtifactMessage(`${artifact.title} 已开始下载。`);
+    } catch (error) {
+      setReportArtifactMessage(
+        error instanceof Error ? error.message : "趋势报告下载失败"
+      );
+    } finally {
+      setDownloadingReportArtifactId(null);
     }
   }
 
@@ -3843,6 +3933,60 @@ export function App() {
                     今日快照 {goalHealth.snapshot.date} 已保存。
                   </p>
                 ) : null}
+              </section>
+              <section className="panel">
+                <p className="eyebrow">Trend reports</p>
+                <div className="section-heading compact-heading">
+                  <div>
+                    <h2>趋势报告</h2>
+                    <p>生成可下载的周报或月报。</p>
+                  </div>
+                  <LineChart size={20} aria-hidden="true" />
+                </div>
+                <div className="rescue-actions">
+                  <GlassButton
+                    className="ghost-button"
+                    disabled={generatingReportType !== null || !goalHealth}
+                    onClick={() => void handleGenerateReportArtifact("WEEKLY_TREND")}
+                    type="button"
+                  >
+                    {generatingReportType === "WEEKLY_TREND" ? "生成中" : "生成周报"}
+                  </GlassButton>
+                  <GlassButton
+                    className="ghost-button"
+                    disabled={generatingReportType !== null || !goalHealth}
+                    onClick={() => void handleGenerateReportArtifact("MONTHLY_TREND")}
+                    type="button"
+                  >
+                    {generatingReportType === "MONTHLY_TREND" ? "生成中" : "生成月报"}
+                  </GlassButton>
+                </div>
+                <p className="muted-text">{reportArtifactMessage}</p>
+                <div className="risk-list">
+                  {reportArtifacts.slice(0, 3).map((artifact) => (
+                    <article className="risk-card stable" key={artifact.id}>
+                      <strong>{artifact.title}</strong>
+                      <p>{artifact.summary}</p>
+                      <span>
+                        {artifact.periodStart} 至 {artifact.periodEnd} · {artifact.provider}
+                      </span>
+                      {artifact.error ? (
+                        <span>AI 文案已回退：{artifact.error}</span>
+                      ) : null}
+                      <GlassButton
+                        className="ghost-button"
+                        disabled={downloadingReportArtifactId === artifact.id}
+                        onClick={() => void handleDownloadReportArtifact(artifact)}
+                        type="button"
+                      >
+                        <Download size={16} aria-hidden="true" />
+                        {downloadingReportArtifactId === artifact.id
+                          ? "准备中"
+                          : "下载报告"}
+                      </GlassButton>
+                    </article>
+                  ))}
+                </div>
               </section>
               <section className="panel">
                 <p className="eyebrow">Signals</p>

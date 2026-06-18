@@ -16,10 +16,17 @@ import {
   GoalCategory,
   GoalStatus,
   HealthSnapshot,
-  Prisma
+  Prisma,
+  ReportArtifact
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
+import { MockReportNarrativeProvider } from "./mock-report-narrative.provider";
+import {
+  REPORT_NARRATIVE_PROVIDER,
+  ReportNarrativeInput,
+  ReportNarrativeProvider
+} from "./report-narrative.provider";
 
 interface CreateGoalPayload {
   title: string;
@@ -96,6 +103,33 @@ type GoalFailureReport = FailureReport & {
 type DeviationRiskLevel = "stable" | "warning" | "danger";
 type ReportType = typeof REPORT_TYPES[number];
 
+interface HealthTrendReportData {
+  type: "WEEKLY_TREND" | "MONTHLY_TREND";
+  goalId: string;
+  goalTitle: string;
+  range: {
+    startsOn: string;
+    endsOn: string;
+    days: number;
+  };
+  snapshotCount: number;
+  averageHealthScore: number | null;
+  previousAverageHealthScore: number | null;
+  scoreDelta: number | null;
+  trendDirection: "up" | "down" | "flat" | "no_data";
+  minHealthScore: number | null;
+  maxHealthScore: number | null;
+  latestSnapshot: unknown;
+  riskCounts: {
+    stable: number;
+    warning: number;
+    danger: number;
+  };
+  dominantRiskLevel: "stable" | "warning" | "danger" | "no_data";
+  insights: string[];
+  generatedAt: string;
+}
+
 type DeviationReasonCode =
   | "LOW_SCORE"
   | "LOW_INVESTMENT"
@@ -163,7 +197,10 @@ export class GoalsService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Optional()
     @Inject(QueueService)
-    private readonly queueService?: QueueService
+    private readonly queueService?: QueueService,
+    @Optional()
+    @Inject(REPORT_NARRATIVE_PROVIDER)
+    private readonly reportNarrativeProvider?: ReportNarrativeProvider
   ) {}
 
   async createGoal(userId: string, input: unknown) {
@@ -421,6 +458,62 @@ export class GoalsService {
     });
   }
 
+  async generateGoalReportArtifact(userId: string, id: string, input: unknown = {}) {
+    const goal = await this.getOwnedGoal(userId, id);
+    const body = this.inputObject(input);
+    const type = this.parseTrendReportType(body.type ?? "WEEKLY_TREND");
+    const reportDate = this.parseOptionalDateKey(body.reportDate);
+    const report = await this.buildHealthTrendReport({ goal, type, reportDate });
+    const artifact = await this.persistHealthTrendArtifact(report);
+
+    return {
+      report,
+      artifact: this.serializeReportArtifact(artifact)
+    };
+  }
+
+  async listGoalReportArtifacts(userId: string, id: string) {
+    const goal = await this.getOwnedGoal(userId, id);
+    const artifacts = await this.prisma.reportArtifact.findMany({
+      where: { goalId: goal.id },
+      orderBy: { createdAt: "desc" },
+      take: 24
+    });
+
+    return {
+      goalId: goal.id,
+      artifacts: artifacts.map((artifact) => this.serializeReportArtifact(artifact))
+    };
+  }
+
+  async downloadGoalReportArtifact(
+    userId: string,
+    goalId: string,
+    artifactId: string
+  ) {
+    await this.getOwnedGoal(userId, goalId);
+    const artifact = await this.prisma.reportArtifact.findFirst({
+      where: {
+        id: artifactId,
+        goalId
+      }
+    });
+
+    if (!artifact) {
+      throw new NotFoundException("报告文件不存在");
+    }
+
+    return {
+      artifact: this.serializeReportArtifact(artifact),
+      download: {
+        filename: `${artifact.type.toLowerCase()}-${this.toDateKey(artifact.periodEnd)}.md`,
+        contentType: "text/markdown; charset=utf-8",
+        encoding: "utf-8",
+        content: artifact.body
+      }
+    };
+  }
+
   async processQueuedReportJob(input: unknown) {
     const payload = this.parseReportWorkerPayload(input);
 
@@ -440,17 +533,20 @@ export class GoalsService {
 
     if (payload.type === "WEEKLY_TREND" || payload.type === "MONTHLY_TREND") {
       const goal = await this.getOwnedGoal(payload.userId, payload.goalId);
+      const report = await this.buildHealthTrendReport({
+        goal,
+        type: payload.type,
+        reportDate: payload.reportDate
+      });
+      const artifact = await this.persistHealthTrendArtifact(report);
 
       return {
         processed: true,
         type: payload.type,
         goalId: payload.goalId,
         userId: payload.userId,
-        report: await this.buildHealthTrendReport({
-          goal,
-          type: payload.type,
-          reportDate: payload.reportDate
-        })
+        report,
+        artifact: this.serializeReportArtifact(artifact)
       };
     }
 
@@ -461,7 +557,7 @@ export class GoalsService {
     goal: Goal;
     type: Extract<ReportType, "WEEKLY_TREND" | "MONTHLY_TREND">;
     reportDate: string | null;
-  }) {
+  }): Promise<HealthTrendReportData> {
     const days = input.type === "WEEKLY_TREND" ? 7 : 30;
     const endDateKey = input.reportDate ?? this.toDateKey(new Date());
     const endDate = this.parseDateKey(endDateKey);
@@ -538,6 +634,76 @@ export class GoalsService {
     };
   }
 
+  private async persistHealthTrendArtifact(report: HealthTrendReportData) {
+    const fallbackProvider = new MockReportNarrativeProvider();
+    const selectedProvider = this.reportNarrativeProvider ?? fallbackProvider;
+    const narrativeInput: ReportNarrativeInput = {
+      type: report.type,
+      goalTitle: report.goalTitle,
+      startsOn: report.range.startsOn,
+      endsOn: report.range.endsOn,
+      snapshotCount: report.snapshotCount,
+      averageHealthScore: report.averageHealthScore,
+      previousAverageHealthScore: report.previousAverageHealthScore,
+      scoreDelta: report.scoreDelta,
+      trendDirection: report.trendDirection,
+      minHealthScore: report.minHealthScore,
+      maxHealthScore: report.maxHealthScore,
+      dominantRiskLevel: report.dominantRiskLevel,
+      riskCounts: report.riskCounts,
+      insights: report.insights
+    };
+    let provider = selectedProvider;
+    let providerError: string | null = null;
+    let narrative;
+
+    try {
+      narrative = await selectedProvider.generate(narrativeInput);
+    } catch (error) {
+      providerError =
+        error instanceof Error ? error.message : "Report narrative provider failed";
+      provider = fallbackProvider;
+      narrative = fallbackProvider.generate(narrativeInput);
+    }
+
+    return this.prisma.reportArtifact.upsert({
+      where: {
+        goalId_type_periodEnd: {
+          goalId: report.goalId,
+          type: report.type,
+          periodEnd: this.parseDateKey(report.range.endsOn)
+        }
+      },
+      create: {
+        goalId: report.goalId,
+        type: report.type,
+        periodStart: this.parseDateKey(report.range.startsOn),
+        periodEnd: this.parseDateKey(report.range.endsOn),
+        title: narrative.title,
+        summary: narrative.summary,
+        body: narrative.body,
+        recommendations: this.toJson(narrative.recommendations),
+        provider: provider.name,
+        model: provider.model ?? null,
+        promptVersion: "health-trend-narrative-v1",
+        status: "READY",
+        error: providerError
+      },
+      update: {
+        periodStart: this.parseDateKey(report.range.startsOn),
+        title: narrative.title,
+        summary: narrative.summary,
+        body: narrative.body,
+        recommendations: this.toJson(narrative.recommendations),
+        provider: provider.name,
+        model: provider.model ?? null,
+        promptVersion: "health-trend-narrative-v1",
+        status: "READY",
+        error: providerError
+      }
+    });
+  }
+
   private summarizeHealthSnapshots(snapshots: HealthSnapshot[]) {
     const riskCounts = snapshots.reduce(
       (counts, snapshot) => {
@@ -557,7 +723,7 @@ export class GoalsService {
     const averageHealthScore = scores.length
       ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
       : null;
-    const dominantRiskLevel =
+    const dominantRiskLevel: HealthTrendReportData["dominantRiskLevel"] =
       riskCounts.danger >= riskCounts.warning && riskCounts.danger >= riskCounts.stable && riskCounts.danger > 0
         ? "danger"
         : riskCounts.warning >= riskCounts.stable && riskCounts.warning > 0
@@ -2570,6 +2736,26 @@ export class GoalsService {
       finalReward: goal.finalReward,
       createdAt: goal.createdAt.toISOString(),
       updatedAt: goal.updatedAt.toISOString()
+    };
+  }
+
+  private serializeReportArtifact(artifact: ReportArtifact) {
+    return {
+      id: artifact.id,
+      goalId: artifact.goalId,
+      type: artifact.type,
+      periodStart: this.toDateKey(artifact.periodStart),
+      periodEnd: this.toDateKey(artifact.periodEnd),
+      title: artifact.title,
+      summary: artifact.summary,
+      recommendations: this.jsonArray(artifact.recommendations),
+      provider: artifact.provider,
+      model: artifact.model,
+      promptVersion: artifact.promptVersion,
+      status: artifact.status,
+      error: artifact.error,
+      createdAt: artifact.createdAt.toISOString(),
+      updatedAt: artifact.updatedAt.toISOString()
     };
   }
 

@@ -241,6 +241,18 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   await page.getByRole("button", { name: /返回今日任务/ }).click();
 
   await expect(page.getByText(/今日快照 .* 已保存/)).toBeVisible();
+  const reportArtifactResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/report-artifacts") &&
+      response.request().method() === "POST"
+  );
+  await page.getByRole("button", { name: "生成周报" }).click();
+  await expect((await reportArtifactResponse).ok()).toBeTruthy();
+  await expect(page.getByText(new RegExp(`${goalTitle} 周报`)).first()).toBeVisible();
+  const reportDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: /下载报告/ }).first().click();
+  expect((await reportDownload).suggestedFilename()).toMatch(/weekly_trend-.*\.md/);
+
   const rescueResponse = page.waitForResponse(
     (response) =>
       response.url().includes("/rescue-task") && response.request().method() === "POST"

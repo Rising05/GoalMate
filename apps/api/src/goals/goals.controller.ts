@@ -87,6 +87,36 @@ export class GoalsController {
     return this.goalsService.getHealthTrendReport(request.user!.id, id, body);
   }
 
+  @Post(":id/report-artifacts")
+  generateReportArtifact(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: unknown
+  ) {
+    return this.goalsService.generateGoalReportArtifact(request.user!.id, id, body);
+  }
+
+  @Get(":id/report-artifacts")
+  listReportArtifacts(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ) {
+    return this.goalsService.listGoalReportArtifacts(request.user!.id, id);
+  }
+
+  @Get(":id/report-artifacts/:artifactId/download")
+  downloadReportArtifact(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Param("artifactId") artifactId: string
+  ) {
+    return this.goalsService.downloadGoalReportArtifact(
+      request.user!.id,
+      id,
+      artifactId
+    );
+  }
+
   @Post(":id/settle")
   settle(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.goalsService.settleGoal(request.user!.id, id);

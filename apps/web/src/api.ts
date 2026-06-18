@@ -435,6 +435,24 @@ export interface HealthTrendReport {
   generatedAt: string;
 }
 
+export interface ReportArtifact {
+  id: string;
+  goalId: string;
+  type: Extract<GoalReportType, "WEEKLY_TREND" | "MONTHLY_TREND">;
+  periodStart: string;
+  periodEnd: string;
+  title: string;
+  summary: string;
+  recommendations: string[];
+  provider: string;
+  model: string | null;
+  promptVersion: string;
+  status: string;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface GoalHealthRisk {
   level: "warning" | "danger";
   title: string;
@@ -1267,6 +1285,89 @@ export async function fetchGoalHealthTrend(
   }
 
   return data as HealthTrendReport;
+}
+
+export async function generateGoalReportArtifact(
+  token: string,
+  goalId: string,
+  payload: {
+    type: Extract<GoalReportType, "WEEKLY_TREND" | "MONTHLY_TREND">;
+    reportDate?: string | null;
+  }
+) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/report-artifacts`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await parseJson<{
+    report: HealthTrendReport;
+    artifact: ReportArtifact;
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "趋势报告生成失败"));
+  }
+
+  return data as { report: HealthTrendReport; artifact: ReportArtifact };
+}
+
+export async function fetchGoalReportArtifacts(token: string, goalId: string) {
+  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/report-artifacts`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  const data = await parseJson<{ goalId: string; artifacts: ReportArtifact[] }>(
+    response
+  );
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "趋势报告列表加载失败"));
+  }
+
+  return data as { goalId: string; artifacts: ReportArtifact[] };
+}
+
+export async function downloadGoalReportArtifact(
+  token: string,
+  goalId: string,
+  artifactId: string
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/goals/${goalId}/report-artifacts/${artifactId}/download`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+  const data = await parseJson<{
+    artifact: ReportArtifact;
+    download: {
+      filename: string;
+      contentType: string;
+      encoding: "utf-8";
+      content: string;
+    };
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "趋势报告下载失败"));
+  }
+
+  return data as {
+    artifact: ReportArtifact;
+    download: {
+      filename: string;
+      contentType: string;
+      encoding: "utf-8";
+      content: string;
+    };
+  };
 }
 
 export async function fetchAiJob(token: string, jobId: string) {

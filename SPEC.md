@@ -543,6 +543,14 @@ MVP 已落地每日健康快照：
 - 预留趋势接口：`GET /goals/:id/health-snapshots`，返回当前用户当前目标最近快照列表。
 - 2026-06-11 已补充 `GoalsService health snapshots integration`，验证救援统计、普通任务完成率、次日恢复判断、当日快照 upsert 和趋势接口读取。
 
+已落地周 / 月趋势报告 artifact：
+
+- 新增 `report_artifacts` 表和 `20260618143000_add_report_artifacts` migration，按 `goalId + type + periodEnd` 唯一保存周报 / 月报正文，重复 worker 消费使用 upsert，不产生重复文件。
+- `GoalsReportWorker` 处理 `WEEKLY_TREND / MONTHLY_TREND` 时会持久化标题、摘要、Markdown 正文、下一步建议、provider、model、promptVersion 和 fallback 错误。
+- 新增 `ReportNarrativeProvider` 抽象；默认 Mock provider 保证无 key 环境可运行，配置 `AI_PROVIDER=deepseek` 和 API key 后使用 DeepSeek 生成结构化中文复盘，provider 失败时记录错误并回退 Mock 正文。
+- 新增 `POST /goals/:id/report-artifacts`、`GET /goals/:id/report-artifacts` 和 `GET /goals/:id/report-artifacts/:artifactId/download`，支持同步生成、目标 owner 隔离列表和 Markdown 下载。
+- Web 今日任务健康侧栏提供生成周报 / 月报、最近报告摘要和下载入口；Playwright 核心闭环已覆盖周报生成和浏览器下载事件。
+
 ### 7.3 成长时间线
 
 时间线展示：
@@ -847,6 +855,7 @@ flowchart TD
 - heatmap_daily_stats
 - health_snapshots
 - health_reports
+- report_artifacts
 - timeline_events
 - notifications
 - email_logs
@@ -1420,9 +1429,10 @@ AI Provider 要求：
 - 已新增 `POST /goals/:id/health-snapshots/enqueue`，当前用户可把自己的目标健康快照报告任务写入 `reports` 队列；当 BullMQ 未启用时返回 disabled queue metadata，便于本地和测试闭环。
 - 已新增 `POST /goals/:id/reports/enqueue`，支持 `HEALTH_SNAPSHOT / WEEKLY_TREND / MONTHLY_TREND` 报告任务入队；旧的健康快照入队 endpoint 保留为兼容入口。
 - 已新增 `POST /goals/:id/health-trends`，基于已有 `health_snapshots` 返回周 / 月趋势摘要：周期范围、快照数量、平均健康分、上一周期均分、分数变化、趋势方向、风险计数、主导风险、最新快照和简短洞察。
-- `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 生成 / 更新当日健康快照，消费 `WEEKLY_TREND / MONTHLY_TREND` 生成周 / 月趋势摘要。
-- 已补 `GoalsService health snapshots integration` 和 `QueueService integration`，覆盖报告任务入队 disabled metadata、worker 处理健康快照、重复处理幂等 upsert、周 / 月趋势摘要、趋势 worker 路径和不支持的报告任务拒绝。
-- 剩余风险：Report worker 当前趋势摘要暂不持久化报告正文，周报 / 月报的可下载文件、AI 文案润色和长期趋势图仍待补齐；AI worker 已覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评、opt-in 救援任务和 opt-in 失败复盘生成；Email worker 仍使用 MockMailProvider，真实服务商待接入。
+- `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 生成 / 更新当日健康快照，消费 `WEEKLY_TREND / MONTHLY_TREND` 生成趋势摘要并 upsert `report_artifacts` Markdown 正文。
+- 报告文案已支持 Mock / DeepSeek provider 选择、结构化输出校验和失败回退；Web 可同步生成、列出并下载周 / 月报告 artifact。
+- 已补 `GoalsService health snapshots integration`、`QueueService integration` 和 Playwright E2E，覆盖报告任务入队 disabled metadata、健康快照、周 / 月 artifact、重复 worker 幂等 upsert、provider 失败回退、跨用户下载拒绝和浏览器下载。
+- 剩余风险：长期趋势图和 PDF / Excel 报告 artifact 仍待在数据导出最终版补齐；AI worker 已覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评、opt-in 救援任务和 opt-in 失败复盘生成；Email worker 仍使用 MockMailProvider，真实服务商待接入。
 
 AI job 状态需要支持：
 
@@ -1783,14 +1793,15 @@ API 要求：
    - 管理后台保持低装饰、高信息密度。
    - 验收：Playwright 核心页面流程通过；普通用户仍不显示后台入口，ACTIVE 管理员显示入口。
 
-3. AI worker 补齐
+3. AI worker 补齐（已完成本阶段）
    - `CHECKIN_SCORE_APPEAL` 改为 worker 可消费。（已完成）
    - `RESCUE_TASK_GENERATION` 改为 worker 可消费，支持 job 状态流转、失败落库、规则兜底和前端轮询刷新。（已完成）
    - `FAILURE_REPORT_GENERATION` 改为 worker 可消费，支持三次自动重试、失败落库、取消提示、前端轮询和管理员审计重试。（已完成）
-   - 周 / 月报告增加 AI 文案润色和可下载报告 artifact。
+   - 周 / 月报告支持 Mock / DeepSeek AI 文案、失败回退、正文持久化、幂等 upsert 和 Markdown 下载。（已完成）
    - 申诉 worker 验收：`node --import tsx --test src/daily-tasks/daily-tasks.appeal.integration.test.ts` 已覆盖成功、失败、幂等和跨用户隔离；管理员重试随通用 AI job retry 保留。
    - 救援任务 worker 验收：`node --import tsx --test src/goals/goals.service.integration.test.ts` 已覆盖入队、worker 成功、provider 失败兜底和跨用户隔离；管理员重试随通用 AI job retry 保留。
    - 失败复盘 worker 验收：`node --import tsx --test src/goals/goals.settlement.integration.test.ts` 已覆盖同步兼容、入队复用、重试成功、重试耗尽、幂等和跨用户隔离；`AdminService integration` 已覆盖管理员重试、worker 消费和审计日志。
+   - 报告 artifact 验收：`GoalsService health snapshots integration` 覆盖周 / 月 artifact、幂等 upsert、provider 回退和 owner 隔离；Playwright 覆盖周报生成与下载。
 
 4. 真实提醒 provider
    - 接入真实邮件 provider 抽象实现，配置发件人、模板、失败原因和退避重试。
