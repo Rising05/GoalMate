@@ -10,6 +10,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
 import { MAIL_PROVIDER, MailProvider } from "./mail-provider";
 import { MockMailProvider } from "./mock-mail.provider";
+import { MockWechatProvider } from "./mock-wechat.provider";
+import { WECHAT_PROVIDER, WechatProvider } from "./wechat-provider";
 
 const DEFAULT_REMINDER_TYPES = [
   "DAILY_TASK",
@@ -17,7 +19,12 @@ const DEFAULT_REMINDER_TYPES = [
   "TOLERANCE_RISK",
   "MILESTONE",
   "FAILURE_REVIEW",
-  "MEMBERSHIP_EXPIRY"
+  "MEMBERSHIP_EXPIRY",
+  "DEVIATION_WARNING",
+  "RESCUE_TASK",
+  "WEEKLY_REPORT",
+  "MONTHLY_REPORT",
+  "EXAM_SPRINT"
 ] as const;
 const DEFAULT_NOTIFICATION_CHANNELS = ["EMAIL"] as const;
 
@@ -27,7 +34,12 @@ const REMINDER_TYPE_LABELS: Record<string, string> = {
   TOLERANCE_RISK: "容错次数即将耗尽提醒",
   MILESTONE: "阶段里程碑提醒",
   FAILURE_REVIEW: "失败复盘提醒",
-  MEMBERSHIP_EXPIRY: "会员到期提醒"
+  MEMBERSHIP_EXPIRY: "会员到期提醒",
+  DEVIATION_WARNING: "偏差预警提醒",
+  RESCUE_TASK: "救援任务提醒",
+  WEEKLY_REPORT: "周报提醒",
+  MONTHLY_REPORT: "月报提醒",
+  EXAM_SPRINT: "考前冲刺提醒"
 };
 const CHANNEL_LABELS: Record<string, string> = {
   WEB: "Web 站内",
@@ -45,7 +57,10 @@ export class NotificationsService {
     private readonly mailProvider: MailProvider = new MockMailProvider(),
     @Optional()
     @Inject(QueueService)
-    private readonly queueService?: QueueService
+    private readonly queueService?: QueueService,
+    @Optional()
+    @Inject(WECHAT_PROVIDER)
+    private readonly wechatProvider: WechatProvider = new MockWechatProvider()
   ) {}
 
   async getPreference(userId: string) {
@@ -208,7 +223,14 @@ export class NotificationsService {
               where: this.todayMilestoneWhere(now),
               orderBy: { targetDate: "asc" }
             },
-            failureReport: true
+            failureReport: true,
+            reportArtifacts: {
+              where: {
+                updatedAt: this.todayDateWhere(now)
+              },
+              orderBy: { updatedAt: "desc" },
+              take: 4
+            }
           }
         }
       }
@@ -300,7 +322,9 @@ export class NotificationsService {
     const queuedLogs = await this.prisma.emailLog.findMany({
       where: {
         userId,
-        channel: "EMAIL",
+        channel: {
+          in: ["EMAIL", "WECHAT"]
+        },
         status: "QUEUED",
         attempts: {
           lt: MAX_EMAIL_ATTEMPTS
@@ -315,7 +339,8 @@ export class NotificationsService {
     const processed: EmailLog[] = [];
 
     for (const log of queuedLogs) {
-      const result = await this.mailProvider.send(log, { simulateFailure });
+      const delivery = await this.deliverNotification(log, simulateFailure);
+      const result = delivery.result;
       processed.push(
         await this.prisma.emailLog.update({
           where: { id: log.id },
@@ -325,6 +350,9 @@ export class NotificationsService {
                 attempts: {
                   increment: 1
                 },
+                provider: delivery.provider,
+                providerMessageId: result.providerMessageId ?? null,
+                errorCode: result.errorCode ?? null,
                 error: result.error ?? "Mail provider failed",
                 sentAt: null
               }
@@ -333,6 +361,9 @@ export class NotificationsService {
                 attempts: {
                   increment: 1
                 },
+                provider: delivery.provider,
+                providerMessageId: result.providerMessageId ?? null,
+                errorCode: null,
                 error: null,
                 sentAt: now
               }
@@ -360,11 +391,11 @@ export class NotificationsService {
       throw new NotFoundException("提醒日志不存在");
     }
 
-    if (log.channel !== "EMAIL") {
+    if (!["EMAIL", "WECHAT"].includes(log.channel)) {
       return {
         log: this.serializeEmailLog(log),
         processed: false,
-        reason: "Only EMAIL logs are processed by the email worker.",
+        reason: "Notification channel is not supported by the worker.",
         retryable: false
       };
     }
@@ -396,7 +427,8 @@ export class NotificationsService {
       };
     }
 
-    const result = await this.mailProvider.send(log, { simulateFailure });
+    const delivery = await this.deliverNotification(log, simulateFailure);
+    const result = delivery.result;
     const nextAttempts = log.attempts + 1;
 
     if (result.status === "SENT") {
@@ -405,6 +437,9 @@ export class NotificationsService {
         data: {
           status: "SENT",
           attempts: nextAttempts,
+          provider: delivery.provider,
+          providerMessageId: result.providerMessageId ?? null,
+          errorCode: null,
           error: null,
           sentAt: now
         }
@@ -419,12 +454,18 @@ export class NotificationsService {
       };
     }
 
-    const retryable = !finalAttempt && nextAttempts < MAX_EMAIL_ATTEMPTS;
+    const retryable =
+      result.retryable !== false &&
+      !finalAttempt &&
+      nextAttempts < MAX_EMAIL_ATTEMPTS;
     const failedLog = await this.prisma.emailLog.update({
       where: { id: log.id },
       data: {
         status: retryable ? "QUEUED" : "FAILED",
         attempts: nextAttempts,
+        provider: delivery.provider,
+        providerMessageId: result.providerMessageId ?? null,
+        errorCode: result.errorCode ?? null,
         error: result.error ?? "Mail provider failed",
         sentAt: null
       }
@@ -444,7 +485,9 @@ export class NotificationsService {
     const failedLogs = await this.prisma.emailLog.findMany({
       where: {
         userId,
-        channel: "EMAIL",
+        channel: {
+          in: ["EMAIL", "WECHAT"]
+        },
         status: "FAILED",
         attempts: {
           lt: MAX_EMAIL_ATTEMPTS
@@ -464,6 +507,7 @@ export class NotificationsService {
         },
         data: {
           status: "QUEUED",
+          errorCode: null,
           error: null,
           scheduledFor: now,
           sentAt: null
@@ -501,7 +545,7 @@ export class NotificationsService {
   }
 
   private async enqueueEmailLog(log: EmailLog) {
-    if (log.channel !== "EMAIL") {
+    if (!["EMAIL", "WECHAT"].includes(log.channel)) {
       return;
     }
 
@@ -514,6 +558,18 @@ export class NotificationsService {
     } catch {
       // Queue enqueue failure must not prevent persisting the email log.
     }
+  }
+
+  private async deliverNotification(log: EmailLog, simulateFailure: boolean) {
+    const provider = log.channel === "WECHAT"
+      ? this.wechatProvider
+      : this.mailProvider;
+    const result = await provider.send(log, { simulateFailure });
+
+    return {
+      provider: provider.name,
+      result
+    };
   }
 
   private buildDueEmailCandidates(
@@ -609,6 +665,85 @@ export class NotificationsService {
           )
         });
       }
+
+      if (
+        reminderTypes.has("DEVIATION_WARNING") &&
+        (goal.status === "AT_RISK" ||
+          goal.toleranceDaysUsed >= Math.max(0, goal.toleranceDaysAllowed - 1))
+      ) {
+        candidates.push({
+          type: "DEVIATION_WARNING",
+          goalId: goal.id,
+          subject: "目标偏差预警",
+          content: this.buildReminderContent(
+            "DEVIATION_WARNING",
+            preference,
+            `目标「${goal.title}」已出现执行风险，请先检查未完成任务和容错余额。`,
+            "降低今天的任务粒度，先恢复连续执行。"
+          )
+        });
+      }
+
+      const pendingRescueTasks = goal.dailyTasks.filter(
+        (task) => task.taskType === "RESCUE" && task.status !== "DONE"
+      );
+
+      if (reminderTypes.has("RESCUE_TASK") && pendingRescueTasks.length) {
+        candidates.push({
+          type: "RESCUE_TASK",
+          goalId: goal.id,
+          subject: "救援任务待完成",
+          content: this.buildReminderContent(
+            "RESCUE_TASK",
+            preference,
+            `目标「${goal.title}」有 ${pendingRescueTasks.length} 个救援任务待完成。`,
+            "先完成救援任务，再决定是否恢复原计划。"
+          )
+        });
+      }
+
+      for (const reportType of ["WEEKLY_REPORT", "MONTHLY_REPORT"] as const) {
+        const artifactType = reportType === "WEEKLY_REPORT"
+          ? "WEEKLY_TREND"
+          : "MONTHLY_TREND";
+        const artifact = goal.reportArtifacts.find(
+          (item) => item.type === artifactType
+        );
+
+        if (reminderTypes.has(reportType) && artifact) {
+          candidates.push({
+            type: reportType,
+            goalId: goal.id,
+            subject: reportType === "WEEKLY_REPORT" ? "学习周报已生成" : "学习月报已生成",
+            content: this.buildReminderContent(
+              reportType,
+              preference,
+              `目标「${goal.title}」的${reportType === "WEEKLY_REPORT" ? "周报" : "月报"}已生成：${artifact.title}。`,
+              "查看趋势后只选择一个建议执行。"
+            )
+          });
+        }
+      }
+
+      if (reminderTypes.has("EXAM_SPRINT") && goal.examDate) {
+        const daysUntilExam = Math.ceil(
+          (goal.examDate.getTime() - now.getTime()) / 86_400_000
+        );
+
+        if (daysUntilExam >= 0 && daysUntilExam <= 14) {
+          candidates.push({
+            type: "EXAM_SPRINT",
+            goalId: goal.id,
+            subject: "考前冲刺提醒",
+            content: this.buildReminderContent(
+              "EXAM_SPRINT",
+              preference,
+              `目标「${goal.title}」距离考试还有 ${daysUntilExam} 天。`,
+              "优先复习错题和高频薄弱项，不再扩张新内容。"
+            )
+          });
+        }
+      }
     }
 
     for (const goal of user.goals.filter((goal) => goal.status === "FAILED")) {
@@ -664,7 +799,8 @@ export class NotificationsService {
           include: {
             dailyTasks: true,
             milestones: true,
-            failureReport: true
+            failureReport: true,
+            reportArtifacts: true
           }
         }
       }
@@ -937,6 +1073,9 @@ export class NotificationsService {
       content: log.content,
       status: log.status,
       attempts: log.attempts,
+      provider: log.provider,
+      providerMessageId: log.providerMessageId,
+      errorCode: log.errorCode,
       error: log.error,
       scheduledFor: log.scheduledFor?.toISOString() ?? null,
       sentAt: log.sentAt?.toISOString() ?? null,

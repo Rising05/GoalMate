@@ -9,6 +9,9 @@ export interface MailSendOptions {
 export interface MailSendResult {
   status: "SENT" | "FAILED";
   error: string | null;
+  errorCode?: string | null;
+  providerMessageId?: string | null;
+  retryable?: boolean;
 }
 
 export interface MailProvider {

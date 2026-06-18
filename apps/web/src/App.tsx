@@ -5119,8 +5119,8 @@ export function App() {
                 <p className="form-message">{notificationMessage}</p>
               </section>
               <section className="panel">
-                <p className="eyebrow">Email logs</p>
-                <h2>邮件日志</h2>
+                <p className="eyebrow">Notification logs</p>
+                <h2>提醒日志</h2>
                 {emailLogs.length ? (
                   <div className="settings-list">
                     {emailLogs.slice(0, 5).map((log) => (
@@ -5128,7 +5128,11 @@ export function App() {
                         <span>
                           {log.channel} · {log.subject} · 尝试 {log.attempts} 次
                         </span>
-                        <strong>{log.status}</strong>
+                        <strong>
+                          {log.status}
+                          {log.provider ? ` · ${log.provider}` : ""}
+                        </strong>
+                        {log.errorCode ? <span>{log.errorCode}</span> : null}
                       </div>
                     ))}
                   </div>
@@ -5450,9 +5454,14 @@ export function App() {
                               <span>{log.recipientEmail}</span>
                             </div>
                             <span>
-                              {log.type} · {log.status} ·{" "}
+                              {log.channel} · {log.type} · {log.status}
+                              {log.provider ? ` · ${log.provider}` : ""} ·{" "}
                               {formatDateTime(log.createdAt)}
                             </span>
+                            {log.providerMessageId ? (
+                              <span>消息 ID：{log.providerMessageId}</span>
+                            ) : null}
+                            {log.errorCode ? <span>错误码：{log.errorCode}</span> : null}
                           </article>
                         ))}
                       </div>

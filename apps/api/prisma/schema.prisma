@@ -164,6 +164,9 @@ model EmailLog {
   content        String    @db.Text
   status         String    @default("QUEUED")
   attempts       Int       @default(0)
+  provider       String?
+  providerMessageId String?
+  errorCode      String?
   error          String?   @db.Text
   scheduledFor   DateTime?
   sentAt         DateTime?
@@ -175,6 +178,7 @@ model EmailLog {
   @@index([userId, createdAt])
   @@index([status, type])
   @@index([channel, status])
+  @@index([provider, providerMessageId])
   @@map("email_logs")
 }
 

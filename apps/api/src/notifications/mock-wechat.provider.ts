@@ -1,22 +1,21 @@
 import { Injectable } from "@nestjs/common";
 import { EmailLog } from "@prisma/client";
-import { MailProvider, MailSendOptions } from "./mail-provider";
+import { MailSendOptions } from "./mail-provider";
+import { WechatProvider } from "./wechat-provider";
 
 @Injectable()
-export class MockMailProvider implements MailProvider {
-  readonly name = "mock-mail";
+export class MockWechatProvider implements WechatProvider {
+  readonly name = "mock-wechat";
 
   async send(log: EmailLog, options: MailSendOptions = {}) {
     const shouldFail =
-      options.simulateFailure ||
-      log.recipientEmail.includes("+fail") ||
-      log.content.includes("[[mock-email-fail]]");
+      options.simulateFailure || log.content.includes("[[mock-wechat-fail]]");
 
     if (shouldFail) {
       return {
         status: "FAILED" as const,
-        error: "Mock email provider failed",
-        errorCode: "MOCK_MAIL_FAILURE",
+        error: "Mock WeChat provider failed",
+        errorCode: "MOCK_WECHAT_FAILURE",
         providerMessageId: null,
         retryable: true
       };
@@ -26,7 +25,7 @@ export class MockMailProvider implements MailProvider {
       status: "SENT" as const,
       error: null,
       errorCode: null,
-      providerMessageId: `mock-mail-${log.id}`,
+      providerMessageId: `mock-wechat-${log.id}`,
       retryable: false
     };
   }

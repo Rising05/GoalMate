@@ -42,6 +42,13 @@ Useful optional environment variables for the API:
 - `SCORE_APPEAL_ASYNC=true`
 - `RESCUE_TASK_ASYNC=true`
 - `FAILURE_REPORT_ASYNC=true`
+- `MAIL_PROVIDER=resend`
+- `RESEND_API_KEY=...`
+- `MAIL_FROM=GoalMate <no-reply@example.com>`
+- `WECHAT_PROVIDER=wechat`
+- `WECHAT_APP_ID=...`
+- `WECHAT_APP_SECRET=...`
+- `WECHAT_TEMPLATE_ID=...`
 - `REDIS_URL=redis://127.0.0.1:6379`
 
 Core validation commands:

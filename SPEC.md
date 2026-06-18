@@ -624,7 +624,8 @@ MVP 已落地的提醒日志和重试能力：
 - 当用户同时启用 EMAIL 与 WECHAT 且已绑定微信时，提醒生成会分别写入 EMAIL 和 WECHAT 渠道日志；当前发送队列只处理 EMAIL，WECHAT 日志保留给后续微信 provider 消费。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，并按 `emailLogId` 调用 `processQueuedEmailLog` 处理单条到期邮件日志。
 - worker 路径发送失败时会累计 `attempts`；非最终 BullMQ attempt 会保持日志为 `QUEUED` 并抛错交给 BullMQ attempts/backoff 退避重试，最终 attempt 才落库为 `FAILED`。
-- 剩余风险：当前仍使用 MockMailProvider，尚未接入真实邮件服务商和微信服务商；WECHAT 日志尚未接入真实微信 provider 或订阅消息模板。
+- 已新增 Resend 邮件 provider 和微信订阅消息 provider；通过 `MAIL_PROVIDER` / `WECHAT_PROVIDER` 配置开关启用，无密钥环境自动回退 Mock provider。
+- `email_logs` 已记录实际 provider、服务商消息 ID、错误码和尝试次数；worker 会根据服务商错误是否可重试决定 BullMQ 退避重试或直接失败。
 
 ## 9. 商业化
 
@@ -1432,7 +1433,7 @@ AI Provider 要求：
 - `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 生成 / 更新当日健康快照，消费 `WEEKLY_TREND / MONTHLY_TREND` 生成趋势摘要并 upsert `report_artifacts` Markdown 正文。
 - 报告文案已支持 Mock / DeepSeek provider 选择、结构化输出校验和失败回退；Web 可同步生成、列出并下载周 / 月报告 artifact。
 - 已补 `GoalsService health snapshots integration`、`QueueService integration` 和 Playwright E2E，覆盖报告任务入队 disabled metadata、健康快照、周 / 月 artifact、重复 worker 幂等 upsert、provider 失败回退、跨用户下载拒绝和浏览器下载。
-- 剩余风险：长期趋势图和 PDF / Excel 报告 artifact 仍待在数据导出最终版补齐；AI worker 已覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评、opt-in 救援任务和 opt-in 失败复盘生成；Email worker 仍使用 MockMailProvider，真实服务商待接入。
+- 剩余风险：长期趋势图和 PDF / Excel 报告 artifact 仍待在数据导出最终版补齐；AI worker 已覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评、opt-in 救援任务和 opt-in 失败复盘生成；通知 worker 已支持通过配置切换 Resend 和微信订阅消息 provider。
 
 AI job 状态需要支持：
 
@@ -1734,7 +1735,7 @@ API 要求：
 - 已新增 `NotificationsWorker` 和 `processQueuedEmailLog(emailLogId)`：worker 可按单条 EMAIL 日志消费，成功写入 `SENT`，重复消费保持幂等，失败时在非最终 BullMQ attempt 继续保持 `QUEUED`，最终 attempt 写入 `FAILED`。
 - 已新增 `NotificationsService integration` 用例，覆盖 worker-safe 单条发送、重复消费幂等、失败后等待 BullMQ 退避重试，以及最终失败落库。
 - Web 账号页已提供失败邮件重试按钮、渠道开关、微信绑定表单，并展示邮件日志尝试次数和渠道。
-- 剩余风险：真实邮件服务商、真实微信提醒 provider 和微信订阅消息模板仍待实现；Report worker 的周报 / 月报可下载文件和 AI 文案润色仍待实现。
+- 已实现真实 Resend 邮件 provider、微信订阅消息 provider、模板字段映射、错误分类和可重试记录；Report worker 已支持周报 / 月报 Markdown 下载和 Mock / DeepSeek AI 文案。
 
 阶段 E：微信小程序轻量版。
 
@@ -1803,10 +1804,11 @@ API 要求：
    - 失败复盘 worker 验收：`node --import tsx --test src/goals/goals.settlement.integration.test.ts` 已覆盖同步兼容、入队复用、重试成功、重试耗尽、幂等和跨用户隔离；`AdminService integration` 已覆盖管理员重试、worker 消费和审计日志。
    - 报告 artifact 验收：`GoalsService health snapshots integration` 覆盖周 / 月 artifact、幂等 upsert、provider 回退和 owner 隔离；Playwright 覆盖周报生成与下载。
 
-4. 真实提醒 provider
-   - 接入真实邮件 provider 抽象实现，配置发件人、模板、失败原因和退避重试。
-   - 实现微信订阅消息 provider 接口、模板 payload 和失败重试记录。
-   - 验收：Mock provider 全自动测试；真实 provider 通过配置开关启用，不影响本地无 key 环境。
+4. 真实提醒 provider（已完成本阶段）
+   - 已接入 Resend 邮件 provider，支持发件人配置、HTML / 纯文本正文、服务商消息 ID、错误码和可重试分类。
+   - 已实现微信订阅消息 provider，支持 access token 缓存、按提醒类型覆盖模板 ID、模板字段映射和失败重试记录。
+   - 已补齐偏差、救援任务、周报、月报和考前冲刺提醒候选，并统一处理 EMAIL / WECHAT 队列日志。
+   - 验收：2026-06-18 `npm run typecheck` 和 `npm run test:integration`（88/88）通过；Mock provider 全自动测试，真实 provider 通过配置开关启用，不影响本地无 key 环境。
 
 5. 上传证据真实文件链路
    - 对象存储 provider 抽象。

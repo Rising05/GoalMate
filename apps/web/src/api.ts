@@ -602,7 +602,12 @@ export type ReminderType =
   | "TOLERANCE_RISK"
   | "MILESTONE"
   | "FAILURE_REVIEW"
-  | "MEMBERSHIP_EXPIRY";
+  | "MEMBERSHIP_EXPIRY"
+  | "DEVIATION_WARNING"
+  | "RESCUE_TASK"
+  | "WEEKLY_REPORT"
+  | "MONTHLY_REPORT"
+  | "EXAM_SPRINT";
 
 export type NotificationChannel = "WEB" | "EMAIL" | "WECHAT";
 
@@ -637,6 +642,9 @@ export interface EmailLog {
   content: string;
   status: string;
   attempts: number;
+  provider: string | null;
+  providerMessageId: string | null;
+  errorCode: string | null;
   error: string | null;
   scheduledFor: string | null;
   sentAt: string | null;

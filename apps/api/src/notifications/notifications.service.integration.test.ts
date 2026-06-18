@@ -5,6 +5,7 @@ import { BadRequestException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { MailProvider } from "./mail-provider";
+import { MockWechatProvider } from "./mock-wechat.provider";
 import { NotificationsService } from "./notifications.service";
 
 loadEnv();
@@ -34,7 +35,7 @@ describe("NotificationsService integration", () => {
     assert.equal(preference.timezone, "Asia/Shanghai");
     assert.deepEqual(preference.channels, ["EMAIL"]);
     assert.ok(preference.reminderTypes.includes("DAILY_TASK"));
-    assert.ok(preference.availableTypes.length >= 6);
+    assert.ok(preference.availableTypes.length >= 11);
     assert.ok(preference.availableChannels.some((channel) => channel.code === "WECHAT"));
   });
 
@@ -119,6 +120,8 @@ describe("NotificationsService integration", () => {
     assert.equal(processed.failed, 0);
     assert.ok(processed.processed.every((log) => log.status === "SENT"));
     assert.ok(processed.processed.every((log) => log.channel === "EMAIL"));
+    assert.ok(processed.processed.every((log) => log.provider === "mock-mail"));
+    assert.ok(processed.processed.every((log) => log.providerMessageId));
     assert.ok(processed.processed.every((log) => log.sentAt));
   });
 
@@ -159,8 +162,16 @@ describe("NotificationsService integration", () => {
         .filter((log) => log.channel === "WECHAT")
         .every((log) => log.recipientEmail === binding.binding.openId)
     );
-    assert.equal(processed.sent, 2);
-    assert.ok(processed.processed.every((log) => log.channel === "EMAIL"));
+    assert.equal(processed.sent, 4);
+    assert.equal(
+      processed.processed.filter((log) => log.channel === "WECHAT").length,
+      2
+    );
+    assert.ok(
+      processed.processed
+        .filter((log) => log.channel === "WECHAT")
+        .every((log) => log.provider === "mock-wechat" && log.providerMessageId)
+    );
     assert.equal(unbound.unbound, true);
     assert.equal(afterUnbind.binding, null);
   });
@@ -201,6 +212,76 @@ describe("NotificationsService integration", () => {
     assert.equal(logs.logs[0].status, "FAILED");
     assert.equal(logs.logs[0].attempts, 1);
     assert.equal(logs.logs[0].error, "Mock email provider failed");
+    assert.equal(logs.logs[0].errorCode, "MOCK_MAIL_FAILURE");
+  });
+
+  it("queues deviation, rescue, report, and exam sprint reminders", async () => {
+    const user = await createUser("complete-reminder-types");
+    const goal = await createGoalForReminders(user.id);
+    const now = new Date("2026-06-10T10:00:00.000+08:00");
+    await prisma.goal.update({
+      where: { id: goal.id },
+      data: {
+        status: "AT_RISK",
+        examDate: new Date("2026-06-20T00:00:00.000+08:00")
+      }
+    });
+    await prisma.dailyTask.create({
+      data: {
+        goalId: goal.id,
+        taskDate: new Date("2026-06-10T00:00:00.000+08:00"),
+        title: "待完成救援任务",
+        description: "用于触发救援提醒。",
+        taskType: "RESCUE",
+        status: "PENDING"
+      }
+    });
+    for (const type of ["WEEKLY_TREND", "MONTHLY_TREND"]) {
+      await prisma.reportArtifact.create({
+        data: {
+          goalId: goal.id,
+          type,
+          periodStart: new Date("2026-06-01T00:00:00.000+08:00"),
+          periodEnd: new Date(
+            type === "WEEKLY_TREND"
+              ? "2026-06-10T00:00:00.000+08:00"
+              : "2026-06-09T00:00:00.000+08:00"
+          ),
+          title: `${type} 报告`,
+          summary: "趋势摘要",
+          body: "# 报告",
+          recommendations: ["继续执行"],
+          provider: "mock-report",
+          promptVersion: "test-v1",
+          updatedAt: now
+        }
+      });
+    }
+    await notificationsService.updatePreference(user.id, {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: [
+        "DEVIATION_WARNING",
+        "RESCUE_TASK",
+        "WEEKLY_REPORT",
+        "MONTHLY_REPORT",
+        "EXAM_SPRINT"
+      ],
+      channels: ["EMAIL"]
+    });
+
+    const queued = await notificationsService.enqueueDueEmailLogs(user.id, {
+      now: now.toISOString()
+    });
+    const types = queued.queued.map((log) => log.type).sort();
+
+    assert.deepEqual(types, [
+      "DEVIATION_WARNING",
+      "EXAM_SPRINT",
+      "MONTHLY_REPORT",
+      "RESCUE_TASK",
+      "WEEKLY_REPORT"
+    ]);
   });
 
   it("retries failed email logs and records the next attempt", async () => {
@@ -303,6 +384,30 @@ describe("NotificationsService integration", () => {
     assert.equal(final.log.attempts, 2);
     assert.equal(final.log.error, "Forced email provider failure");
   });
+
+  it("does not retry permanent provider failures", async () => {
+    const service = new NotificationsService(
+      prisma,
+      new PermanentFailureMailProvider(),
+      undefined,
+      new MockWechatProvider()
+    );
+    const user = await createUser("permanent-failure");
+    const preview = await service.createPreviewEmailLog(user.id, {
+      type: "DAILY_TASK",
+      scheduledFor: "2026-06-11T09:00:00.000+08:00"
+    });
+
+    const result = await service.processQueuedEmailLog(preview.log.id, {
+      now: "2026-06-11T10:00:00.000+08:00",
+      finalAttempt: false
+    });
+
+    assert.equal(result.retryable, false);
+    assert.equal(result.log.status, "FAILED");
+    assert.equal(result.log.attempts, 1);
+    assert.equal(result.log.errorCode, "INVALID_RECIPIENT");
+  });
 });
 
 class CountingMailProvider implements MailProvider {
@@ -327,6 +432,20 @@ class FailingMailProvider implements MailProvider {
     return {
       status: "FAILED" as const,
       error: "Forced email provider failure"
+    };
+  }
+}
+
+class PermanentFailureMailProvider implements MailProvider {
+  readonly name = "permanent-failure-mail";
+
+  async send() {
+    return {
+      status: "FAILED" as const,
+      error: "Recipient is invalid",
+      errorCode: "INVALID_RECIPIENT",
+      providerMessageId: null,
+      retryable: false
     };
   }
 }
