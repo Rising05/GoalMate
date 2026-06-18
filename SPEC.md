@@ -398,7 +398,7 @@ MVP 联调结论：
 - 救援任务创建后，`daily_tasks.deviationEventId` 与 `deviation_events.id` 保持一致。
 - 同日未完成救援任务会被复用；该任务完成后，再次生成会创建新的 `RESCUE` 任务，并继续关联当天同一偏差事件。
 - 今日任务页面已能同时展示原计划任务、已完成救援任务和新的待完成救援任务；成长时间线已能展示已完成救援任务复盘、触发原因和补救建议。
-- 当前时间线仍以“救援任务复盘”为主，尚未拆成“触发偏差 -> 系统介入 -> 救援任务完成”的完整偏差链路视图。
+- 成长时间线已按 `deviationEventId` 展示“触发偏差 -> 系统介入 -> 救援任务完成”的完整链路视图。
 
 MVP 自动化验证：
 
@@ -621,7 +621,7 @@ MVP 已落地的提醒日志和重试能力：
 - Web 账号页已提供生成今日提醒、处理发送队列和重试失败邮件的基础操作入口，并在邮件日志中展示尝试次数。
 - `notification_preferences.channels` 预留提醒渠道，支持 `WEB / EMAIL / WECHAT`；`email_logs.channel` 记录具体投递渠道。
 - `wechat_bindings` 预留 Web 账号与微信 openid / unionid 绑定关系；已提供绑定、解绑和查询接口。
-- 当用户同时启用 EMAIL 与 WECHAT 且已绑定微信时，提醒生成会分别写入 EMAIL 和 WECHAT 渠道日志；当前发送队列只处理 EMAIL，WECHAT 日志保留给后续微信 provider 消费。
+- 当用户同时启用 EMAIL 与 WECHAT 且已绑定微信时，提醒生成会分别写入 EMAIL 和 WECHAT 渠道日志；统一发送队列按 channel 路由到邮件或微信 provider。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，并按 `emailLogId` 调用 `processQueuedEmailLog` 处理单条到期邮件日志。
 - worker 路径发送失败时会累计 `attempts`；非最终 BullMQ attempt 会保持日志为 `QUEUED` 并抛错交给 BullMQ attempts/backoff 退避重试，最终 attempt 才落库为 `FAILED`。
 - 已新增 Resend 邮件 provider 和微信订阅消息 provider；通过 `MAIL_PROVIDER` / `WECHAT_PROVIDER` 配置开关启用，无密钥环境自动回退 Mock provider。
@@ -658,7 +658,7 @@ MVP 不接入真实支付。
 
 MVP 已落地的会员额度统计：
 
-- 免费版进行中目标上限为 1，PRO 进行中目标上限为 5，确认计划时由后端统一校验。
+- 免费版进行中目标上限为 1，PRO 进行中目标不设上限，确认计划时由后端统一校验；quota API 对 Pro 返回 `activeGoals.limit=null`。
 - `AuthService` 在注册、登录和 `GET /auth/me` 返回 `quota`，包含当前会员计划、是否具有 PRO 权益、进行中目标使用量、今日 AI job 使用量、本周重规划使用量和本周评分申诉使用量。
 - MVP 阶段 AI 次数先作为统计和前端展示，不强制拦截所有 AI job；进行中目标额度已经强制校验。
 - 前端账号页展示进行中目标、今日 AI 次数、本周重规划和本周申诉额度。
@@ -1438,7 +1438,7 @@ AI Provider 要求：
 - `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 生成 / 更新当日健康快照，消费 `WEEKLY_TREND / MONTHLY_TREND` 生成趋势摘要并 upsert `report_artifacts` Markdown 正文。
 - 报告文案已支持 Mock / DeepSeek provider 选择、结构化输出校验和失败回退；Web 可同步生成、列出并下载周 / 月报告 artifact。
 - 已补 `GoalsService health snapshots integration`、`QueueService integration` 和 Playwright E2E，覆盖报告任务入队 disabled metadata、健康快照、周 / 月 artifact、重复 worker 幂等 upsert、provider 失败回退、跨用户下载拒绝和浏览器下载。
-- 剩余风险：长期趋势图和 PDF / Excel 报告 artifact 仍待在数据导出最终版补齐；AI worker 已覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评、opt-in 救援任务和 opt-in 失败复盘生成；通知 worker 已支持通过配置切换 Resend 和微信订阅消息 provider。
+- 长期趋势通过健康快照和周 / 月 artifact 展示；Markdown artifact 可单独下载，JSON / CSV / PDF / Excel 账号导出已包含可选报告范围。AI 与通知 worker 已覆盖第一阶段任务类型。
 
 AI job 状态需要支持：
 
@@ -1763,7 +1763,7 @@ API 要求：
 - 已提供 `GET /notifications/wechat-binding`、`PUT /notifications/wechat-binding`、`DELETE /notifications/wechat-binding`，支持当前登录用户查询、绑定和解绑微信身份。
 - 提醒生成已兼容微信渠道：用户启用 `WECHAT` 且存在 ACTIVE 微信绑定时，会生成 `channel=WECHAT` 的提醒日志；未绑定时返回明确 skipped 原因。
 - 已提供 Web / WeChat 通用上传证据 metadata 接口：`POST /uploads/evidence` 和 `GET /uploads/evidence/:id`。
-- 当前仍不实现真实小程序 UI、微信登录 code2session、对象存储直传或微信订阅消息发送，只保留后端接口和数据结构。
+- 当前仍不实现真实小程序 UI 和微信登录 code2session；Web / WeChat 共用上传链路与微信订阅消息发送 provider 已完成。
 
 阶段 F：导出、隐私和支付预留。
 
@@ -1850,11 +1850,13 @@ API 要求：
    - 已增加报告 artifact、支付订单、支付事件和会员变更导出范围；JSON / CSV / PDF / EXCEL 保持可选范围和完整导出。
    - 验收：不泄露 password hash、上传签名密钥、私有文件字节、他人数据或后台-only 字段。
 
-9. 完整 E2E 和发布前验收
+9. 完整 E2E 和发布前验收（已完成本阶段）
    - 新用户学习目标完整闭环：注册、创建目标、生成计划、确认计划、今日任务、证据打卡、AI 评分、偏差检测、救援任务、健康报告、热力图、成长时间线、奖励、完成 / 失败复盘、导出。
    - Pro 用户解锁详细 AI 分析和多目标额度。
    - 普通用户后台入口不可见，管理员可见且接口可用。
    - 验收：`npm run typecheck`、`npm run test:integration`、`npm run test:e2e`、`npm run build`、`git diff --check` 全部通过。
+   - 2026-06-18 Playwright 已覆盖 Pro 详细 AI 分析、真实 PNG 证据上传、提醒生成与发送、完整 JSON 导出、周报 artifact、支付 webhook 幂等、管理员新接口授权，以及目标完成 / 失败复盘。
+   - 2026-06-18 最终验收：`npm run typecheck`、`npm run test:integration`（93/93）、`npm run build`、`npm run test:e2e`（4/4）和 `git diff --check` 全部通过。
 
 ### 22.15 完整版验收标准
 

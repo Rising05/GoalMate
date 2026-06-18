@@ -38,7 +38,9 @@ describe("AiJobsService active goal quota integration", () => {
 
   it("allows pro users to confirm multiple active goals", async () => {
     const user = await createUser("pro-allow", "PRO");
-    await createGoal(user.id, "已执行目标", "ACTIVE");
+    for (let index = 1; index <= 6; index += 1) {
+      await createGoal(user.id, `已执行目标 ${index}`, "ACTIVE");
+    }
     const waitingGoal = await createGoal(user.id, "会员待确认目标", "WAITING_CONFIRMATION");
     await createPlan(waitingGoal.id);
 

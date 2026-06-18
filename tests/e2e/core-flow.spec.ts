@@ -98,6 +98,10 @@ test("admin navigation is only visible to active admin accounts", async ({
   });
   await loadWebSession(page, regularSession.token);
   await expect(page.getByRole("button", { name: /后台管理/ })).toHaveCount(0);
+  const forbiddenAdminResponse = await request.get(`${apiUrl}/admin/upload-assets`, {
+    headers: { Authorization: `Bearer ${regularSession.token}` }
+  });
+  expect(forbiddenAdminResponse.status()).toBe(403);
 
   const adminSession = await loginViaApi(request, {
     email: admin.user.email,
@@ -105,6 +109,12 @@ test("admin navigation is only visible to active admin accounts", async ({
   });
   await loadWebSession(page, adminSession.token);
   await expect(page.getByRole("button", { name: /后台管理/ })).toBeVisible();
+  for (const path of ["upload-assets", "payment-events", "membership-audits"]) {
+    const response = await request.get(`${apiUrl}/admin/${path}`, {
+      headers: { Authorization: `Bearer ${adminSession.token}` }
+    });
+    expect(response.ok()).toBeTruthy();
+  }
 });
 
 test("queued AI jobs can be cancelled by the owning user", async ({ request }) => {
@@ -247,7 +257,16 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   await page.getByRole("button", { name: "创建账号" }).click();
 
   await expect(page.getByRole("heading", { level: 1, name: "创建目标" })).toBeVisible();
-  await getSessionToken(page);
+  const initialToken = await getSessionToken(page);
+  const coreUser = await prisma.user.findUniqueOrThrow({ where: { email } });
+  await prisma.membership.update({
+    where: { userId: coreUser.id },
+    data: {
+      plan: "PRO",
+      status: "ACTIVE",
+      expiresAt: new Date(Date.now() + 30 * 86_400_000)
+    }
+  });
 
   await page.getByLabel("目标标题").fill(goalTitle);
   await page
@@ -293,6 +312,8 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
 
   await expect(page.getByText("热力图已记录今日完成")).toBeVisible();
   await expect(page.getByText("图片/文件 1 条")).toBeVisible();
+  await expect(page.getByText("AI 总结")).toBeVisible();
+  await expect(page.getByText("明日建议")).toBeVisible();
   await expect(page.getByText(/评分任务 已完成/)).toBeVisible();
   await page.getByRole("button", { name: /返回今日任务/ }).click();
 
@@ -366,6 +387,30 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   expect(health.healthScore).toBeGreaterThan(0);
   expect(health.snapshot.date).toBe(toDateInputValue(today));
   expect(health.rescueSuccessCount7d).toBeGreaterThanOrEqual(1);
+
+  const previewReminder = await request.post(`${apiUrl}/notifications/email-logs/preview`, {
+    headers: { Authorization: `Bearer ${initialToken}` },
+    data: { type: "DAILY_TASK", scheduledFor: new Date(Date.now() - 1000).toISOString() }
+  });
+  expect(previewReminder.ok()).toBeTruthy();
+  const processReminders = await request.post(`${apiUrl}/notifications/email-logs/process-queue`, {
+    headers: { Authorization: `Bearer ${initialToken}` },
+    data: {}
+  });
+  expect(processReminders.ok()).toBeTruthy();
+  expect((await processReminders.json()).sent).toBeGreaterThanOrEqual(1);
+
+  const exportResponse = await request.post(`${apiUrl}/auth/export`, {
+    headers: { Authorization: `Bearer ${initialToken}` },
+    data: { format: "JSON", fullExport: true }
+  });
+  expect(exportResponse.ok()).toBeTruthy();
+  const exported = (await exportResponse.json()) as {
+    data: { reportArtifacts: unknown[]; uploadAssets: unknown[]; emailLogs: unknown[] };
+  };
+  expect(exported.data.reportArtifacts.length).toBeGreaterThanOrEqual(1);
+  expect(exported.data.uploadAssets.length).toBeGreaterThanOrEqual(1);
+  expect(exported.data.emailLogs.length).toBeGreaterThanOrEqual(1);
 
   const timelineResponse = await request.get(
     `${apiUrl}/daily-tasks/timeline?goalId=${goal!.id}`,

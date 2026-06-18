@@ -4930,8 +4930,8 @@ export function App() {
                       <GlassMetricCard
                         key={label}
                         label={label}
-                        tone={quota.used >= quota.limit ? "warning" : "neutral"}
-                        value={`${quota.used}/${quota.limit}`}
+                        tone={quota.limit !== null && quota.used >= quota.limit ? "warning" : "neutral"}
+                        value={`${quota.used}/${quota.limit ?? "不限"}`}
                       />
                     ))}
                   </div>

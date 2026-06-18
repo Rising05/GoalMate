@@ -54,7 +54,6 @@ type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 const ACTIVE_GOAL_STATUSES = ["ACTIVE", "AT_RISK", "REPLANNING"] as const;
 const FREE_ACTIVE_GOAL_LIMIT = 1;
-const PRO_ACTIVE_GOAL_LIMIT = 5;
 const FREE_DAILY_AI_JOB_LIMIT = 20;
 const PRO_DAILY_AI_JOB_LIMIT = 200;
 const FREE_WEEKLY_REPLAN_LIMIT = 3;
@@ -592,7 +591,7 @@ export class AuthService {
       hasProAccess,
       activeGoals: {
         used: activeGoalCount,
-        limit: hasProAccess ? PRO_ACTIVE_GOAL_LIMIT : FREE_ACTIVE_GOAL_LIMIT
+        limit: hasProAccess ? null : FREE_ACTIVE_GOAL_LIMIT
       },
       aiJobsToday: {
         used: aiJobsToday,

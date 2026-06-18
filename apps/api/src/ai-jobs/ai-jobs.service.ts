@@ -23,7 +23,6 @@ const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
 const GOAL_PLAN_REPLAN = "GOAL_PLAN_REPLAN";
 const ACTIVE_GOAL_STATUSES = ["ACTIVE", "AT_RISK", "REPLANNING"] as const;
 const FREE_ACTIVE_GOAL_LIMIT = 1;
-const PRO_ACTIVE_GOAL_LIMIT = 5;
 const MAX_AI_JOB_ATTEMPTS = 3;
 
 type PlanWithItems = Plan & {
@@ -712,13 +711,9 @@ export class AiJobsService {
       membership?.plan === "PRO" &&
       ["ACTIVE", "MANUAL"].includes(membership.status) &&
       (!membership.expiresAt || membership.expiresAt > new Date());
-    const limit = hasProAccess ? PRO_ACTIVE_GOAL_LIMIT : FREE_ACTIVE_GOAL_LIMIT;
-
-    if (activeGoalCount >= limit) {
+    if (!hasProAccess && activeGoalCount >= FREE_ACTIVE_GOAL_LIMIT) {
       throw new BadRequestException(
-        hasProAccess
-          ? `当前会员最多可同时执行 ${limit} 个目标`
-          : "免费版同时只能执行 1 个目标，请完成、失败归档或升级会员后再确认新计划"
+        "免费版同时只能执行 1 个目标，请完成、失败归档或升级会员后再确认新计划"
       );
     }
   }

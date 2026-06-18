@@ -17,7 +17,7 @@ export interface AuthUser {
     hasProAccess: boolean;
     activeGoals: {
       used: number;
-      limit: number;
+      limit: number | null;
     };
     aiJobsToday: {
       used: number;
