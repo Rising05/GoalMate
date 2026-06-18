@@ -204,6 +204,20 @@ export interface EvidenceUploadResponse {
   download?: { method: "GET"; url: string; expiresAt: string } | null;
 }
 
+export interface BillingOrder {
+  id: string;
+  provider: "MOCK" | "STRIPE" | "WECHAT_PAY" | string;
+  plan: string;
+  durationDays: number;
+  amountCents: number;
+  currency: string;
+  status: string;
+  checkoutUrl: string | null;
+  paidAt: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
 export interface ScoreAppeal {
   id: string;
   userId: string;
@@ -688,6 +702,9 @@ export type DataExportScope =
   | "emailLogs"
   | "wechatBinding"
   | "uploadAssets"
+  | "paymentOrders"
+  | "paymentEvents"
+  | "membershipAudits"
   | "adminProfile"
   | "auditLogs";
 
@@ -1097,6 +1114,29 @@ export async function uploadEvidenceFile(
   }
 
   return data as EvidenceUploadResponse;
+}
+
+export async function createBillingOrder(
+  token: string,
+  payload: { provider: "MOCK" | "STRIPE" | "WECHAT_PAY"; durationDays: 30 | 90 | 365 }
+) {
+  const response = await fetch(`${API_BASE_URL}/billing/orders`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await parseJson<{ order: BillingOrder }>(response);
+  if (!response.ok) throw new Error(getErrorMessage(data, "支付订单创建失败"));
+  return data as { order: BillingOrder };
+}
+
+export async function fetchBillingOrders(token: string) {
+  const response = await fetch(`${API_BASE_URL}/billing/orders`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await parseJson<{ orders: BillingOrder[] }>(response);
+  if (!response.ok) throw new Error(getErrorMessage(data, "支付订单加载失败"));
+  return data as { orders: BillingOrder[] };
 }
 
 export async function createGoal(token: string, payload: CreateGoalInput) {

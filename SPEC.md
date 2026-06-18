@@ -663,6 +663,11 @@ MVP 已落地的会员额度统计：
 - MVP 阶段 AI 次数先作为统计和前端展示，不强制拦截所有 AI job；进行中目标额度已经强制校验。
 - 前端账号页展示进行中目标、今日 AI 次数、本周重规划和本周申诉额度。
 - 2026-06-11 已补充 `AuthService quota integration`，验证当前用户 quota 和 AI usage 统计。
+- 已新增 `payment_orders`、`payment_events` 和 `membership_audits`，分别保存结账订单、服务商回调事件和会员权益变更历史。
+- 已实现 Mock / Stripe / 微信支付 provider 边界；Mock 默认可验收，Stripe 和微信仅在 webhook secret 与 checkout URL 配置完整时启用。
+- `POST /billing/orders` 创建当前用户 Pro 订单，`GET /billing/orders` 读取本人订单；支付回调使用 HMAC 签名校验且不依赖用户 session。
+- webhook 以服务商事件 ID 唯一去重；重复回调不会重复开通或延长会员，失败支付只更新订单状态，不授予 Pro。
+- 后台手动开通、延长、降级或取消会员继续可用，并同时写入通用 `audit_logs` 和 `membership_audits`。
 
 ## 10. 管理后台
 
@@ -1820,11 +1825,12 @@ API 要求：
    - 删除单个资产、账号或 metadata 关联目标时会清理本地对象；数据导出继续包含资产 metadata，不包含私有文件字节和签名密钥。
    - 验收：2026-06-18 定向上传、打卡证据、隐私删除和账户导出测试 18/18 通过；完整 Playwright 闭环覆盖浏览器真实 PNG 上传。
 
-6. 支付和会员闭环
-   - 新增订单、支付事件、会员变更审计模型。
-   - 支付 provider 预留 Stripe / 微信支付，webhook 幂等处理。
-   - 前端会员页展示支付状态、手动开通状态和额度解释。
-   - 验收：后台手动开通继续可用；webhook 重放不重复开通。
+6. 支付和会员闭环（已完成本阶段）
+   - 已新增订单、支付事件、会员变更审计模型，并纳入账号数据导出范围。
+   - 已实现 Mock / Stripe / 微信支付 provider 边界、HMAC webhook 校验和事件 ID 幂等处理。
+   - 前端账号页展示当前会员、额度、支付渠道、套餐价格和最近订单状态；未配置真实渠道时明确拒绝创建订单。
+   - 后台手动开通继续可用并写两类审计；支付成功按当前有效到期日顺延，失败支付不授予权益。
+   - 验收：2026-06-18 Billing / Admin 定向测试 10/10 通过；Playwright 覆盖 HTTP 创建订单、支付回调和 webhook 重放不重复开通。
 
 7. 管理后台完整版
    - 用户、目标、AI jobs、邮件 / 微信日志、上传资产、会员、支付事件、审计日志分页和筛选。

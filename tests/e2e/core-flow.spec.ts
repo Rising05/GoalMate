@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "../../apps/api/node_modules/@prisma/client";
+import { createHmac } from "node:crypto";
 
 const apiPort = process.env.E2E_API_PORT ?? "3100";
 const apiUrl = `http://127.0.0.1:${apiPort}`;
@@ -172,6 +173,56 @@ test("queued AI jobs can be cancelled by the owning user", async ({ request }) =
   expect(cancelledJob.status).toBe("CANCELLED");
   expect(cancelledJob.error).toBe("E2E 用户取消排队任务");
   expect(restoredGoal.status).toBe("DRAFT");
+});
+
+test("payment webhook replay activates Pro only once", async ({ request }) => {
+  const stamp = Date.now();
+  const registered = await registerViaApi(request, {
+    email: `e2e-payment-${stamp}@example.com`,
+    password: "Password123!",
+    displayName: "Payment User"
+  });
+  const session = await loginViaApi(request, {
+    email: registered.user.email,
+    password: "Password123!"
+  });
+  const orderResponse = await request.post(`${apiUrl}/billing/orders`, {
+    headers: { Authorization: `Bearer ${session.token}` },
+    data: { provider: "MOCK", durationDays: 30 }
+  });
+  expect(orderResponse.ok()).toBeTruthy();
+  const order = (await orderResponse.json()) as { order: { id: string } };
+  const payload = {
+    eventId: `e2e-event-${stamp}`,
+    orderId: order.order.id,
+    status: "PAID"
+  };
+  const signature = createHmac("sha256", "goalmate-mock-payment")
+    .update(JSON.stringify(payload))
+    .digest("hex");
+  const first = await request.post(`${apiUrl}/billing/webhooks/mock`, {
+    headers: { "x-payment-signature": signature },
+    data: payload
+  });
+  const firstMembership = await prisma.membership.findUniqueOrThrow({
+    where: { userId: registered.user.id }
+  });
+  const replay = await request.post(`${apiUrl}/billing/webhooks/mock`, {
+    headers: { "x-payment-signature": signature },
+    data: payload
+  });
+  const finalMembership = await prisma.membership.findUniqueOrThrow({
+    where: { userId: registered.user.id }
+  });
+
+  expect(first.ok()).toBeTruthy();
+  expect(replay.ok()).toBeTruthy();
+  expect((await replay.json()).duplicate).toBeTruthy();
+  expect(finalMembership.plan).toBe("PRO");
+  expect(finalMembership.expiresAt?.toISOString()).toBe(
+    firstMembership.expiresAt?.toISOString()
+  );
+  expect(await prisma.paymentEvent.count({ where: { orderId: order.order.id } })).toBe(1);
 });
 
 test("new user completes the core GoalPilot MVP loop", async ({ page, request }) => {

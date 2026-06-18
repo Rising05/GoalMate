@@ -9,6 +9,7 @@ import { PrismaModule } from "./prisma/prisma.module";
 import { QueueModule } from "./queue/queue.module";
 import { RewardsModule } from "./rewards/rewards.module";
 import { UploadsModule } from "./uploads/uploads.module";
+import { BillingModule } from "./billing/billing.module";
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { UploadsModule } from "./uploads/uploads.module";
     QueueModule,
     NotificationsModule,
     UploadsModule,
+    BillingModule,
     AdminModule
   ],
   controllers: [HealthController],

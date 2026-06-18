@@ -39,6 +39,7 @@ import {
   AdminRawContent,
   AdminSystemConfig,
   AdminUser,
+  BillingOrder,
   AdminUserFilters,
   AiJob,
   DataExportFormat,
@@ -70,6 +71,7 @@ import {
   createPreviewEmailLog,
   createRewardCard,
   createGoal,
+  createBillingOrder,
   deleteCurrentAccount,
   deleteGoal,
   deleteRewardCard,
@@ -88,6 +90,7 @@ import {
   fetchCurrentUser,
   fetchEmailLogs,
   fetchFailureReport,
+  fetchBillingOrders,
   fetchGoalPlan,
   fetchGoalHealth,
   fetchGoalReportArtifacts,
@@ -219,6 +222,9 @@ const dataExportScopeOptions: Array<{
   { code: "emailLogs", label: "提醒日志" },
   { code: "wechatBinding", label: "微信绑定" },
   { code: "uploadAssets", label: "上传证据" },
+  { code: "paymentOrders", label: "支付订单" },
+  { code: "paymentEvents", label: "支付事件" },
+  { code: "membershipAudits", label: "会员变更" },
   { code: "adminProfile", label: "后台身份" },
   { code: "auditLogs", label: "审计日志" }
 ];
@@ -748,6 +754,12 @@ export function App() {
     difficultyLevel: ""
   });
   const [completionFiles, setCompletionFiles] = useState<File[]>([]);
+  const [billingOrders, setBillingOrders] = useState<BillingOrder[]>([]);
+  const [billingForm, setBillingForm] = useState<{
+    provider: "MOCK" | "STRIPE" | "WECHAT_PAY";
+    durationDays: 30 | 90 | 365;
+  }>({ provider: "MOCK", durationDays: 30 });
+  const [billingMessage, setBillingMessage] = useState("选择套餐后创建支付订单。");
   const [appealForm, setAppealForm] = useState({
     reason: "",
     addedFacts: ""
@@ -1118,6 +1130,7 @@ export function App() {
     }
 
     void loadNotificationSettings(session.token);
+    void loadBillingOrders(session.token);
   }, [activePage, session]);
 
   useEffect(() => {
@@ -2459,6 +2472,28 @@ export function App() {
       setNotificationMessage(
         error instanceof Error ? error.message : "提醒设置加载失败"
       );
+    }
+  }
+
+  async function loadBillingOrders(token = session?.token) {
+    if (!token) return;
+    try {
+      const response = await fetchBillingOrders(token);
+      setBillingOrders(response.orders);
+    } catch (error) {
+      setBillingMessage(error instanceof Error ? error.message : "支付订单加载失败");
+    }
+  }
+
+  async function handleCreateBillingOrder() {
+    if (!session) return;
+    setBillingMessage("正在创建支付订单...");
+    try {
+      const response = await createBillingOrder(session.token, billingForm);
+      setBillingOrders((current) => [response.order, ...current]);
+      setBillingMessage("订单已创建。Mock 渠道用于自动化验收，真实渠道需完成服务商支付。 ");
+    } catch (error) {
+      setBillingMessage(error instanceof Error ? error.message : "支付订单创建失败");
     }
   }
 
@@ -4865,6 +4900,56 @@ export function App() {
                         value={`${quota.used}/${quota.limit}`}
                       />
                     ))}
+                  </div>
+                  <div className="data-export-box">
+                    <div className="section-heading compact-heading">
+                      <div>
+                        <p className="eyebrow">Membership</p>
+                        <h3>升级 Pro</h3>
+                      </div>
+                    </div>
+                    <div className="form-grid compact">
+                      <label>
+                        <span>支付渠道</span>
+                        <select
+                          value={billingForm.provider}
+                          onChange={(event) => setBillingForm((current) => ({
+                            ...current,
+                            provider: event.target.value as typeof current.provider
+                          }))}
+                        >
+                          <option value="MOCK">Mock 验收</option>
+                          <option value="STRIPE">Stripe</option>
+                          <option value="WECHAT_PAY">微信支付</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>会员时长</span>
+                        <select
+                          value={billingForm.durationDays}
+                          onChange={(event) => setBillingForm((current) => ({
+                            ...current,
+                            durationDays: Number(event.target.value) as typeof current.durationDays
+                          }))}
+                        >
+                          <option value={30}>30 天 · ¥19</option>
+                          <option value={90}>90 天 · ¥49</option>
+                          <option value={365}>365 天 · ¥168</option>
+                        </select>
+                      </label>
+                    </div>
+                    <button className="primary-button" type="button" onClick={() => void handleCreateBillingOrder()}>
+                      创建支付订单
+                    </button>
+                    <p className="form-message">{billingMessage}</p>
+                    <div className="settings-list">
+                      {billingOrders.slice(0, 5).map((order) => (
+                        <div key={order.id}>
+                          <span>{order.provider} · {order.durationDays} 天 · ¥{(order.amountCents / 100).toFixed(2)}</span>
+                          <strong>{order.status}</strong>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   <div className="data-export-box">
                     <div className="section-heading compact-heading">

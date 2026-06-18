@@ -427,6 +427,9 @@ export class AdminService {
     }
 
     const payload = this.parseMembershipPayload(input);
+    const previousMembership = await this.prisma.membership.findUnique({
+      where: { userId: targetUserId }
+    });
     const membership = await this.prisma.membership.upsert({
       where: { userId: targetUserId },
       create: {
@@ -452,6 +455,20 @@ export class AdminService {
         plan: membership.plan,
         status: membership.status,
         expiresAt: membership.expiresAt?.toISOString() ?? null
+      }
+    });
+    await this.prisma.membershipAudit.create({
+      data: {
+        userId: targetUserId,
+        actorUserId,
+        action: "ADMIN_UPDATE",
+        fromPlan: previousMembership?.plan ?? null,
+        toPlan: membership.plan,
+        fromStatus: previousMembership?.status ?? null,
+        toStatus: membership.status,
+        expiresAt: membership.expiresAt,
+        reason: payload.reason ?? "后台手动调整会员",
+        metadata: { targetEmail: targetUser.email }
       }
     });
 
