@@ -76,6 +76,7 @@ const CATEGORY_MAP: Record<string, GoalCategory> = {
 const DONE_STATUS = "DONE";
 const RESCUE_TASK_TYPE = "RESCUE";
 const RESCUE_TASK_GENERATION = "RESCUE_TASK_GENERATION";
+const FAILURE_REPORT_GENERATION = "FAILURE_REPORT_GENERATION";
 const PENDING_STATUS = "PENDING";
 const SETTLEABLE_GOAL_STATUSES: GoalStatus[] = ["ACTIVE", "AT_RISK", "REPLANNING"];
 const REPORT_TYPES = ["HEALTH_SNAPSHOT", "WEEKLY_TREND", "MONTHLY_TREND"] as const;
@@ -1047,6 +1048,115 @@ export class GoalsService {
     };
   }
 
+  private shouldQueueFailureReport() {
+    return process.env.FAILURE_REPORT_ASYNC === "true";
+  }
+
+  private async enqueueFailureReportGeneration(
+    goal: Goal,
+    missedDays: ReturnType<GoalsService["getMissedTaskDays"]>
+  ) {
+    const existingJob = await this.prisma.aiJob.findFirst({
+      where: {
+        userId: goal.userId,
+        goalId: goal.id,
+        type: FAILURE_REPORT_GENERATION,
+        status: {
+          in: ["QUEUED", "RUNNING", "RETRYING"]
+        }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+
+    if (existingJob) {
+      return existingJob;
+    }
+
+    const job = await this.prisma.aiJob.create({
+      data: {
+        userId: goal.userId,
+        goalId: goal.id,
+        type: FAILURE_REPORT_GENERATION,
+        status: "QUEUED",
+        payload: {
+          goalId: goal.id,
+          missedDayCount: missedDays.length,
+          toleranceDaysAllowed: goal.toleranceDaysAllowed,
+          provider: "rule-failure-report",
+          promptVersion: "failure-report-v1"
+        }
+      }
+    });
+
+    return this.attachAiJobQueueMetadata(job);
+  }
+
+  private async recordSucceededFailureReportJob(
+    goal: Goal,
+    report: FailureReport,
+    missedDays: ReturnType<GoalsService["getMissedTaskDays"]>
+  ) {
+    const existingJob = await this.prisma.aiJob.findFirst({
+      where: {
+        userId: goal.userId,
+        goalId: goal.id,
+        type: FAILURE_REPORT_GENERATION,
+        status: "SUCCEEDED"
+      },
+      orderBy: { createdAt: "desc" }
+    });
+    const data = {
+      status: "SUCCEEDED" as const,
+      attempts: 1,
+      payload: this.toJson({
+        goalId: goal.id,
+        missedDayCount: missedDays.length,
+        toleranceDaysAllowed: goal.toleranceDaysAllowed,
+        provider: "rule-failure-report",
+        promptVersion: "failure-report-v1",
+        mode: "sync-compatible"
+      }),
+      result: this.toJson({
+        failureReportId: report.id,
+        missedDayCount: missedDays.length,
+        provider: "rule-failure-report"
+      }),
+      error: null
+    };
+
+    if (existingJob) {
+      return this.prisma.aiJob.update({
+        where: { id: existingJob.id },
+        data
+      });
+    }
+
+    return this.prisma.aiJob.create({
+      data: {
+        userId: goal.userId,
+        goalId: goal.id,
+        type: FAILURE_REPORT_GENERATION,
+        ...data
+      }
+    });
+  }
+
+  private async failFailureReportJob(job: AiJob, error: string) {
+    const failedJob = await this.prisma.aiJob.update({
+      where: { id: job.id },
+      data: {
+        status: "FAILED",
+        error
+      }
+    });
+
+    return {
+      job: this.serializeAiJob(failedJob),
+      processed: true,
+      failureReport: null
+    };
+  }
+
   async settleGoal(userId: string, id: string) {
     const goal = await this.getOwnedGoal(userId, id);
     const tasks = await this.getGoalSettlementTasks(goal.id);
@@ -1056,6 +1166,7 @@ export class GoalsService {
     const reachedEndDate = todayStart >= this.getDateRange(this.toDateKey(goal.endDate)).start;
     let nextStatus = goal.status;
     let failureReport: FailureReport | null = null;
+    let failureReportJob: AiJob | null = null;
 
     if (SETTLEABLE_GOAL_STATUSES.includes(goal.status as (typeof SETTLEABLE_GOAL_STATUSES)[number])) {
       if (toleranceDaysUsed > goal.toleranceDaysAllowed) {
@@ -1074,7 +1185,23 @@ export class GoalsService {
     });
 
     if (nextStatus === "FAILED") {
-      failureReport = await this.upsertFailureReport(updatedGoal, tasks, missedDays);
+      const existingReport = await this.prisma.failureReport.findUnique({
+        where: { goalId: updatedGoal.id }
+      });
+
+      if (this.shouldQueueFailureReport() && !existingReport) {
+        failureReportJob = await this.enqueueFailureReportGeneration(
+          updatedGoal,
+          missedDays
+        );
+      } else {
+        failureReport = await this.upsertFailureReport(updatedGoal, tasks, missedDays);
+        failureReportJob = await this.recordSucceededFailureReportJob(
+          updatedGoal,
+          failureReport,
+          missedDays
+        );
+      }
     }
 
     return {
@@ -1086,8 +1213,132 @@ export class GoalsService {
         toleranceDaysAllowed: goal.toleranceDaysAllowed,
         missedDays
       },
-      failureReport: failureReport ? this.serializeFailureReport(failureReport) : null
+      failureReport: failureReport ? this.serializeFailureReport(failureReport) : null,
+      job: failureReportJob ? this.serializeAiJob(failureReportJob) : null
     };
+  }
+
+  async processQueuedFailureReportJob(id: string) {
+    const job = await this.prisma.aiJob.findUnique({
+      where: { id }
+    });
+
+    if (!job) {
+      throw new NotFoundException("AI 任务不存在");
+    }
+
+    if (job.type !== FAILURE_REPORT_GENERATION) {
+      throw new BadRequestException(`不支持的失败复盘任务类型：${job.type}`);
+    }
+
+    if (job.status !== "QUEUED") {
+      return {
+        job: this.serializeAiJob(job),
+        processed: false,
+        reason: "AI job is not queued."
+      };
+    }
+
+    const payload = this.jsonObject(job.payload);
+    const goalId = typeof payload.goalId === "string" ? payload.goalId : job.goalId;
+
+    if (!goalId) {
+      return this.failFailureReportJob(
+        job,
+        "Queued failure report job is missing goalId."
+      );
+    }
+
+    const goal = await this.prisma.goal.findFirst({
+      where: {
+        id: goalId,
+        userId: job.userId
+      }
+    });
+
+    if (!goal) {
+      return this.failFailureReportJob(
+        job,
+        "Failure report goal was not found for the job owner."
+      );
+    }
+
+    if (goal.status !== "FAILED") {
+      return this.failFailureReportJob(
+        job,
+        "Failure report generation requires a failed goal."
+      );
+    }
+
+    const maxAttempts = 3;
+    const failuresBeforeSuccess =
+      typeof payload.providerFailuresBeforeSuccess === "number"
+        ? Math.max(0, Math.floor(payload.providerFailuresBeforeSuccess))
+        : 0;
+    let currentJob = job;
+
+    while (currentJob.attempts < maxAttempts) {
+      currentJob = await this.prisma.aiJob.update({
+        where: { id: job.id },
+        data: {
+          status: "RUNNING",
+          attempts: {
+            increment: 1
+          }
+        }
+      });
+
+      try {
+        if (
+          payload.simulateProviderFailure === true ||
+          currentJob.attempts <= failuresBeforeSuccess
+        ) {
+          throw new Error("simulated failure report provider failure");
+        }
+
+        const tasks = await this.getGoalSettlementTasks(goal.id);
+        const missedDays = this.getMissedTaskDays(tasks);
+        const report = await this.upsertFailureReport(goal, tasks, missedDays);
+        const succeededJob = await this.prisma.aiJob.update({
+          where: { id: currentJob.id },
+          data: {
+            status: "SUCCEEDED",
+            result: {
+              failureReportId: report.id,
+              missedDayCount: missedDays.length,
+              provider: "rule-failure-report"
+            },
+            error: null
+          }
+        });
+
+        return {
+          job: this.serializeAiJob(succeededJob),
+          processed: true,
+          failureReport: this.serializeFailureReport(report)
+        };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failure report generation failed";
+
+        if (currentJob.attempts >= maxAttempts) {
+          return this.failFailureReportJob(currentJob, message);
+        }
+
+        currentJob = await this.prisma.aiJob.update({
+          where: { id: currentJob.id },
+          data: {
+            status: "RETRYING",
+            error: message
+          }
+        });
+      }
+    }
+
+    return this.failFailureReportJob(
+      currentJob,
+      currentJob.error ?? "Failure report generation exhausted retries"
+    );
   }
 
   async getFailureReport(userId: string, id: string) {
@@ -1106,10 +1357,36 @@ export class GoalsService {
     }
 
     if (!report && goal.status === "FAILED") {
+      if (this.shouldQueueFailureReport()) {
+        const job = await this.prisma.aiJob.findFirst({
+          where: {
+            userId,
+            goalId: goal.id,
+            type: FAILURE_REPORT_GENERATION
+          },
+          orderBy: { createdAt: "desc" }
+        });
+
+        if (job?.status === "FAILED") {
+          throw new NotFoundException(`失败复盘生成失败：${job.error ?? "未知错误"}`);
+        }
+
+        if (job?.status === "CANCELLED") {
+          throw new NotFoundException("失败复盘生成已取消，请重新结算目标后再试");
+        }
+
+        throw new NotFoundException("失败复盘正在生成");
+      }
+
       const tasks = await this.getGoalSettlementTasks(goal.id);
       const createdReport = await this.upsertFailureReport(
         goal,
         tasks,
+        this.getMissedTaskDays(tasks)
+      );
+      await this.recordSucceededFailureReportJob(
+        goal,
+        createdReport,
         this.getMissedTaskDays(tasks)
       );
       return this.serializeFailureReport(createdReport);

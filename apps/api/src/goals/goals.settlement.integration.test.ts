@@ -64,6 +64,146 @@ describe("GoalsService settlement integration", () => {
     assert.equal(result.failureReport.lowScoreTasks.length, 1);
     assert.equal(result.failureReport.keyDeviationNodes.length, 1);
     assert.match(result.failureReport.suggestion, /重新开启一个更小的新目标/);
+    assert.equal(result.job?.type, "FAILURE_REPORT_GENERATION");
+    assert.equal(result.job?.status, "SUCCEEDED");
+  });
+
+  it("queues failure report generation and processes it through the worker path", async () => {
+    const previousAsync = process.env.FAILURE_REPORT_ASYNC;
+    const previousBullMq = process.env.BULLMQ_ENABLED;
+    process.env.FAILURE_REPORT_ASYNC = "true";
+    process.env.BULLMQ_ENABLED = "false";
+
+    try {
+      const { goal, user } = await createGoalForSettlement("async-failure", {
+        endDate: new Date("2026-06-30T00:00:00.000+08:00"),
+        toleranceDaysAllowed: 0
+      });
+      await createPendingTask(goal.id, "2026-06-08", "异步失败复盘断签");
+
+      const queued = await goalsService.settleGoal(user.id, goal.id);
+      const repeatedSettlement = await goalsService.settleGoal(user.id, goal.id);
+
+      assert.equal(queued.goal.status, "FAILED");
+      assert.equal(queued.failureReport, null);
+      assert.equal(queued.job?.type, "FAILURE_REPORT_GENERATION");
+      assert.equal(queued.job?.status, "QUEUED");
+      assert.equal(repeatedSettlement.job?.id, queued.job?.id);
+
+      const queuedJob = await prisma.aiJob.findUniqueOrThrow({
+        where: { id: queued.job!.id }
+      });
+      await prisma.aiJob.update({
+        where: { id: queuedJob.id },
+        data: {
+          payload: {
+            ...(queuedJob.payload as Record<string, unknown>),
+            providerFailuresBeforeSuccess: 1
+          }
+        }
+      });
+
+      const processed = await goalsService.processQueuedFailureReportJob(queued.job!.id);
+      const repeated = await goalsService.processQueuedFailureReportJob(queued.job!.id);
+
+      assert.equal(processed.processed, true);
+      assert.equal(processed.job.status, "SUCCEEDED");
+      assert.equal(processed.job.attempts, 2);
+      assert.equal(processed.failureReport?.goalId, goal.id);
+      assert.equal(repeated.processed, false);
+      assert.equal(repeated.job.status, "SUCCEEDED");
+      assert.ok(await prisma.failureReport.findUnique({ where: { goalId: goal.id } }));
+    } finally {
+      restoreEnv("FAILURE_REPORT_ASYNC", previousAsync);
+      restoreEnv("BULLMQ_ENABLED", previousBullMq);
+    }
+  });
+
+  it("stores failure report provider errors for administrator retry", async () => {
+    const previousAsync = process.env.FAILURE_REPORT_ASYNC;
+    process.env.FAILURE_REPORT_ASYNC = "true";
+
+    try {
+      const { goal, user } = await createGoalForSettlement("provider-failure", {
+        endDate: new Date("2026-06-30T00:00:00.000+08:00"),
+        toleranceDaysAllowed: 0
+      });
+      await createPendingTask(goal.id, "2026-06-08", "失败复盘 provider 错误");
+      const queued = await goalsService.settleGoal(user.id, goal.id);
+      const payload = queued.job?.id
+        ? await prisma.aiJob.findUniqueOrThrow({ where: { id: queued.job.id } })
+        : null;
+
+      assert.ok(payload);
+      await prisma.aiJob.update({
+        where: { id: payload.id },
+        data: {
+          payload: {
+            ...(payload.payload as Record<string, unknown>),
+            simulateProviderFailure: true
+          }
+        }
+      });
+
+      const processed = await goalsService.processQueuedFailureReportJob(payload.id);
+
+      assert.equal(processed.job.status, "FAILED");
+      assert.equal(processed.job.attempts, 3);
+      assert.match(processed.job.error ?? "", /simulated failure report provider failure/);
+      assert.equal(processed.failureReport, null);
+      assert.equal(
+        await prisma.failureReport.findUnique({ where: { goalId: goal.id } }),
+        null
+      );
+    } finally {
+      restoreEnv("FAILURE_REPORT_ASYNC", previousAsync);
+    }
+  });
+
+  it("keeps queued failure report generation isolated by job owner", async () => {
+    const previousAsync = process.env.FAILURE_REPORT_ASYNC;
+    process.env.FAILURE_REPORT_ASYNC = "true";
+
+    try {
+      const owner = await createGoalForSettlement("owner-isolation", {
+        endDate: new Date("2026-06-30T00:00:00.000+08:00"),
+        toleranceDaysAllowed: 0
+      });
+      const foreign = await createGoalForSettlement("foreign-isolation", {
+        endDate: new Date("2026-06-30T00:00:00.000+08:00"),
+        toleranceDaysAllowed: 0
+      });
+      await createPendingTask(owner.goal.id, "2026-06-08", "owner failure");
+      await prisma.goal.update({
+        where: { id: foreign.goal.id },
+        data: { status: "FAILED" }
+      });
+      const queued = await goalsService.settleGoal(owner.user.id, owner.goal.id);
+      const storedJob = await prisma.aiJob.findUniqueOrThrow({
+        where: { id: queued.job!.id }
+      });
+      await prisma.aiJob.update({
+        where: { id: storedJob.id },
+        data: {
+          goalId: foreign.goal.id,
+          payload: {
+            ...(storedJob.payload as Record<string, unknown>),
+            goalId: foreign.goal.id
+          }
+        }
+      });
+
+      const processed = await goalsService.processQueuedFailureReportJob(storedJob.id);
+
+      assert.equal(processed.job.status, "FAILED");
+      assert.match(processed.job.error ?? "", /job owner/);
+      assert.equal(
+        await prisma.failureReport.findUnique({ where: { goalId: foreign.goal.id } }),
+        null
+      );
+    } finally {
+      restoreEnv("FAILURE_REPORT_ASYNC", previousAsync);
+    }
   });
 
   it("restarts a failed goal as a new draft goal", async () => {
@@ -221,4 +361,13 @@ async function createLowScoreCheckin(userId: string, goalId: string, dateKey: st
 
 function toBeijingDate(dateKey: string) {
   return new Date(`${dateKey}T00:00:00.000+08:00`);
+}
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+
+  process.env[key] = value;
 }

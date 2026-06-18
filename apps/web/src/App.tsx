@@ -282,6 +282,7 @@ const aiJobTypeLabels: Record<string, string> = {
   CHECKIN_SCORING: "打卡评分",
   CHECKIN_SCORE_APPEAL: "评分复评",
   RESCUE_TASK_GENERATION: "救援任务",
+  FAILURE_REPORT_GENERATION: "失败复盘",
   SCORE_CHECKIN: "打卡评分",
   SEND_EMAIL: "邮件发送"
 };
@@ -1206,6 +1207,32 @@ export function App() {
             heatmapYear,
             response.job.goalId
           );
+        }
+
+        if (
+          response.job.status === "SUCCEEDED" &&
+          response.job.goalId &&
+          response.job.type === "FAILURE_REPORT_GENERATION"
+        ) {
+          void loadFailureReport(session.token, response.job.goalId);
+        }
+
+        if (
+          response.job.type === "FAILURE_REPORT_GENERATION" &&
+          response.job.status === "FAILED"
+        ) {
+          setFailureMessage(
+            response.job.error
+              ? `失败复盘生成失败：${response.job.error}`
+              : "失败复盘生成失败，可联系管理员重试。"
+          );
+        }
+
+        if (
+          response.job.type === "FAILURE_REPORT_GENERATION" &&
+          response.job.status === "CANCELLED"
+        ) {
+          setFailureMessage("失败复盘生成已取消，可重新结算目标后再试。");
         }
       } catch (error) {
         if (!stopped) {
@@ -2153,14 +2180,32 @@ export function App() {
       const result = await settleGoal(session.token, selectedGoalId);
       await refreshGoals(session.token, result.goal.id);
 
+      if (result.job) {
+        trackAiJob(
+          result.job,
+          result.job.status === "SUCCEEDED"
+            ? "失败复盘生成任务已完成。"
+            : "失败复盘生成任务已记录，将自动更新状态。"
+        );
+      }
+
       if (result.failureReport) {
         setFailureReport(result.failureReport);
+        setFailureMessage("失败复盘已生成，可根据建议重新开启新目标。");
+      } else if (result.goal.status === "FAILED") {
+        setFailureReport(null);
+        setFailureMessage("失败复盘正在生成，请稍候。");
+      }
+
+      if (result.goal.status === "FAILED") {
         setActivePage("failure");
       }
 
       setGoalMessage(
         result.goal.status === "FAILED"
-          ? "目标已进入失败状态，失败复盘已生成。"
+          ? result.failureReport
+            ? "目标已进入失败状态，失败复盘已生成。"
+            : "目标已进入失败状态，失败复盘正在生成。"
           : result.goal.status === "COMPLETED"
             ? "目标已达结束日期并完成结算。"
             : `目标已更新容错使用：${result.settlement.toleranceDaysUsed}/${result.settlement.toleranceDaysAllowed}`

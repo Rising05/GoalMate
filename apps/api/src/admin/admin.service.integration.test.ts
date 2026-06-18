@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
+import { GoalsService } from "../goals/goals.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdminService } from "./admin.service";
 
@@ -13,6 +14,7 @@ const TEST_CONFIG_KEY = "admin.integration.flag";
 
 const prisma = new PrismaService();
 const adminService = new AdminService(prisma);
+const goalsService = new GoalsService(prisma);
 
 describe("AdminService integration", () => {
   before(async () => {
@@ -357,7 +359,7 @@ describe("AdminService integration", () => {
     );
   });
 
-  it("lets an admin retry a failed AI job with audit logging", async () => {
+  it("lets an admin retry a failed failure-report job with audit logging", async () => {
     const { user: admin } = await createUser("retry-admin");
     const { user: member, goal } = await createUserWithOperationalData("retry-job");
 
@@ -368,19 +370,24 @@ describe("AdminService integration", () => {
         status: "ACTIVE"
       }
     });
+    await prisma.goal.update({
+      where: { id: goal.id },
+      data: { status: "FAILED" }
+    });
 
     const failedJob = await prisma.aiJob.create({
       data: {
         userId: member.id,
         goalId: goal.id,
-        type: "GOAL_PLAN_REPLAN",
+        type: "FAILURE_REPORT_GENERATION",
         status: "FAILED",
         attempts: 3,
         payload: {
           goalId: goal.id,
-          adjustmentReason: "用户调整备考节奏"
+          provider: "rule-failure-report",
+          promptVersion: "failure-report-v1"
         },
-        error: "DeepSeek timeout"
+        error: "Failure report provider timeout"
       }
     });
 
@@ -416,7 +423,7 @@ describe("AdminService integration", () => {
     assert.equal(payload.adminRetry?.reason, "后台排查失败后手动重试");
     assert.equal(payload.adminRetry?.previousStatus, "FAILED");
     assert.equal(payload.adminRetry?.previousAttempts, 3);
-    assert.equal(payload.adminRetry?.previousError, "DeepSeek timeout");
+    assert.equal(payload.adminRetry?.previousError, "Failure report provider timeout");
     assert.equal(payload.adminRetry?.queue?.queued, false);
     assert.equal(payload.adminRetry?.queue?.queueName, "ai-jobs");
     assert.ok(
@@ -427,6 +434,11 @@ describe("AdminService integration", () => {
           log.reason === "后台排查失败后手动重试"
       )
     );
+    const processed = await goalsService.processQueuedFailureReportJob(failedJob.id);
+
+    assert.equal(processed.job.status, "SUCCEEDED");
+    assert.equal(processed.failureReport?.goalId, goal.id);
+    assert.ok(await prisma.failureReport.findUnique({ where: { goalId: goal.id } }));
     await assert.rejects(
       () =>
         adminService.retryAiJob(admin.id, failedJob.id, {

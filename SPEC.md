@@ -433,6 +433,13 @@ MVP 自动化验证：
 - AI 复盘建议
 - 重新开启计划入口
 
+失败复盘异步生成：
+
+- `POST /goals/:id/settle` 默认保持同步兼容，失败时立即返回 `failureReport`，同时记录一个 `SUCCEEDED` 的 `FAILURE_REPORT_GENERATION` AI job。
+- 设置 `FAILURE_REPORT_ASYNC=true` 后，失败结算返回 `failureReport=null` 和 `QUEUED` job；`AiJobsWorker` 生成报告后，Web 通过 AI job 轮询自动加载失败复盘。
+- worker 校验 job owner、目标归属和 `FAILED` 状态，最多自动尝试 3 次；耗尽后把 provider 错误写入 AI job，管理员可通过通用 AI job retry 重新入队。
+- 重复结算复用仍在运行的失败复盘 job，终态重复消费不会重复生成；用户取消 queued job 后可重新结算再次发起。
+
 ### 5.10 目标完成
 
 目标完成规则：
@@ -1405,6 +1412,9 @@ AI Provider 要求：
 - 已补 `DailyTasksService score appeal integration`，覆盖同步兼容路径、异步申诉 worker 成功复评、终态重复消费幂等跳过、缺失 payload 失败落库，以及跨用户 payload 隔离。
 - `AiJobsWorker` 已能按 job type 分发 `RESCUE_TASK_GENERATION` 到 `GoalsService.processQueuedRescueTaskJob`；设置 `RESCUE_TASK_ASYNC=true` 后，救援任务生成会先创建 `QUEUED` AI job，由 worker 推进到 `RUNNING / SUCCEEDED / FAILED`，成功时创建或复用当日救援任务，provider 失败时落库错误并使用规则兜底生成救援任务。
 - 已补 `GoalsService rescue task integration`，覆盖异步救援任务入队、worker 成功生成、provider 失败规则兜底、终态重复消费幂等和跨用户 job owner 隔离。
+- `AiJobsWorker` 已能按 job type 分发 `FAILURE_REPORT_GENERATION` 到 `GoalsService.processQueuedFailureReportJob`；设置 `FAILURE_REPORT_ASYNC=true` 后，失败结算创建或复用 `QUEUED` job，worker 推进 `RUNNING / RETRYING / SUCCEEDED / FAILED`，成功落库失败报告，失败最多自动尝试 3 次并保留错误。
+- Web 在失败结算后进入失败复盘页并轮询 job，成功时自动加载报告，失败或取消时展示明确状态；后台通用 AI job retry 已验证可重新入队并由失败复盘 worker 成功消费。
+- 已扩展 `GoalsService settlement integration` 和 `AdminService integration`，覆盖同步兼容、异步入队、重试后成功、重试耗尽、终态幂等、跨用户隔离、管理员重试和审计日志。
 - `NotificationsWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `email` 队列，消费 `QUEUED` EMAIL 日志；发送失败会累计 attempts，非最终 attempt 交给 BullMQ backoff 重试，最终失败写入 `FAILED` 和错误信息。
 - 已补 `NotificationsService integration`，覆盖单条邮件 worker 路径成功、重复消费幂等、失败保持 queued 等待重试，以及最终 attempt 失败落库。
 - 已新增 `POST /goals/:id/health-snapshots/enqueue`，当前用户可把自己的目标健康快照报告任务写入 `reports` 队列；当 BullMQ 未启用时返回 disabled queue metadata，便于本地和测试闭环。
@@ -1412,7 +1422,7 @@ AI Provider 要求：
 - 已新增 `POST /goals/:id/health-trends`，基于已有 `health_snapshots` 返回周 / 月趋势摘要：周期范围、快照数量、平均健康分、上一周期均分、分数变化、趋势方向、风险计数、主导风险、最新快照和简短洞察。
 - `GoalsReportWorker` 已在 `BULLMQ_WORKERS_ENABLED=true` 时监听 BullMQ `reports` 队列，消费 `HEALTH_SNAPSHOT` 生成 / 更新当日健康快照，消费 `WEEKLY_TREND / MONTHLY_TREND` 生成周 / 月趋势摘要。
 - 已补 `GoalsService health snapshots integration` 和 `QueueService integration`，覆盖报告任务入队 disabled metadata、worker 处理健康快照、重复处理幂等 upsert、周 / 月趋势摘要、趋势 worker 路径和不支持的报告任务拒绝。
-- 剩余风险：Report worker 当前趋势摘要暂不持久化报告正文，周报 / 月报的可下载文件、AI 文案润色和长期趋势图仍待补齐；AI worker 当前覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评和 opt-in 救援任务生成，失败复盘仍沿用同步服务路径；Email worker 仍使用 MockMailProvider，真实服务商待接入。
+- 剩余风险：Report worker 当前趋势摘要暂不持久化报告正文，周报 / 月报的可下载文件、AI 文案润色和长期趋势图仍待补齐；AI worker 已覆盖计划生成、重规划、opt-in 打卡评分、opt-in 申诉复评、opt-in 救援任务和 opt-in 失败复盘生成；Email worker 仍使用 MockMailProvider，真实服务商待接入。
 
 AI job 状态需要支持：
 
@@ -1751,7 +1761,7 @@ API 要求：
 
 阶段 H：完整版最终闭合。
 
-- 将剩余 AI 同步路径 worker 化：申诉复评、救援建议、失败复盘和周 / 月报告 AI 文案。
+- 完成周 / 月报告正文持久化、AI 文案润色和可下载 artifact。
 - 接入真实邮件 provider，并保留 Mock provider 用于测试；微信订阅消息 provider 完成接口与失败重试。
 - 上传证据从 metadata placeholder 升级到对象存储签名 URL、权限校验、大小 / MIME 限制和病毒扫描预留。
 - 支付预留完成：会员订单、支付 provider 抽象、webhook 幂等、会员状态变更审计；第一阶段仍允许后台手动开通。
@@ -1776,10 +1786,11 @@ API 要求：
 3. AI worker 补齐
    - `CHECKIN_SCORE_APPEAL` 改为 worker 可消费。（已完成）
    - `RESCUE_TASK_GENERATION` 改为 worker 可消费，支持 job 状态流转、失败落库、规则兜底和前端轮询刷新。（已完成）
-   - 失败复盘生成支持 AI job、重试、失败落库和管理员重试。
+   - `FAILURE_REPORT_GENERATION` 改为 worker 可消费，支持三次自动重试、失败落库、取消提示、前端轮询和管理员审计重试。（已完成）
    - 周 / 月报告增加 AI 文案润色和可下载报告 artifact。
    - 申诉 worker 验收：`node --import tsx --test src/daily-tasks/daily-tasks.appeal.integration.test.ts` 已覆盖成功、失败、幂等和跨用户隔离；管理员重试随通用 AI job retry 保留。
    - 救援任务 worker 验收：`node --import tsx --test src/goals/goals.service.integration.test.ts` 已覆盖入队、worker 成功、provider 失败兜底和跨用户隔离；管理员重试随通用 AI job retry 保留。
+   - 失败复盘 worker 验收：`node --import tsx --test src/goals/goals.settlement.integration.test.ts` 已覆盖同步兼容、入队复用、重试成功、重试耗尽、幂等和跨用户隔离；`AdminService integration` 已覆盖管理员重试、worker 消费和审计日志。
 
 4. 真实提醒 provider
    - 接入真实邮件 provider 抽象实现，配置发件人、模板、失败原因和退避重试。

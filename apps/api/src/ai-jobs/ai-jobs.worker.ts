@@ -7,6 +7,7 @@ import { AiJobsService } from "./ai-jobs.service";
 const CHECKIN_SCORING = "CHECKIN_SCORING";
 const CHECKIN_SCORE_APPEAL = "CHECKIN_SCORE_APPEAL";
 const RESCUE_TASK_GENERATION = "RESCUE_TASK_GENERATION";
+const FAILURE_REPORT_GENERATION = "FAILURE_REPORT_GENERATION";
 
 @Injectable()
 export class AiJobsWorker implements OnModuleInit {
@@ -43,6 +44,10 @@ export class AiJobsWorker implements OnModuleInit {
 
       if (data.type === RESCUE_TASK_GENERATION) {
         return this.goalsService.processQueuedRescueTaskJob(jobId);
+      }
+
+      if (data.type === FAILURE_REPORT_GENERATION) {
+        return this.goalsService.processQueuedFailureReportJob(jobId);
       }
 
       return this.aiJobsService.processQueuedAiJob(jobId);

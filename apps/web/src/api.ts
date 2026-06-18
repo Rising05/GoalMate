@@ -575,6 +575,7 @@ export interface GoalSettlementResponse {
   goal: Goal;
   settlement: GoalSettlement;
   failureReport: FailureReport | null;
+  job: AiJob | null;
 }
 
 export type ReminderType =
