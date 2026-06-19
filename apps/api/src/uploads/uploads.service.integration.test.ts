@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, HttpException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { UploadsService } from "./uploads.service";
@@ -206,6 +206,43 @@ describe("UploadsService integration", () => {
         }),
       BadRequestException
     );
+  });
+
+  it("enforces storage capacity and releases reserved space after deletion", async () => {
+    const user = await createUser("quota");
+    const assets = [];
+
+    for (let index = 0; index < 5; index += 1) {
+      assets.push(
+        (await uploadsService.createEvidenceUpload(user.id, {
+          source: "WEB",
+          purpose: "CHECKIN_EVIDENCE",
+          fileName: `quota-${index}.pdf`,
+          mimeType: "application/pdf",
+          sizeBytes: 10 * 1024 * 1024
+        })).asset
+      );
+    }
+
+    await assert.rejects(
+      () => uploadsService.createEvidenceUpload(user.id, {
+        source: "WEB",
+        purpose: "CHECKIN_EVIDENCE",
+        fileName: "quota-overflow.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1024
+      }),
+      (error: unknown) => error instanceof HttpException && error.getStatus() === 429
+    );
+    await uploadsService.deleteEvidenceUpload(user.id, assets[0].id);
+    const replacement = await uploadsService.createEvidenceUpload(user.id, {
+      source: "WEB",
+      purpose: "CHECKIN_EVIDENCE",
+      fileName: "quota-replacement.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024
+    });
+    assert.equal(replacement.asset.status, "PENDING_UPLOAD");
   });
 });
 

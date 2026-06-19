@@ -13,6 +13,7 @@ import {
   timingSafeEqual
 } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
+import { QuotaService } from "../quota/quota.service";
 import {
   LocalStorageProvider,
   STORAGE_PROVIDER,
@@ -37,13 +38,18 @@ export class UploadsService {
     private readonly prisma: PrismaService,
     @Optional()
     @Inject(STORAGE_PROVIDER)
-    private readonly storage: StorageProvider = new LocalStorageProvider()
+    private readonly storage: StorageProvider = new LocalStorageProvider(),
+    @Optional()
+    @Inject(QuotaService)
+    private readonly quotaService: QuotaService = new QuotaService(prisma)
   ) {}
 
   async createEvidenceUpload(userId: string, input: unknown) {
     const payload = this.parseUploadPayload(input);
-    const asset = await this.prisma.uploadAsset.create({
-      data: {
+    const assetId = randomUUID();
+    const createAsset = (client: PrismaService | Prisma.TransactionClient) =>
+      client.uploadAsset.create({ data: {
+        id: assetId,
         userId,
         source: payload.source,
         purpose: payload.purpose,
@@ -57,8 +63,21 @@ export class UploadsService {
         status: payload.publicUrl ? "READY" : "PENDING_UPLOAD",
         scanStatus: payload.publicUrl ? "NOT_REQUIRED" : "PENDING",
         metadata: payload.metadata
-      }
-    });
+      } });
+    const asset = payload.publicUrl
+      ? await createAsset(this.prisma)
+      : await this.quotaService.runWithQuota(
+          userId,
+          "UPLOAD_STORAGE_KIB",
+          {
+            idempotencyKey: `upload-storage:${assetId}`,
+            quantity: Math.ceil(payload.sizeBytes / 1024),
+            resourceType: "UPLOAD_ASSET",
+            resourceId: assetId,
+            metadata: { sizeBytes: payload.sizeBytes }
+          },
+          createAsset
+        );
 
     return {
       asset: this.serializeUploadAsset(asset),
@@ -112,13 +131,22 @@ export class UploadsService {
     }
 
     if (!this.matchesMagicBytes(asset.mimeType, content)) {
-      await this.prisma.uploadAsset.update({
-        where: { id: asset.id },
-        data: {
-          status: "REJECTED",
-          scanStatus: "REJECTED",
-          scanResult: "File signature does not match declared MIME type"
-        }
+      await this.prisma.$transaction(async (tx) => {
+        await tx.uploadAsset.update({
+          where: { id: asset.id },
+          data: {
+            status: "REJECTED",
+            scanStatus: "REJECTED",
+            scanResult: "File signature does not match declared MIME type"
+          }
+        });
+        await this.quotaService.releaseWithClient(
+          tx,
+          userId,
+          "UPLOAD_STORAGE_KIB",
+          "UPLOAD_ASSET",
+          asset.id
+        );
       });
       throw new BadRequestException("文件内容与声明类型不匹配");
     }
@@ -174,9 +202,19 @@ export class UploadsService {
       await this.storage.delete(asset.objectKey);
     }
 
-    const deleted = await this.prisma.uploadAsset.update({
-      where: { id: asset.id },
-      data: { status: "DELETED", deletedAt: new Date() }
+    const deleted = await this.prisma.$transaction(async (tx) => {
+      const deleted = await tx.uploadAsset.update({
+        where: { id: asset.id },
+        data: { status: "DELETED", deletedAt: new Date() }
+      });
+      await this.quotaService.releaseWithClient(
+        tx,
+        userId,
+        "UPLOAD_STORAGE_KIB",
+        "UPLOAD_ASSET",
+        asset.id
+      );
+      return deleted;
     });
 
     return { asset: this.serializeUploadAsset(deleted) };

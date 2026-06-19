@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, HttpException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { DailyTasksService } from "./daily-tasks.service";
@@ -61,6 +61,7 @@ describe("DailyTasksService check-in evidence integration", () => {
     assert.deepEqual(checkin.evidenceLinks, ["https://example.com/error-book"]);
     assert.equal(result.checkin.aiScore!.isDetailedAnalysisUnlocked, false);
     assert.equal(result.checkin.aiScore!.analysisLevel, "BASIC");
+    assert.equal(result.checkin.aiScore!.totalScore, null);
     assert.equal(result.checkin.aiScore!.dimensions, null);
     assert.equal(scoreEvidence, null);
     assert.equal(result.checkin.aiScore!.summary, null);
@@ -188,6 +189,44 @@ describe("DailyTasksService check-in evidence integration", () => {
           ]
         }),
       BadRequestException
+    );
+  });
+
+  it("enforces the free daily scoring quota without partially completing the task", async () => {
+    const { user, task: firstTask } = await createExecutableTask("free-limit", "FREE");
+    const tasks = [
+      firstTask,
+      await createTaskForUser(user.id, "第二个评分任务"),
+      await createTaskForUser(user.id, "第三个评分任务"),
+      await createTaskForUser(user.id, "第四个评分任务")
+    ];
+
+    for (const task of tasks.slice(0, 3)) {
+      await dailyTasksService.completeTask(user.id, task.id, {
+        content: `完成内容：${task.title}`,
+        investedMinutes: 20
+      });
+    }
+
+    await assert.rejects(
+      () => dailyTasksService.completeTask(user.id, tasks[3].id, {
+        content: "完成内容：第四次评分请求。",
+        investedMinutes: 20
+      }),
+      (error: unknown) =>
+        error instanceof HttpException &&
+        error.getStatus() === 429 &&
+        (error.getResponse() as { error?: string }).error === "QUOTA_EXCEEDED"
+    );
+    const pending = await prisma.dailyTask.findUniqueOrThrow({
+      where: { id: tasks[3].id }
+    });
+    assert.equal(pending.status, "PENDING");
+    assert.equal(
+      await prisma.usageRecord.count({
+        where: { userId: user.id, capability: "CHECKIN_SCORING" }
+      }),
+      3
     );
   });
 });

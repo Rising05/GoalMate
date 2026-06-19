@@ -304,6 +304,69 @@ test("notification compensation scheduling is timezone-aware and idempotent", as
   expect(logs[0].schedulerRunId).toBeTruthy();
 });
 
+test("free scoring quota is enforced through the HTTP API", async ({ request }) => {
+  const stamp = Date.now();
+  const password = "Password123!";
+  const registered = await registerViaApi(request, {
+    email: `e2e-quota-${stamp}@example.com`,
+    password,
+    displayName: "Quota User"
+  });
+  const session = await loginViaApi(request, {
+    email: registered.user.email,
+    password
+  });
+  const goal = await prisma.goal.create({
+    data: {
+      userId: registered.user.id,
+      title: `E2E quota ${stamp}`,
+      description: "HTTP quota enforcement",
+      category: "STUDY",
+      status: "ACTIVE",
+      startDate: new Date(),
+      endDate: new Date(Date.now() + 7 * 86_400_000),
+      toleranceDaysAllowed: 2
+    }
+  });
+  const tasks = await Promise.all(
+    Array.from({ length: 4 }, (_, index) =>
+      prisma.dailyTask.create({
+        data: {
+          goalId: goal.id,
+          taskDate: new Date(),
+          title: `Quota task ${index + 1}`,
+          description: "Complete through API",
+          plannedMinutes: 10,
+          status: "PENDING"
+        }
+      })
+    )
+  );
+
+  for (const task of tasks.slice(0, 3)) {
+    const response = await request.post(`${apiUrl}/daily-tasks/${task.id}/complete`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+      data: { content: `完成内容：${task.title}`, investedMinutes: 10 }
+    });
+    expect(response.ok()).toBeTruthy();
+    const result = await response.json();
+    expect(result.checkin.aiScore.totalScore).toBeNull();
+  }
+
+  const blocked = await request.post(`${apiUrl}/daily-tasks/${tasks[3].id}/complete`, {
+    headers: { Authorization: `Bearer ${session.token}` },
+    data: { content: "完成内容：第四次请求", investedMinutes: 10 }
+  });
+  expect(blocked.status()).toBe(429);
+  expect((await blocked.json()).error).toBe("QUOTA_EXCEEDED");
+  const current = await request.get(`${apiUrl}/auth/me`, {
+    headers: { Authorization: `Bearer ${session.token}` }
+  });
+  const currentBody = await current.json();
+  expect(currentBody.user.quota.aiJobsToday.used).toBe(3);
+  expect(currentBody.user.quota.aiJobsToday.limit).toBe(3);
+});
+
 test("new user completes the core GoalPilot MVP loop", async ({ page, request }) => {
   const stamp = Date.now();
   const email = `e2e-core-${stamp}@example.com`;

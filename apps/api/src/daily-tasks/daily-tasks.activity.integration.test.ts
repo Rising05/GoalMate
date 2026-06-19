@@ -109,7 +109,8 @@ async function createUser(scenario: string) {
     data: {
       email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
       passwordHash: "test-password-hash",
-      displayName: `Activity ${scenario}`
+      displayName: `Activity ${scenario}`,
+      membership: { create: { plan: "PRO", status: "ACTIVE" } }
     }
   });
 }

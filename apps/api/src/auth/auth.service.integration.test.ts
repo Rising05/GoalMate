@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
+import { QuotaService } from "../quota/quota.service";
 import { AuthService } from "./auth.service";
 import { PasswordService } from "./password.service";
 import { SessionTokenService } from "./session-token.service";
@@ -38,7 +39,7 @@ describe("AuthService quota integration", () => {
 
     assert.equal(registered.user.quota.plan, "FREE");
     assert.equal(registered.user.quota.activeGoals.limit, 1);
-    assert.equal(registered.user.quota.aiJobsToday.limit, 20);
+    assert.equal(registered.user.quota.aiJobsToday.limit, 3);
     assert.equal(registered.user.adminRole, null);
 
     await prisma.goal.create({
@@ -53,24 +54,31 @@ describe("AuthService quota integration", () => {
         toleranceDaysAllowed: 1
       }
     });
-    await prisma.aiJob.create({
-      data: {
-        userId: registered.user.id,
-        type: "GOAL_PLAN_REPLAN",
-        status: "SUCCEEDED",
-        attempts: 1,
-        payload: {
-          source: "auth-quota-test"
+    await new QuotaService(prisma).runWithQuota(
+      registered.user.id,
+      "GOAL_REPLAN",
+      {
+        idempotencyKey: `auth-quota-test-${registered.user.id}`,
+        resourceType: "AI_JOB",
+        resourceId: "auth-quota-test"
+      },
+      (tx) => tx.aiJob.create({
+        data: {
+          userId: registered.user.id,
+          type: "GOAL_PLAN_REPLAN",
+          status: "SUCCEEDED",
+          attempts: 1,
+          payload: { source: "auth-quota-test" }
         }
-      }
-    });
+      })
+    );
 
     const current = await authService.getCurrentUser(
       `Bearer ${registered.token}`
     );
 
     assert.equal(current.user.quota.activeGoals.used, 1);
-    assert.equal(current.user.quota.aiJobsToday.used, 1);
+    assert.equal(current.user.quota.aiJobsToday.used, 0);
     assert.equal(current.user.quota.replansThisWeek.used, 1);
     assert.equal(current.user.quota.scoreAppealsThisWeek.used, 0);
     assert.equal(current.user.adminRole, null);

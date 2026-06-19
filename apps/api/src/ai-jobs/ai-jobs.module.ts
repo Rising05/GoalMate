@@ -10,6 +10,7 @@ import { AiJobsWorker } from "./ai-jobs.worker";
 import { DeepSeekPlanProvider } from "./deepseek-plan.provider";
 import { MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER } from "./plan-provider";
+import { QuotaModule } from "../quota/quota.module";
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { PLAN_PROVIDER } from "./plan-provider";
     PrismaModule,
     QueueModule,
     DailyTasksModule,
+    QuotaModule,
     forwardRef(() => GoalsModule)
   ],
   controllers: [AiJobsController],

@@ -20,6 +20,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
 import { MockScoringProvider } from "./mock-scoring.provider";
 import { SCORING_PROVIDER, ScoringProvider } from "./scoring-provider";
+import { QuotaService } from "../quota/quota.service";
+import { randomUUID } from "node:crypto";
 
 type TaskWithGoalAndCheckins = DailyTask & {
   goal: Goal;
@@ -118,7 +120,10 @@ export class DailyTasksService {
     private readonly scoringProvider: ScoringProvider = new MockScoringProvider(),
     @Optional()
     @Inject(QueueService)
-    private readonly queueService?: QueueService
+    private readonly queueService?: QueueService,
+    @Optional()
+    @Inject(QuotaService)
+    private readonly quotaService: QuotaService = new QuotaService(prisma)
   ) {}
 
   async getTodayTasks(userId: string, goalId?: string) {
@@ -150,6 +155,7 @@ export class DailyTasksService {
     const year = this.parseYear(rawYear);
     const { start, end } = this.getYearRange(year);
     const goalFilter = await this.getGoalFilter(userId, goalId);
+    const hasDetailedAiAnalysis = await this.hasDetailedAiAnalysis(userId);
     const tasks = await this.prisma.dailyTask.findMany({
       where: {
         taskDate: {
@@ -198,7 +204,7 @@ export class DailyTasksService {
 
       if (isCompleted) {
         bucket.completedTaskCount += 1;
-        bucket.tasks.push(this.serializeActivityTask(task));
+        bucket.tasks.push(this.serializeActivityTask(task, hasDetailedAiAnalysis));
       }
 
       for (const checkin of task.checkins) {
@@ -224,7 +230,7 @@ export class DailyTasksService {
           : 0;
         const healthScore = this.getActivityHealthScore({
           completionRate,
-          averageScore,
+          averageScore: hasDetailedAiAnalysis ? averageScore : null,
           investedMinutes: day.investedMinutes,
           plannedMinutes: day.plannedMinutes
         });
@@ -339,7 +345,7 @@ export class DailyTasksService {
       if (item.kind === "CHECKIN") {
         bucket.investedMinutes += item.investedMinutes ?? 0;
 
-        if (item.aiScore) {
+        if (item.aiScore?.totalScore !== null && item.aiScore?.totalScore !== undefined) {
           bucket.scoreTotal += item.aiScore.totalScore;
           bucket.scoreCount += 1;
         }
@@ -446,8 +452,21 @@ export class DailyTasksService {
             }
           });
 
+          const scoringJobId = randomUUID();
+          await this.quotaService.consumeWithClient(
+            tx,
+            userId,
+            "CHECKIN_SCORING",
+            {
+              idempotencyKey: `checkin-scoring:${scoringJobId}`,
+              resourceType: "AI_JOB",
+              resourceId: scoringJobId
+            }
+          );
+
           const createdJob = await tx.aiJob.create({
             data: {
+              id: scoringJobId,
               userId,
               goalId: task.goalId,
               type: CHECKIN_SCORING,
@@ -485,6 +504,7 @@ export class DailyTasksService {
       };
     }
 
+    await this.quotaService.assertAvailable(userId, "CHECKIN_SCORING");
     const score = await this.scoringProvider.score({
       content: payload.content,
       investedMinutes,
@@ -531,8 +551,21 @@ export class DailyTasksService {
         }
       });
 
+      const scoringJobId = randomUUID();
+      await this.quotaService.consumeWithClient(
+        tx,
+        userId,
+        "CHECKIN_SCORING",
+        {
+          idempotencyKey: `checkin-scoring:${scoringJobId}`,
+          resourceType: "AI_JOB",
+          resourceId: scoringJobId
+        }
+      );
+
       const createdJob = await tx.aiJob.create({
         data: {
+          id: scoringJobId,
           userId,
           goalId: task.goalId,
           type: CHECKIN_SCORING,
@@ -838,8 +871,20 @@ export class DailyTasksService {
             }
           }
         });
+        const appealJobId = randomUUID();
+        await this.quotaService.consumeWithClient(
+          tx,
+          userId,
+          "SCORE_APPEAL",
+          {
+            idempotencyKey: `score-appeal:${appealJobId}`,
+            resourceType: "AI_JOB",
+            resourceId: appealJobId
+          }
+        );
         const createdJob = await tx.aiJob.create({
           data: {
+            id: appealJobId,
             userId,
             goalId: checkin.goalId,
             type: CHECKIN_SCORE_APPEAL,
@@ -880,8 +925,20 @@ export class DailyTasksService {
           evidence: appealResult.evidence
         }
       });
+      const appealJobId = randomUUID();
+      await this.quotaService.consumeWithClient(
+        tx,
+        userId,
+        "SCORE_APPEAL",
+        {
+          idempotencyKey: `score-appeal:${appealJobId}`,
+          resourceType: "AI_JOB",
+          resourceId: appealJobId
+        }
+      );
       const createdJob = await tx.aiJob.create({
         data: {
+          id: appealJobId,
           userId,
           goalId: checkin.goalId,
           type: CHECKIN_SCORE_APPEAL,
@@ -1690,7 +1747,10 @@ export class DailyTasksService {
     };
   }
 
-  private serializeActivityTask(task: TaskWithGoalAndCheckins) {
+  private serializeActivityTask(
+    task: TaskWithGoalAndCheckins,
+    hasDetailedAiAnalysis = false
+  ) {
     const latestCheckin = task.checkins[0] ?? null;
 
     return {
@@ -1715,7 +1775,9 @@ export class DailyTasksService {
       rescueRiskLevel: task.rescueRiskLevel,
       status: task.status,
       investedMinutes: latestCheckin?.investedMinutes ?? null,
-      aiScore: latestCheckin?.aiScore?.totalScore ?? null,
+      aiScore: hasDetailedAiAnalysis
+        ? latestCheckin?.aiScore?.totalScore ?? null
+        : null,
       reflection: latestCheckin?.content ?? null,
       completedAt: latestCheckin?.submittedAt.toISOString() ?? null
     };
@@ -1741,7 +1803,7 @@ export class DailyTasksService {
       submittedAt: checkin.submittedAt.toISOString(),
       aiScore: checkin.aiScore
         ? {
-            totalScore: checkin.aiScore.totalScore,
+            totalScore: hasDetailedAiAnalysis ? checkin.aiScore.totalScore : null,
             analysisLevel: hasDetailedAiAnalysis ? "PRO" : "BASIC",
             isDetailedAnalysisUnlocked: hasDetailedAiAnalysis,
             dimensions: hasDetailedAiAnalysis ? checkin.aiScore.dimensions : null,
@@ -1829,7 +1891,7 @@ export class DailyTasksService {
       checkin: this.serializeCheckin(checkin, hasDetailedAiAnalysis),
       aiScore: checkin.aiScore
         ? {
-            totalScore: checkin.aiScore.totalScore,
+            totalScore: hasDetailedAiAnalysis ? checkin.aiScore.totalScore : null,
             analysisLevel: hasDetailedAiAnalysis ? "PRO" : "BASIC",
             isDetailedAnalysisUnlocked: hasDetailedAiAnalysis,
             dimensions: hasDetailedAiAnalysis ? checkin.aiScore.dimensions : null,

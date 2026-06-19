@@ -18,6 +18,8 @@ import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
 import { GeneratedGoalPlan, MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER, PlanProvider } from "./plan-provider";
+import { QuotaService } from "../quota/quota.service";
+import { randomUUID } from "node:crypto";
 
 const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
 const GOAL_PLAN_REPLAN = "GOAL_PLAN_REPLAN";
@@ -39,7 +41,10 @@ export class AiJobsService {
     private readonly planProvider: PlanProvider = new MockPlanProvider(),
     @Optional()
     @Inject(QueueService)
-    private readonly queueService?: QueueService
+    private readonly queueService?: QueueService,
+    @Optional()
+    @Inject(QuotaService)
+    private readonly quotaService: QuotaService = new QuotaService(prisma)
   ) {}
 
   async generateGoalPlan(userId: string, goalId: string) {
@@ -58,8 +63,17 @@ export class AiJobsService {
       throw new BadRequestException("当前目标状态不能生成计划");
     }
 
-    const createdJob = await this.prisma.aiJob.create({
-      data: {
+    const jobId = randomUUID();
+    const createdJob = await this.quotaService.runWithQuota(
+      userId,
+      "PLAN_GENERATION",
+      {
+        idempotencyKey: `plan-generation:${jobId}`,
+        resourceType: "AI_JOB",
+        resourceId: jobId
+      },
+      (tx) => tx.aiJob.create({ data: {
+        id: jobId,
         userId,
         goalId,
         type: GOAL_PLAN_GENERATION,
@@ -82,8 +96,8 @@ export class AiJobsService {
             mockExamFrequency: goal.mockExamFrequency,
             provider: this.planProvider.name
           }
-      }
-    });
+      } })
+    );
     const job = await this.attachQueueMetadata(createdJob);
 
     try {
@@ -159,35 +173,50 @@ export class AiJobsService {
       select: { version: true }
     });
     const nextVersion = (currentPlan?.version ?? 0) + 1;
-    const updatedGoal = await this.prisma.goal.update({
-      where: { id: goal.id },
-      data: {
-        status: "REPLANNING",
-        dailyTimeBudgetMinutes:
-          payload.dailyTimeBudgetMinutes ?? goal.dailyTimeBudgetMinutes,
-        constraints: payload.constraints ?? goal.constraints,
-        currentBaseline: payload.currentBaseline ?? goal.currentBaseline
+    const jobId = randomUUID();
+    const { updatedGoal, createdJob } = await this.quotaService.runWithQuota(
+      userId,
+      "GOAL_REPLAN",
+      {
+        idempotencyKey: `goal-replan:${jobId}`,
+        resourceType: "AI_JOB",
+        resourceId: jobId
+      },
+      async (tx) => {
+        const updatedGoal = await tx.goal.update({
+          where: { id: goal.id },
+          data: {
+            status: "REPLANNING",
+            dailyTimeBudgetMinutes:
+              payload.dailyTimeBudgetMinutes ?? goal.dailyTimeBudgetMinutes,
+            constraints: payload.constraints ?? goal.constraints,
+            currentBaseline: payload.currentBaseline ?? goal.currentBaseline
+          }
+        });
+        const createdJob = await tx.aiJob.create({
+          data: {
+            id: jobId,
+            userId,
+            goalId,
+            type: GOAL_PLAN_REPLAN,
+            status: "QUEUED",
+            payload: {
+              goalId,
+              previousStatus: goal.status,
+              previousPlanVersion: currentPlan?.version ?? null,
+              nextPlanVersion: nextVersion,
+              adjustmentReason: payload.adjustmentReason,
+              constraints: payload.constraints,
+              currentBaseline: payload.currentBaseline,
+              dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
+              provider: this.planProvider.name
+            }
+          }
+        });
+
+        return { updatedGoal, createdJob };
       }
-    });
-    const createdJob = await this.prisma.aiJob.create({
-      data: {
-        userId,
-        goalId,
-        type: GOAL_PLAN_REPLAN,
-        status: "QUEUED",
-        payload: {
-          goalId,
-          previousStatus: goal.status,
-          previousPlanVersion: currentPlan?.version ?? null,
-          nextPlanVersion: nextVersion,
-          adjustmentReason: payload.adjustmentReason,
-          constraints: payload.constraints,
-          currentBaseline: payload.currentBaseline,
-          dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
-          provider: this.planProvider.name
-        }
-      }
-    });
+    );
     const job = await this.attachQueueMetadata(createdJob);
 
     try {
@@ -362,6 +391,26 @@ export class AiJobsService {
           where: { id: job.goalId },
           data: { status: nextGoalStatus }
         });
+      }
+
+      const capability = job.type === GOAL_PLAN_GENERATION
+        ? "PLAN_GENERATION"
+        : job.type === GOAL_PLAN_REPLAN
+          ? "GOAL_REPLAN"
+          : job.type === "CHECKIN_SCORING"
+            ? "CHECKIN_SCORING"
+            : job.type === "CHECKIN_SCORE_APPEAL"
+              ? "SCORE_APPEAL"
+              : null;
+
+      if (capability) {
+        await this.quotaService.releaseWithClient(
+          tx,
+          userId,
+          capability,
+          "AI_JOB",
+          job.id
+        );
       }
 
       return tx.aiJob.update({
@@ -691,31 +740,7 @@ export class AiJobsService {
   }
 
   private async assertActiveGoalQuota(userId: string, goalId: string) {
-    const [membership, activeGoalCount] = await Promise.all([
-      this.prisma.membership.findUnique({
-        where: { userId }
-      }),
-      this.prisma.goal.count({
-        where: {
-          userId,
-          id: {
-            not: goalId
-          },
-          status: {
-            in: [...ACTIVE_GOAL_STATUSES]
-          }
-        }
-      })
-    ]);
-    const hasProAccess =
-      membership?.plan === "PRO" &&
-      ["ACTIVE", "MANUAL"].includes(membership.status) &&
-      (!membership.expiresAt || membership.expiresAt > new Date());
-    if (!hasProAccess && activeGoalCount >= FREE_ACTIVE_GOAL_LIMIT) {
-      throw new BadRequestException(
-        "免费版同时只能执行 1 个目标，请完成、失败归档或升级会员后再确认新计划"
-      );
-    }
+    await this.quotaService.assertActiveGoalLimit(userId, goalId);
   }
 
   private async persistGeneratedPlan(

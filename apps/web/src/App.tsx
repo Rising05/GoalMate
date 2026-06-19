@@ -234,6 +234,8 @@ const dataExportScopeOptions: Array<{
   { code: "paymentOrders", label: "支付订单" },
   { code: "paymentEvents", label: "支付事件" },
   { code: "membershipAudits", label: "会员变更" },
+  { code: "entitlements", label: "会员权益" },
+  { code: "usageRecords", label: "额度用量" },
   { code: "adminProfile", label: "后台身份" },
   { code: "auditLogs", label: "审计日志" }
 ];
@@ -505,7 +507,11 @@ function getTimelineBadge(item: TimelineItem) {
     return riskLevelLabels[item.rescueRiskLevel ?? "stable"] ?? "偏差";
   }
 
-  return item.aiScore ? `AI ${item.aiScore.totalScore}` : "待评分";
+  return item.aiScore?.totalScore !== null && item.aiScore?.totalScore !== undefined
+    ? `AI ${item.aiScore.totalScore}`
+    : item.aiScore
+      ? "已完成"
+      : "待评分";
 }
 
 function getGoalStatusTone(status: string): GlassTone {
@@ -1022,7 +1028,10 @@ export function App() {
         ["进行中目标", session.user.quota.activeGoals],
         ["今日 AI 次数", session.user.quota.aiJobsToday],
         ["本周重规划", session.user.quota.replansThisWeek],
-        ["本周申诉", session.user.quota.scoreAppealsThisWeek]
+        ["本周申诉", session.user.quota.scoreAppealsThisWeek],
+        ["本月计划生成", session.user.quota.planGenerationsThisMonth],
+        ["本月趋势报告", session.user.quota.reportsThisMonth],
+        ["奖励卡片", session.user.quota.rewardCards]
       ] as const
     : [];
   const dashboardAction = getDashboardAction();
@@ -3502,7 +3511,9 @@ export function App() {
                               </span>
                             </div>
                             <em>
-                              {item.aiScore ? `AI ${item.aiScore.totalScore}` : "待评分"}
+                              {item.aiScore?.totalScore !== null && item.aiScore?.totalScore !== undefined
+                                ? `AI ${item.aiScore.totalScore}`
+                                : item.aiScore ? "已完成" : "待评分"}
                             </em>
                           </button>
                         ))}
@@ -3991,7 +4002,8 @@ export function App() {
                       {task.latestCheckin ? (
                         <div className="task-result-inline">
                           <strong>
-                            {task.latestCheckin.aiScore
+                            {task.latestCheckin.aiScore?.totalScore !== null &&
+                            task.latestCheckin.aiScore?.totalScore !== undefined
                               ? `AI 评分 ${task.latestCheckin.aiScore.totalScore}`
                               : "已提交复盘"}
                           </strong>
@@ -4473,7 +4485,8 @@ export function App() {
                                             {task.latestCheckin?.investedMinutes
                                               ? ` · ${task.latestCheckin.investedMinutes} 分钟`
                                               : ""}
-                                            {task.latestCheckin?.aiScore
+                                            {task.latestCheckin?.aiScore?.totalScore !== null &&
+                                            task.latestCheckin?.aiScore?.totalScore !== undefined
                                               ? ` · AI ${task.latestCheckin.aiScore.totalScore}`
                                               : ""}
                                           </span>
@@ -6107,8 +6120,14 @@ export function App() {
               <div className="completion-result">
                 <section className="score-result-card">
                   <div>
-                    <p className="eyebrow">Mock AI score</p>
-                    <h2>{completionResult.checkin.aiScore?.totalScore ?? "-"}</h2>
+                    <p className="eyebrow">
+                      {completionResult.checkin.aiScore?.isDetailedAnalysisUnlocked
+                        ? "AI score"
+                        : "完成状态"}
+                    </p>
+                    <h2>
+                      {completionResult.checkin.aiScore?.totalScore ?? "已完成"}
+                    </h2>
                     <span>
                       评分任务{" "}
                       {completionJobStatus

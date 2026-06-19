@@ -4,9 +4,10 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { UploadsController } from "./uploads.controller";
 import { UploadsService } from "./uploads.service";
 import { LocalStorageProvider, STORAGE_PROVIDER } from "./storage-provider";
+import { QuotaModule } from "../quota/quota.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule],
+  imports: [AuthModule, PrismaModule, QuotaModule],
   controllers: [UploadsController],
   providers: [
     UploadsService,

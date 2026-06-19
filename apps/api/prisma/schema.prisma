@@ -94,6 +94,9 @@ model User {
   paymentEvents          PaymentEvent[]
   membershipAudits       MembershipAudit[] @relation("MembershipAuditUser")
   membershipAuditActions MembershipAudit[] @relation("MembershipAuditActor")
+  entitlements           Entitlement[]
+  usageRecords           UsageRecord[]
+  quotaBuckets           QuotaBucket[]
 
   @@map("users")
 }
@@ -252,6 +255,62 @@ model Membership {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("memberships")
+}
+
+model Entitlement {
+  id         String   @id @default(cuid())
+  userId     String
+  capability String
+  limitValue Int?
+  source     String   @default("ADMIN")
+  validFrom  DateTime @default(now())
+  validUntil DateTime?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, capability, validFrom, validUntil])
+  @@map("entitlements")
+}
+
+model UsageRecord {
+  id             String   @id @default(cuid())
+  userId         String
+  capability     String
+  quantity       Int      @default(1)
+  periodKey      String
+  idempotencyKey String   @unique
+  resourceType   String?
+  resourceId     String?
+  metadata       Json?
+  releasedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, capability, periodKey])
+  @@index([resourceType, resourceId])
+  @@map("usage_records")
+}
+
+model QuotaBucket {
+  id         String   @id @default(cuid())
+  userId     String
+  capability String
+  periodKey  String
+  used       Int      @default(0)
+  limitValue Int
+  resetAt    DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, capability, periodKey])
+  @@index([capability, periodKey])
+  @@map("quota_buckets")
 }
 
 model PaymentOrder {

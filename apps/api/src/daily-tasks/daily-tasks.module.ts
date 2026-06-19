@@ -6,9 +6,10 @@ import { DailyTasksController } from "./daily-tasks.controller";
 import { DailyTasksService } from "./daily-tasks.service";
 import { MockScoringProvider } from "./mock-scoring.provider";
 import { SCORING_PROVIDER } from "./scoring-provider";
+import { QuotaModule } from "../quota/quota.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule, QueueModule],
+  imports: [AuthModule, PrismaModule, QueueModule, QuotaModule],
   controllers: [DailyTasksController],
   providers: [
     DailyTasksService,

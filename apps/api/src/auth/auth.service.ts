@@ -13,6 +13,7 @@ import {
   STORAGE_PROVIDER,
   StorageProvider
 } from "../uploads/storage-provider";
+import { QuotaService } from "../quota/quota.service";
 
 interface AuthPayload {
   email: string;
@@ -43,6 +44,8 @@ const EXPORT_SCOPES = [
   "paymentOrders",
   "paymentEvents",
   "membershipAudits",
+  "entitlements",
+  "usageRecords",
   "adminProfile",
   "auditLogs"
 ] as const;
@@ -72,7 +75,10 @@ export class AuthService {
     private readonly sessionTokenService: SessionTokenService,
     @Optional()
     @Inject(STORAGE_PROVIDER)
-    private readonly storage: StorageProvider = new LocalStorageProvider()
+    private readonly storage: StorageProvider = new LocalStorageProvider(),
+    @Optional()
+    @Inject(QuotaService)
+    private readonly quotaService: QuotaService = new QuotaService(prisma)
   ) {}
 
   async register(input: unknown) {
@@ -455,6 +461,20 @@ export class AuthService {
       });
     }
 
+    if (scopeSet.has("entitlements")) {
+      data.entitlements = await this.prisma.entitlement.findMany({
+        where: { userId },
+        orderBy: { createdAt: "asc" }
+      });
+    }
+
+    if (scopeSet.has("usageRecords")) {
+      data.usageRecords = await this.prisma.usageRecord.findMany({
+        where: { userId },
+        orderBy: { createdAt: "asc" }
+      });
+    }
+
     if (scopeSet.has("adminProfile")) {
       data.adminProfile = await this.prisma.adminUser.findUnique({
         where: { userId }
@@ -535,76 +555,47 @@ export class AuthService {
 
   private async getQuotaSummary(
     userId: string,
-    membership: {
+    _membership: {
       plan: string;
       status: string;
       expiresAt: Date | null;
     } | null
   ) {
-    const hasProAccess =
-      membership?.plan === "PRO" &&
-      ["ACTIVE", "MANUAL"].includes(membership.status) &&
-      (!membership.expiresAt || membership.expiresAt > new Date());
-    const now = new Date();
-    const todayStart = this.getDateRange(this.toDateKey(now)).start;
-    const weekStart = new Date(todayStart);
-    weekStart.setUTCDate(todayStart.getUTCDate() - 6);
-    const [activeGoalCount, aiJobsToday, replansThisWeek, appealsThisWeek] =
-      await Promise.all([
-        this.prisma.goal.count({
-          where: {
-            userId,
-            status: {
-              in: [...ACTIVE_GOAL_STATUSES]
-            }
-          }
-        }),
-        this.prisma.aiJob.count({
-          where: {
-            userId,
-            createdAt: {
-              gte: todayStart
-            }
-          }
-        }),
-        this.prisma.aiJob.count({
-          where: {
-            userId,
-            type: "GOAL_PLAN_REPLAN",
-            createdAt: {
-              gte: weekStart
-            }
-          }
-        }),
-        this.prisma.scoreAppeal.count({
-          where: {
-            userId,
-            createdAt: {
-              gte: weekStart
-            }
-          }
-        })
-      ]);
+    const [hasProAccess, activeGoalCount, capabilities] = await Promise.all([
+      this.quotaService.hasProAccess(userId),
+      this.prisma.goal.count({
+        where: {
+          userId,
+          status: { in: [...ACTIVE_GOAL_STATUSES] }
+        }
+      }),
+      this.quotaService.getSummary(userId)
+    ]);
 
     return {
       plan: hasProAccess ? "PRO" : "FREE",
       hasProAccess,
       activeGoals: {
         used: activeGoalCount,
-        limit: hasProAccess ? null : FREE_ACTIVE_GOAL_LIMIT
+        limit: capabilities.ACTIVE_GOAL.limit,
+        resetAt: capabilities.ACTIVE_GOAL.resetAt,
+        period: capabilities.ACTIVE_GOAL.period
       },
-      aiJobsToday: {
-        used: aiJobsToday,
-        limit: hasProAccess ? PRO_DAILY_AI_JOB_LIMIT : FREE_DAILY_AI_JOB_LIMIT
+      aiJobsToday: capabilities.CHECKIN_SCORING,
+      replansThisWeek: capabilities.GOAL_REPLAN,
+      scoreAppealsThisWeek: capabilities.SCORE_APPEAL,
+      planGenerationsThisMonth: capabilities.PLAN_GENERATION,
+      reportsThisMonth: capabilities.REPORT_GENERATION,
+      rewardCards: capabilities.REWARD_CARD,
+      uploadStorageBytes: {
+        used: capabilities.UPLOAD_STORAGE_KIB.used * 1024,
+        limit: capabilities.UPLOAD_STORAGE_KIB.limit === null
+          ? null
+          : capabilities.UPLOAD_STORAGE_KIB.limit * 1024,
+        resetAt: capabilities.UPLOAD_STORAGE_KIB.resetAt,
+        period: capabilities.UPLOAD_STORAGE_KIB.period
       },
-      replansThisWeek: {
-        used: replansThisWeek,
-        limit: hasProAccess ? PRO_WEEKLY_REPLAN_LIMIT : FREE_WEEKLY_REPLAN_LIMIT
-      },
-      scoreAppealsThisWeek: {
-        used: appealsThisWeek,
-        limit: hasProAccess ? PRO_WEEKLY_APPEAL_LIMIT : FREE_WEEKLY_APPEAL_LIMIT
-      }
+      capabilities
     };
   }
 

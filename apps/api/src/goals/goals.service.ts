@@ -28,6 +28,7 @@ import {
   ReportNarrativeInput,
   ReportNarrativeProvider
 } from "./report-narrative.provider";
+import { QuotaService } from "../quota/quota.service";
 
 interface CreateGoalPayload {
   title: string;
@@ -204,7 +205,10 @@ export class GoalsService {
     private readonly reportNarrativeProvider?: ReportNarrativeProvider,
     @Optional()
     @Inject(STORAGE_PROVIDER)
-    private readonly storage?: StorageProvider
+    private readonly storage?: StorageProvider,
+    @Optional()
+    @Inject(QuotaService)
+    private readonly quotaService: QuotaService = new QuotaService(prisma)
   ) {}
 
   async createGoal(userId: string, input: unknown) {
@@ -491,7 +495,16 @@ export class GoalsService {
     const type = this.parseTrendReportType(body.type ?? "WEEKLY_TREND");
     const reportDate = this.parseOptionalDateKey(body.reportDate);
     const report = await this.buildHealthTrendReport({ goal, type, reportDate });
-    const artifact = await this.persistHealthTrendArtifact(report);
+    const artifact = await this.quotaService.runWithQuota(
+      userId,
+      "REPORT_GENERATION",
+      {
+        idempotencyKey: `report:${goal.id}:${type}:${report.range.endsOn}`,
+        resourceType: "REPORT_ARTIFACT",
+        resourceId: `${goal.id}:${type}:${report.range.endsOn}`
+      },
+      (tx) => this.persistHealthTrendArtifact(report, tx)
+    );
 
     return {
       report,
@@ -565,7 +578,16 @@ export class GoalsService {
         type: payload.type,
         reportDate: payload.reportDate
       });
-      const artifact = await this.persistHealthTrendArtifact(report);
+      const artifact = await this.quotaService.runWithQuota(
+        payload.userId,
+        "REPORT_GENERATION",
+        {
+          idempotencyKey: `report:${goal.id}:${payload.type}:${report.range.endsOn}`,
+          resourceType: "REPORT_ARTIFACT",
+          resourceId: `${goal.id}:${payload.type}:${report.range.endsOn}`
+        },
+        (tx) => this.persistHealthTrendArtifact(report, tx)
+      );
 
       return {
         processed: true,
@@ -661,7 +683,10 @@ export class GoalsService {
     };
   }
 
-  private async persistHealthTrendArtifact(report: HealthTrendReportData) {
+  private async persistHealthTrendArtifact(
+    report: HealthTrendReportData,
+    client: PrismaService | Prisma.TransactionClient = this.prisma
+  ) {
     const fallbackProvider = new MockReportNarrativeProvider();
     const selectedProvider = this.reportNarrativeProvider ?? fallbackProvider;
     const narrativeInput: ReportNarrativeInput = {
@@ -693,7 +718,7 @@ export class GoalsService {
       narrative = fallbackProvider.generate(narrativeInput);
     }
 
-    return this.prisma.reportArtifact.upsert({
+    return client.reportArtifact.upsert({
       where: {
         goalId_type_periodEnd: {
           goalId: report.goalId,

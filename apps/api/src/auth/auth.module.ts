@@ -8,8 +8,10 @@ import {
   LocalStorageProvider,
   STORAGE_PROVIDER
 } from "../uploads/storage-provider";
+import { QuotaModule } from "../quota/quota.module";
 
 @Module({
+  imports: [QuotaModule],
   controllers: [AuthController],
   providers: [
     AuthGuard,

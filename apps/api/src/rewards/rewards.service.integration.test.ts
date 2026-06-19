@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, HttpException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { RewardsService } from "./rewards.service";
@@ -96,6 +96,34 @@ describe("RewardsService integration", () => {
       () => rewardsService.getRewardBoard(outsider.id, goal.id),
       NotFoundException
     );
+  });
+
+  it("enforces reward card capacity and releases it after deletion", async () => {
+    const { goal } = await createGoalWithRewards("quota");
+    const cards = [];
+
+    for (let index = 0; index < 5; index += 1) {
+      cards.push(
+        (await rewardsService.createRewardCard(goal.userId, goal.id, {
+          title: `奖励卡 ${index + 1}`,
+          cardType: "TEXT"
+        })).card
+      );
+    }
+
+    await assert.rejects(
+      () => rewardsService.createRewardCard(goal.userId, goal.id, {
+        title: "超额奖励卡",
+        cardType: "TEXT"
+      }),
+      (error: unknown) => error instanceof HttpException && error.getStatus() === 429
+    );
+    await rewardsService.deleteRewardCard(goal.userId, goal.id, cards[0].id);
+    const replacement = await rewardsService.createRewardCard(goal.userId, goal.id, {
+      title: "释放后奖励卡",
+      cardType: "TEXT"
+    });
+    assert.equal(replacement.card.title, "释放后奖励卡");
   });
 });
 

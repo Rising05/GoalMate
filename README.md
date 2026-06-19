@@ -31,6 +31,7 @@ The MVP now covers the core GoalPilot AI loop:
 7. Liquid Glass web foundation with internal Glass components, semantic status/metric tokens, reduced-motion/fallback styling, and upgraded goal cockpit, plan review, today tasks, AI job status, timeline, rewards, account, and admin summary surfaces.
 8. Playwright E2E coverage for the new-user MVP loop from registration through plan confirmation, check-in, trend report generation/download, rescue task, heatmap, timeline, settlement, failure review, and restart.
 9. Opt-in automatic notification scheduler with IANA timezone handling, silent days, configurable exam-sprint windows, database-backed daily idempotency, persisted skip reasons, and audited administrator compensation scans.
+10. Server-enforced Free/Pro quotas backed by atomic period buckets, immutable usage records, entitlement overrides, cancellation/deletion release rules, structured HTTP 429 responses, account usage display, and strict Free AI-analysis hiding.
 
 Useful optional environment variables for the API:
 

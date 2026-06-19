@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, HttpException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
@@ -241,6 +241,25 @@ describe("GoalsService health snapshots integration", () => {
       BadRequestException
     );
   });
+
+  it("enforces the free monthly trend report quota", async () => {
+    const { goal, todayStart } = await createGoalWithHealthSignals(
+      "free-report-limit",
+      "FREE"
+    );
+    await goalsService.generateGoalReportArtifact(goal.userId, goal.id, {
+      type: "WEEKLY_TREND",
+      reportDate: toDateKey(todayStart)
+    });
+
+    await assert.rejects(
+      () => goalsService.generateGoalReportArtifact(goal.userId, goal.id, {
+        type: "MONTHLY_TREND",
+        reportDate: toDateKey(todayStart)
+      }),
+      (error: unknown) => error instanceof HttpException && error.getStatus() === 429
+    );
+  });
 });
 
 function buildHealthSnapshot(
@@ -274,7 +293,10 @@ async function cleanupTestUsers() {
   });
 }
 
-async function createGoalWithHealthSignals(scenario: string) {
+async function createGoalWithHealthSignals(
+  scenario: string,
+  plan: "FREE" | "PRO" = "PRO"
+) {
   const todayKey = toDateKey(new Date());
   const todayStart = toBeijingDate(todayKey);
   const yesterdayStart = addDays(todayStart, -1);
@@ -285,7 +307,10 @@ async function createGoalWithHealthSignals(scenario: string) {
     data: {
       email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
       passwordHash: "test-password-hash",
-      displayName: `Health ${scenario}`
+      displayName: `Health ${scenario}`,
+      membership: {
+        create: { plan, status: "ACTIVE" }
+      }
     }
   });
   const goal = await prisma.goal.create({

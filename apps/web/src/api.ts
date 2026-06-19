@@ -15,23 +15,23 @@ export interface AuthUser {
   quota: {
     plan: string;
     hasProAccess: boolean;
-    activeGoals: {
-      used: number;
-      limit: number | null;
-    };
-    aiJobsToday: {
-      used: number;
-      limit: number;
-    };
-    replansThisWeek: {
-      used: number;
-      limit: number;
-    };
-    scoreAppealsThisWeek: {
-      used: number;
-      limit: number;
-    };
+    activeGoals: QuotaMetric;
+    aiJobsToday: QuotaMetric;
+    replansThisWeek: QuotaMetric;
+    scoreAppealsThisWeek: QuotaMetric;
+    planGenerationsThisMonth: QuotaMetric;
+    reportsThisMonth: QuotaMetric;
+    rewardCards: QuotaMetric;
+    uploadStorageBytes: QuotaMetric;
+    capabilities: Record<string, QuotaMetric>;
   };
+}
+
+export interface QuotaMetric {
+  used: number;
+  limit: number | null;
+  resetAt?: string | null;
+  period?: string;
 }
 
 export interface AuthResponse {
@@ -156,7 +156,7 @@ export interface TaskCheckin {
   difficultyLevel: string | null;
   submittedAt: string;
   aiScore: {
-    totalScore: number;
+    totalScore: number | null;
     analysisLevel: "BASIC" | "PRO";
     isDetailedAnalysisUnlocked: boolean;
     dimensions: Record<string, number> | null;
@@ -330,7 +330,7 @@ export interface TimelineItem {
   investedMinutes: number | null;
   checkin: TaskCheckin | null;
   aiScore: {
-    totalScore: number;
+    totalScore: number | null;
     analysisLevel: "BASIC" | "PRO";
     isDetailedAnalysisUnlocked: boolean;
     dimensions: Record<string, number> | null;
@@ -712,6 +712,8 @@ export type DataExportScope =
   | "paymentOrders"
   | "paymentEvents"
   | "membershipAudits"
+  | "entitlements"
+  | "usageRecords"
   | "adminProfile"
   | "auditLogs";
 

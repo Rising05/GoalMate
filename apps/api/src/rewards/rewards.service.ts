@@ -2,10 +2,13 @@ import {
   BadRequestException,
   Inject,
   Injectable,
-  NotFoundException
+  NotFoundException,
+  Optional
 } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { Goal, Milestone, RewardCard } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { QuotaService } from "../quota/quota.service";
 
 type RewardGoal = Goal & {
   milestones: Milestone[];
@@ -25,12 +28,17 @@ const CARD_TYPES = ["TEXT", "IMAGE", "LINK"] as const;
 const CUSTOM_SOURCE_TYPE = "CUSTOM";
 const FINAL_SOURCE_TYPE = "FINAL_REWARD";
 const MILESTONE_SOURCE_TYPE = "MILESTONE_REWARD";
-const FREE_CUSTOM_CARD_LIMIT = 6;
-const PRO_CUSTOM_CARD_LIMIT = 24;
+const FREE_CUSTOM_CARD_LIMIT = 5;
+const PRO_CUSTOM_CARD_LIMIT = 100;
 
 @Injectable()
 export class RewardsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(QuotaService)
+    private readonly quotaService: QuotaService = new QuotaService(prisma)
+  ) {}
 
   async getRewardBoard(userId: string, goalId: string) {
     const goal = await this.getGoalWithRewards(userId, goalId);
@@ -43,28 +51,22 @@ export class RewardsService {
   async createRewardCard(userId: string, goalId: string, input: unknown) {
     await this.assertGoalAccess(userId, goalId);
     const payload = this.parseCardPayload(input, true);
-    const customCardCount = await this.prisma.rewardCard.count({
-      where: {
-        goalId,
-        sourceType: CUSTOM_SOURCE_TYPE
-      }
-    });
-    const membership = await this.prisma.membership.findUnique({
-      where: { userId }
-    });
-    const limit = membership?.plan === "PRO" ? PRO_CUSTOM_CARD_LIMIT : FREE_CUSTOM_CARD_LIMIT;
-
-    if (customCardCount >= limit) {
-      throw new BadRequestException(`当前计划最多可创建 ${limit} 张自定义奖励卡片`);
-    }
-
     const sortOrder =
       payload.sortOrder ??
       (await this.prisma.rewardCard.count({
         where: { goalId }
       }));
-    const card = await this.prisma.rewardCard.create({
-      data: {
+    const cardId = randomUUID();
+    const card = await this.quotaService.runWithQuota(
+      userId,
+      "REWARD_CARD",
+      {
+        idempotencyKey: `reward-card:${cardId}`,
+        resourceType: "REWARD_CARD",
+        resourceId: cardId
+      },
+      (tx) => tx.rewardCard.create({ data: {
+        id: cardId,
         goalId,
         title: payload.title,
         description: payload.description,
@@ -73,8 +75,8 @@ export class RewardsService {
         imageUrl: payload.imageUrl,
         linkUrl: payload.linkUrl,
         sortOrder
-      }
-    });
+      } })
+    );
 
     return {
       card: this.serializeRewardCard(card)
@@ -157,8 +159,15 @@ export class RewardsService {
       throw new BadRequestException("目标奖励和阶段奖励会随目标自动维护，不能删除");
     }
 
-    await this.prisma.rewardCard.delete({
-      where: { id: card.id }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.rewardCard.delete({ where: { id: card.id } });
+      await this.quotaService.releaseWithClient(
+        tx,
+        userId,
+        "REWARD_CARD",
+        "REWARD_CARD",
+        card.id
+      );
     });
 
     return {

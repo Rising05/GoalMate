@@ -9,9 +9,10 @@ import { GoalsReportWorker } from "./goals.report.worker";
 import { GoalsService } from "./goals.service";
 import { MockReportNarrativeProvider } from "./mock-report-narrative.provider";
 import { REPORT_NARRATIVE_PROVIDER } from "./report-narrative.provider";
+import { QuotaModule } from "../quota/quota.module";
 
 @Module({
-  imports: [AuthModule, forwardRef(() => AiJobsModule), QueueModule, UploadsModule],
+  imports: [AuthModule, forwardRef(() => AiJobsModule), QueueModule, UploadsModule, QuotaModule],
   controllers: [GoalsController],
   providers: [
     GoalsService,

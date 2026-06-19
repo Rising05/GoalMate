@@ -10,6 +10,7 @@ import { QueueModule } from "./queue/queue.module";
 import { RewardsModule } from "./rewards/rewards.module";
 import { UploadsModule } from "./uploads/uploads.module";
 import { BillingModule } from "./billing/billing.module";
+import { QuotaModule } from "./quota/quota.module";
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { BillingModule } from "./billing/billing.module";
     NotificationsModule,
     UploadsModule,
     BillingModule,
+    QuotaModule,
     AdminModule
   ],
   controllers: [HealthController],

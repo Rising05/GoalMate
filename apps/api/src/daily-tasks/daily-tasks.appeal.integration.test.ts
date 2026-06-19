@@ -34,7 +34,7 @@ describe("DailyTasksService score appeal integration", () => {
     const scoringJob = await prisma.aiJob.findUniqueOrThrow({
       where: { id: completed.job.id }
     });
-    const originalScore = completed.checkin.aiScore!.totalScore;
+    const originalScore = completed.checkin.aiScore!.totalScore!;
 
     assert.equal(
       (scoringJob.payload as { provider?: string }).provider,
@@ -68,7 +68,7 @@ describe("DailyTasksService score appeal integration", () => {
       content: "完成内容：今天推进了一点。",
       investedMinutes: 8
     });
-    const originalScore = completed.checkin.aiScore!.totalScore;
+    const originalScore = completed.checkin.aiScore!.totalScore!;
 
     const result = await dailyTasksService.appealCheckinScore(
       user.id,
@@ -119,7 +119,7 @@ describe("DailyTasksService score appeal integration", () => {
         content: "完成内容：做了练习并整理错题。",
         investedMinutes: 18
       });
-      const originalScore = completed.checkin.aiScore!.totalScore;
+      const originalScore = completed.checkin.aiScore!.totalScore!;
       const queued = await service.appealCheckinScore(
         user.id,
         completed.checkin.id,
@@ -205,8 +205,8 @@ describe("DailyTasksService score appeal integration", () => {
         reason: "其他用户自己的申诉原因。",
         addedFacts: "其他用户补充了截图证据和练习数据。",
         status: "PENDING",
-        originalScore: completed.checkin.aiScore!.totalScore,
-        newScore: completed.checkin.aiScore!.totalScore,
+        originalScore: completed.checkin.aiScore!.totalScore!,
+        newScore: completed.checkin.aiScore!.totalScore!,
         evidence: {
           queued: true
         }
@@ -255,7 +255,10 @@ async function createExecutableTask(scenario: string) {
     data: {
       email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
       passwordHash: "test-password-hash",
-      displayName: `Appeal ${scenario}`
+      displayName: `Appeal ${scenario}`,
+      membership: {
+        create: { plan: "PRO", status: "ACTIVE" }
+      }
     }
   });
   const goal = await prisma.goal.create({

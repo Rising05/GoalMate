@@ -1,9 +1,10 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import { BadRequestException, HttpException, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
+import { QuotaService } from "../quota/quota.service";
 import { AiJobsService } from "./ai-jobs.service";
 import { MockPlanProvider } from "./mock-plan.provider";
 
@@ -84,6 +85,28 @@ describe("AiJobsService requestGoalReplan integration", () => {
     assert.ok(result.plan);
   });
 
+  it("enforces the free monthly plan generation quota", async () => {
+    const user = await createUser("plan-limit");
+
+    for (let index = 0; index < 3; index += 1) {
+      const goal = await createDraftGoal(user.id, `额度内计划 ${index + 1}`);
+      const result = await aiJobsService.generateGoalPlan(user.id, goal.id);
+      assert.equal(result.job.status, "SUCCEEDED");
+    }
+
+    const blockedGoal = await createDraftGoal(user.id, "超额计划");
+    await assert.rejects(
+      () => aiJobsService.generateGoalPlan(user.id, blockedGoal.id),
+      (error: unknown) => error instanceof HttpException && error.getStatus() === 429
+    );
+    assert.equal(
+      await prisma.aiJob.count({
+        where: { userId: user.id, type: "GOAL_PLAN_GENERATION" }
+      }),
+      3
+    );
+  });
+
   it("returns AI job status only to the owning user", async () => {
     const user = await createUser("job-status-owner");
     const otherUser = await createUser("job-status-other");
@@ -121,6 +144,17 @@ describe("AiJobsService requestGoalReplan integration", () => {
         }
       }
     });
+    const quota = new QuotaService(prisma);
+    await quota.runWithQuota(
+      user.id,
+      "PLAN_GENERATION",
+      {
+        idempotencyKey: `cancel-plan-generation:${job.id}`,
+        resourceType: "AI_JOB",
+        resourceId: job.id
+      },
+      async () => true
+    );
 
     const cancelled = await aiJobsService.cancelJob(user.id, job.id, {
       reason: "用户想重新编辑目标"
@@ -136,6 +170,7 @@ describe("AiJobsService requestGoalReplan integration", () => {
     assert.equal(storedGoal.status, "DRAFT");
     assert.equal(workerResult.processed, false);
     assert.equal(workerResult.job.status, "CANCELLED");
+    assert.equal((await quota.getSummary(user.id)).PLAN_GENERATION.used, 0);
   });
 
   it("cancels a queued replan job and restores the previous goal status", async () => {

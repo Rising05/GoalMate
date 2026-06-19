@@ -665,7 +665,10 @@ MVP 已落地的会员额度统计：
 
 - 免费版进行中目标上限为 1，PRO 进行中目标不设上限，确认计划时由后端统一校验；quota API 对 Pro 返回 `activeGoals.limit=null`。
 - `AuthService` 在注册、登录和 `GET /auth/me` 返回 `quota`，包含当前会员计划、是否具有 PRO 权益、进行中目标使用量、今日 AI job 使用量、本周重规划使用量和本周评分申诉使用量。
-- MVP 阶段 AI 次数先作为统计和前端展示，不强制拦截所有 AI job；进行中目标额度已经强制校验。
+- 已新增统一 `QuotaService`、`entitlements`、`usage_records` 和 `quota_buckets`；进行中目标、计划生成、打卡评分、评分申诉、重规划、趋势报告、奖励卡片和上传空间均由后端强制校验。
+- 配额使用数据库原子更新，多个并发请求不能同时越过上限；每次成功消费写入带幂等键和关联资源的用量记录，Worker/管理员重试不重复扣减。
+- 取消尚未运行的计费 AI job 会返还额度；删除奖励卡片或上传资产会释放总量额度；历史 AI job、报告、奖励卡片和上传资产由 migration 回填到用量记录。
+- 超额统一返回 HTTP 429 和 `QUOTA_EXCEEDED`，包含 capability、used、limit 和 resetAt；Web 账号页展示当前实际用量。
 - 前端账号页展示进行中目标、今日 AI 次数、本周重规划和本周申诉额度。
 - 2026-06-11 已补充 `AuthService quota integration`，验证当前用户 quota 和 AI usage 统计。
 - 已新增 `payment_orders`、`payment_events` 和 `membership_audits`，分别保存结账订单、服务商回调事件和会员权益变更历史。
@@ -1180,7 +1183,7 @@ Liquid Glass 设计系统约束：
 - 2026-06-12 已通过 `npm run typecheck`、`npm run test:integration`（40/40）和 `npm run build` 验证隐私删除接口和前端入口。
 - 2026-06-12 已新增 Playwright E2E 核心闭环测试，覆盖新用户注册、创建目标、生成计划、确认计划、完成普通任务、生成并完成救援任务、查看热力图、查看成长时间线，并通过 API 断言健康报告和 `deviationEventId` 时间线数据。
 - 2026-06-14 已扩展 Playwright E2E 核心闭环：覆盖到期且容错未超的目标完成结算、到期且容错超限的失败复盘、失败报告 API 和重新开启新目标。
-- 2026-06-12 已新增打卡证据字段和 Pro AI 分析解锁增量：`checkins` 保存完成子项、题量、正确题数、正确率、图片/文件证据、错题/笔记链接、学习状态和主观难度；免费用户仅返回基础评分和完成状态，Pro 用户返回维度评分、证据分析、AI 总结和建议。
+- 2026-06-19 已统一 Free/Pro 展示策略：免费用户只返回完成状态和基础进度，不返回 AI 总分、维度、证据分析、总结和建议；Pro 用户返回完整 AI 分析。
 - 2026-06-12 已补充 `DailyTasksService check-in evidence integration`，验证证据持久化、正确率计算、免费版 AI 分析脱敏、Pro 详细分析解锁、非法题量校验和跨用户任务隔离。
 - 2026-06-12 已补充 `AuthService quota integration` 管理员身份返回验证；普通用户 `adminRole=null`，ACTIVE 管理员返回角色，Web 导航据此隐藏或显示后台入口。
 - 2026-06-14 已补充 Playwright E2E 验收：普通用户登录后不显示“后台管理”导航入口，`admin_users.status=ACTIVE` 的管理员账号登录后显示后台入口。
@@ -1719,14 +1722,14 @@ API 要求：
 - 已新增 `20260612120000_add_checkin_evidence_fields` Prisma migration，扩展 `checkins` 字段：`completedSubtasks`、`actualQuestionCount`、`correctQuestionCount`、`accuracy`、`evidenceFiles`、`evidenceLinks`、`studyMood`、`difficultyLevel`。
 - `POST /daily-tasks/:id/complete` 已支持学习证据 payload，并在缺省 `accuracy` 时根据实际题量和正确题数自动计算正确率。
 - Mock ScoringProvider 已基于完成子项、学习时长、证据数量、题量和正确率生成基础总分、维度评分、证据分析、总结和建议。
-- API 返回按会员状态做付费点控制：免费版返回基础总分、`analysisLevel=BASIC` 和证据摘要，不返回维度评分、证据分析、总结和建议；Pro 返回 `analysisLevel=PRO` 的完整 AI 分析。
+- API 返回按会员状态做付费点控制：免费版返回 `analysisLevel=BASIC`、完成状态和证据摘要，AI 总分及详细分析均为 `null`；Pro 返回 `analysisLevel=PRO` 的完整 AI 分析。
 - Web 完成任务弹窗已支持完成子项、实际题量、正确题数、图片 / 文件链接、错题 / 笔记链接、学习状态和主观难度；结果页展示证据摘要，并对免费用户显示 Pro 解锁提示。
 - 已新增真实上传证据链路：`POST /uploads/evidence` 创建 `PENDING_UPLOAD` 资产和短时签名 PUT URL，上传完成后校验大小、MIME 魔数和 SHA-256 并转为 `READY`；`GET /uploads/evidence/:id` 返回 owner 专属短时签名下载 URL。
 - 已新增本地对象存储 provider 抽象和 `UPLOAD_STORAGE_PATH` 配置，Web 打卡可选择图片、截图或 PDF 并在提交复盘前完成真实上传；仍兼容已有外部 URL 证据。
 - `upload_assets` 已增加 `scanStatus`、`scanResult`、`uploadedAt` 和 `deletedAt` 生命周期字段；当前内置文件签名检查作为病毒扫描前置校验，并为后续异步 AV provider 保留状态。
 - 资产上传、读取、下载和删除均校验当前用户；删除资产会同步删除本地对象，删除账号会清理当前用户本地对象，删除目标会清理 metadata 关联到该目标的对象。
 - 超级管理员原文查看接口已包含打卡证据字段，仍要求查看原因并写入审计日志。
-- 剩余风险：生产环境仍需将本地存储 provider 替换为云对象存储，并接入真实病毒扫描引擎；免费版仍保留基础总分，后续可按商业策略进一步收敛为纯完成状态。
+- 剩余风险：生产环境仍需将本地存储 provider 替换为云对象存储，并接入真实病毒扫描引擎。
 
 阶段 C：真实 worker 和自动轮询。
 

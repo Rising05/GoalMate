@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { BadRequestException } from "@nestjs/common";
+import { HttpException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiJobsService } from "./ai-jobs.service";
@@ -32,7 +32,7 @@ describe("AiJobsService active goal quota integration", () => {
 
     await assert.rejects(
       () => aiJobsService.confirmGoalPlan(user.id, waitingGoal.id),
-      BadRequestException
+      HttpException
     );
   });
 
