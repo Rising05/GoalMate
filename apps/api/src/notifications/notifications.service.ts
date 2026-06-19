@@ -6,6 +6,7 @@ import {
   Optional
 } from "@nestjs/common";
 import { EmailLog, NotificationPreference, Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
 import { MAIL_PROVIDER, MailProvider } from "./mail-provider";
@@ -78,14 +79,18 @@ export class NotificationsService {
         reminderTime: payload.reminderTime,
         reminderTypes: this.toJson(payload.reminderTypes),
         channels: this.toJson(payload.channels),
-        timezone: payload.timezone
+        timezone: payload.timezone,
+        silentDays: this.toJson(payload.silentDays),
+        examSprintDays: payload.examSprintDays
       },
       update: {
         enabled: payload.enabled,
         reminderTime: payload.reminderTime,
         reminderTypes: this.toJson(payload.reminderTypes),
         channels: this.toJson(payload.channels),
-        timezone: payload.timezone
+        timezone: payload.timezone,
+        silentDays: this.toJson(payload.silentDays),
+        examSprintDays: payload.examSprintDays
       }
     });
 
@@ -179,7 +184,7 @@ export class NotificationsService {
     const scheduledFor =
       typeof body.scheduledFor === "string" && body.scheduledFor.trim()
         ? this.parseNow({ now: body.scheduledFor })
-        : this.getNextScheduledAt(preference.reminderTime);
+        : this.getNextScheduledAt(preference.reminderTime, preference.timezone);
     const subject = REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒";
     const log = await this.prisma.emailLog.create({
       data: {
@@ -190,6 +195,8 @@ export class NotificationsService {
         subject,
         content: this.buildPreviewEmailContent(type, preference),
         status: preference.enabled ? "QUEUED" : "SKIPPED",
+        source: "PREVIEW",
+        skipReason: preference.enabled ? null : "提醒总开关已关闭",
         scheduledFor
       }
     });
@@ -202,6 +209,7 @@ export class NotificationsService {
 
   async enqueueDueEmailLogs(userId: string, input: unknown = {}) {
     const now = this.parseNow(input);
+    const metadata = this.parseSchedulingMetadata(input);
     const preference = await this.ensurePreference(userId);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -216,17 +224,17 @@ export class NotificationsService {
           },
           include: {
             dailyTasks: {
-              where: this.todayTaskWhere(now),
+              where: this.todayTaskWhere(now, preference.timezone),
               orderBy: { taskDate: "asc" }
             },
             milestones: {
-              where: this.todayMilestoneWhere(now),
+              where: this.todayMilestoneWhere(now, preference.timezone),
               orderBy: { targetDate: "asc" }
             },
             failureReport: true,
             reportArtifacts: {
               where: {
-                updatedAt: this.todayDateWhere(now)
+                updatedAt: this.todayDateWhere(now, preference.timezone)
               },
               orderBy: { updatedAt: "desc" },
               take: 4
@@ -247,7 +255,18 @@ export class NotificationsService {
       };
     }
 
-    const scheduledFor = this.getScheduledAt(preference.reminderTime, now);
+    if (this.isSilentDay(preference, now)) {
+      return {
+        queued: [],
+        skipped: ["今天是静默日"]
+      };
+    }
+
+    const scheduledFor = this.getScheduledAt(
+      preference.reminderTime,
+      now,
+      preference.timezone
+    );
 
     if (scheduledFor > now) {
       return {
@@ -265,8 +284,31 @@ export class NotificationsService {
     for (const candidate of candidates) {
       for (const channel of channels) {
         const recipient = this.getChannelRecipient(channel, user);
+        const dedupeKey = this.buildDedupeKey({
+          userId,
+          goalId: candidate.goalId,
+          channel,
+          type: candidate.type,
+          now,
+          timezone: preference.timezone
+        });
 
         if (!recipient) {
+          await this.createScheduledLog({
+            userId,
+            goalId: candidate.goalId,
+            channel,
+            type: candidate.type,
+            recipientEmail: user.email,
+            subject: candidate.subject,
+            content: candidate.content,
+            status: "SKIPPED",
+            scheduledFor,
+            source: metadata.source,
+            schedulerRunId: metadata.schedulerRunId,
+            dedupeKey,
+            skipReason: `${channel} 未绑定或不可用`
+          });
           skipped.push(`${candidate.type} ${channel} 未绑定`);
           continue;
         }
@@ -277,7 +319,7 @@ export class NotificationsService {
             goalId: candidate.goalId,
             type: candidate.type,
             channel,
-            scheduledFor: this.todayDateWhere(now)
+            dedupeKey
           },
           select: { id: true }
         });
@@ -287,19 +329,26 @@ export class NotificationsService {
           continue;
         }
 
-        const log = await this.prisma.emailLog.create({
-          data: {
-            userId,
-            goalId: candidate.goalId,
-            channel,
-            type: candidate.type,
-            recipientEmail: recipient,
-            subject: candidate.subject,
-            content: candidate.content,
-            status: "QUEUED",
-            scheduledFor
-          }
+        const log = await this.createScheduledLog({
+          userId,
+          goalId: candidate.goalId,
+          channel,
+          type: candidate.type,
+          recipientEmail: recipient,
+          subject: candidate.subject,
+          content: candidate.content,
+          status: "QUEUED",
+          scheduledFor,
+          source: metadata.source,
+          schedulerRunId: metadata.schedulerRunId,
+          dedupeKey
         });
+
+        if (!log.created) {
+          skipped.push(`${candidate.type} ${channel} 已存在`);
+          continue;
+        }
+
         await this.enqueueEmailLog(log);
         queued.push(log);
       }
@@ -308,6 +357,59 @@ export class NotificationsService {
     return {
       queued: queued.map((log) => this.serializeEmailLog(log)),
       skipped
+    };
+  }
+
+  async runDueNotificationScan(input: unknown = {}) {
+    const now = this.parseNow(input);
+    const body = input && typeof input === "object"
+      ? input as Record<string, unknown>
+      : {};
+    const source = body.source === "ADMIN_COMPENSATION"
+      ? "ADMIN_COMPENSATION"
+      : "AUTOMATIC";
+    const schedulerRunId = this.cleanText(body.schedulerRunId, 120) || randomUUID();
+    const preferences = await this.prisma.notificationPreference.findMany({
+      where: { enabled: true },
+      select: { userId: true }
+    });
+    const results: Array<{
+      userId: string;
+      queued: number;
+      skipped: string[];
+      error?: string;
+    }> = [];
+
+    for (const preference of preferences) {
+      try {
+        const result = await this.enqueueDueEmailLogs(preference.userId, {
+          now: now.toISOString(),
+          source,
+          schedulerRunId
+        });
+        results.push({
+          userId: preference.userId,
+          queued: result.queued.length,
+          skipped: result.skipped
+        });
+      } catch (error) {
+        results.push({
+          userId: preference.userId,
+          queued: 0,
+          skipped: [],
+          error: error instanceof Error ? error.message : "提醒调度失败"
+        });
+      }
+    }
+
+    return {
+      schedulerRunId,
+      source,
+      scannedAt: now.toISOString(),
+      usersScanned: preferences.length,
+      logsQueued: results.reduce((total, result) => total + result.queued, 0),
+      failures: results.filter((result) => result.error).length,
+      results
     };
   }
 
@@ -539,7 +641,9 @@ export class NotificationsService {
         reminderTime: "09:00",
         reminderTypes: this.toJson([...DEFAULT_REMINDER_TYPES]),
         channels: this.toJson([...DEFAULT_NOTIFICATION_CHANNELS]),
-        timezone: "Asia/Shanghai"
+        timezone: "Asia/Shanghai",
+        silentDays: this.toJson([]),
+        examSprintDays: 14
       }
     });
   }
@@ -730,7 +834,7 @@ export class NotificationsService {
           (goal.examDate.getTime() - now.getTime()) / 86_400_000
         );
 
-        if (daysUntilExam >= 0 && daysUntilExam <= 14) {
+        if (daysUntilExam >= 0 && daysUntilExam <= preference.examSprintDays) {
           candidates.push({
             type: "EXAM_SPRINT",
             goalId: goal.id,
@@ -814,7 +918,7 @@ export class NotificationsService {
     encouragement?: string
   ) {
     const encouragementText = encouragement ? ` 鼓励：${encouragement}` : "";
-    return `${REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒"}：${detail}${encouragementText} 当前提醒时间为北京时间 ${preference.reminderTime}。`;
+    return `${REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒"}：${detail}${encouragementText} 当前提醒时间为 ${preference.timezone} ${preference.reminderTime}。`;
   }
 
   private buildEncouragement(
@@ -854,6 +958,8 @@ export class NotificationsService {
         : "Asia/Shanghai";
     const reminderTypes = this.parseReminderTypes(body.reminderTypes);
     const channels = this.parseChannels(body.channels);
+    const silentDays = this.parseSilentDays(body.silentDays);
+    const examSprintDays = Number(body.examSprintDays ?? 14);
 
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(reminderTime)) {
       throw new BadRequestException("提醒时间必须是 HH:mm 格式");
@@ -867,13 +973,39 @@ export class NotificationsService {
       throw new BadRequestException("至少选择一种提醒渠道");
     }
 
+    this.assertTimezone(timezone);
+
+    if (!Number.isInteger(examSprintDays) || examSprintDays < 1 || examSprintDays > 60) {
+      throw new BadRequestException("考前冲刺提醒天数必须是 1-60 的整数");
+    }
+
     return {
       enabled,
       reminderTime,
       reminderTypes,
       channels,
-      timezone
+      timezone,
+      silentDays,
+      examSprintDays
     };
+  }
+
+  private parseSilentDays(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return Array.from(new Set(value.map(Number))).filter(
+      (day) => Number.isInteger(day) && day >= 0 && day <= 6
+    );
+  }
+
+  private assertTimezone(timezone: string) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
+    } catch {
+      throw new BadRequestException("提醒时区不是有效的 IANA 时区");
+    }
   }
 
   private parseReminderTypes(value: unknown) {
@@ -940,6 +1072,59 @@ export class NotificationsService {
     return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
   }
 
+  private parseSchedulingMetadata(input: unknown) {
+    const body = input && typeof input === "object"
+      ? input as Record<string, unknown>
+      : {};
+    const allowedSources = new Set([
+      "MANUAL",
+      "AUTOMATIC",
+      "ADMIN_COMPENSATION"
+    ]);
+    const requestedSource = this.cleanText(body.source, 40).toUpperCase();
+
+    return {
+      source: allowedSources.has(requestedSource) ? requestedSource : "MANUAL",
+      schedulerRunId: this.cleanText(body.schedulerRunId, 120) || null
+    };
+  }
+
+  private async createScheduledLog(input: {
+    userId: string;
+    goalId: string | null;
+    channel: string;
+    type: string;
+    recipientEmail: string;
+    subject: string;
+    content: string;
+    status: string;
+    scheduledFor: Date;
+    source: string;
+    schedulerRunId: string | null;
+    dedupeKey: string;
+    skipReason?: string | null;
+  }): Promise<EmailLog & { created: boolean }> {
+    try {
+      const log = await this.prisma.emailLog.create({ data: input });
+      return Object.assign(log, { created: true });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        const existing = await this.prisma.emailLog.findUnique({
+          where: { dedupeKey: input.dedupeKey }
+        });
+
+        if (existing) {
+          return Object.assign(existing, { created: false });
+        }
+      }
+
+      throw error;
+    }
+  }
+
   private getPreferenceChannels(preference: NotificationPreference) {
     const channels = this.jsonStringArray(preference.channels).filter(
       (channel) => channel in CHANNEL_LABELS
@@ -991,11 +1176,14 @@ export class NotificationsService {
     return now;
   }
 
-  private todayDateWhere(now: Date) {
-    const todayKey = this.toDateKey(now);
-    const start = new Date(`${todayKey}T00:00:00.000+08:00`);
-    const end = new Date(start);
-    end.setUTCDate(start.getUTCDate() + 1);
+  private todayDateWhere(now: Date, timezone = "Asia/Shanghai") {
+    const todayKey = this.toDateKey(now, timezone);
+    const start = this.zonedDateTimeToUtc(todayKey, "00:00", timezone);
+    const end = this.zonedDateTimeToUtc(
+      this.addDateKeyDays(todayKey, 1),
+      "00:00",
+      timezone
+    );
 
     return {
       gte: start,
@@ -1003,32 +1191,47 @@ export class NotificationsService {
     };
   }
 
-  private todayTaskWhere(now: Date) {
+  private todayTaskWhere(now: Date, timezone = "Asia/Shanghai") {
     return {
-      taskDate: this.todayDateWhere(now)
+      taskDate: this.todayDateWhere(now, timezone)
     };
   }
 
-  private todayMilestoneWhere(now: Date) {
+  private todayMilestoneWhere(now: Date, timezone = "Asia/Shanghai") {
     return {
-      targetDate: this.todayDateWhere(now)
+      targetDate: this.todayDateWhere(now, timezone)
     };
   }
 
-  private getScheduledAt(reminderTime: string, now: Date) {
-    const todayKey = this.toDateKey(now);
-    return new Date(`${todayKey}T${reminderTime}:00.000+08:00`);
+  private getScheduledAt(reminderTime: string, now: Date, timezone: string) {
+    const todayKey = this.toDateKey(now, timezone);
+    return this.zonedDateTimeToUtc(todayKey, reminderTime, timezone);
   }
 
-  private getNextScheduledAt(reminderTime: string) {
-    const todayKey = this.toDateKey(new Date());
-    const scheduled = new Date(`${todayKey}T${reminderTime}:00.000+08:00`);
+  private getNextScheduledAt(
+    reminderTime: string,
+    timezone: string,
+    silentDays: number[] = []
+  ) {
+    const now = new Date();
+    const todayKey = this.toDateKey(now, timezone);
 
-    if (scheduled <= new Date()) {
-      scheduled.setUTCDate(scheduled.getUTCDate() + 1);
+    for (let offset = 0; offset <= 7; offset += 1) {
+      const dateKey = this.addDateKeyDays(todayKey, offset);
+      const scheduled = this.zonedDateTimeToUtc(dateKey, reminderTime, timezone);
+
+      if (scheduled <= now || this.isDateKeySilent(dateKey, silentDays)) {
+        continue;
+      }
+
+      return scheduled;
     }
 
-    return scheduled;
+    return this.zonedDateTimeToUtc(
+      this.addDateKeyDays(todayKey, 1),
+      reminderTime,
+      timezone
+    );
   }
 
   private buildPreviewEmailContent(
@@ -1036,7 +1239,7 @@ export class NotificationsService {
     preference: NotificationPreference
   ) {
     const enabledText = preference.enabled ? "已开启" : "已关闭";
-    return `这是一条 ${REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒"} 预览。当前邮件提醒${enabledText}，每日 ${preference.reminderTime} 按北京时间计算。`;
+    return `这是一条 ${REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒"} 预览。当前邮件提醒${enabledText}，每日 ${preference.reminderTime} 按 ${preference.timezone} 计算。`;
   }
 
   private serializePreference(preference: NotificationPreference) {
@@ -1048,6 +1251,13 @@ export class NotificationsService {
       reminderTypes: this.jsonStringArray(preference.reminderTypes),
       channels: this.getPreferenceChannels(preference),
       timezone: preference.timezone,
+      silentDays: this.jsonNumberArray(preference.silentDays),
+      examSprintDays: preference.examSprintDays,
+      nextScheduledAt: this.getNextScheduledAt(
+        preference.reminderTime,
+        preference.timezone,
+        this.jsonNumberArray(preference.silentDays)
+      ).toISOString(),
       createdAt: preference.createdAt.toISOString(),
       updatedAt: preference.updatedAt.toISOString(),
       availableTypes: DEFAULT_REMINDER_TYPES.map((type) => ({
@@ -1077,6 +1287,9 @@ export class NotificationsService {
       providerMessageId: log.providerMessageId,
       errorCode: log.errorCode,
       error: log.error,
+      source: log.source,
+      schedulerRunId: log.schedulerRunId,
+      skipReason: log.skipReason,
       scheduledFor: log.scheduledFor?.toISOString() ?? null,
       sentAt: log.sentAt?.toISOString() ?? null,
       createdAt: log.createdAt.toISOString(),
@@ -1118,13 +1331,21 @@ export class NotificationsService {
     return value.filter((item): item is string => typeof item === "string");
   }
 
+  private jsonNumberArray(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((item): item is number => typeof item === "number");
+  }
+
   private toJson(value: unknown) {
     return value as Prisma.InputJsonValue;
   }
 
-  private toDateKey(date: Date) {
+  private toDateKey(date: Date, timezone = "Asia/Shanghai") {
     const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Shanghai",
+      timeZone: timezone,
       year: "numeric",
       month: "2-digit",
       day: "2-digit"
@@ -1134,5 +1355,78 @@ export class NotificationsService {
     const day = parts.find((part) => part.type === "day")?.value;
 
     return `${year}-${month}-${day}`;
+  }
+
+  private isSilentDay(preference: NotificationPreference, now: Date) {
+    const silentDays = new Set(this.jsonNumberArray(preference.silentDays));
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      timeZone: preference.timezone,
+      weekday: "short"
+    }).format(now);
+    const index = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(
+      weekday
+    );
+
+    return silentDays.has(index);
+  }
+
+  private isDateKeySilent(dateKey: string, silentDays: number[]) {
+    const [year, month, day] = dateKey.split("-").map(Number);
+    return new Set(silentDays).has(new Date(Date.UTC(year, month - 1, day)).getUTCDay());
+  }
+
+  private buildDedupeKey(input: {
+    userId: string;
+    goalId: string | null;
+    channel: string;
+    type: string;
+    now: Date;
+    timezone: string;
+  }) {
+    return [
+      input.userId,
+      input.goalId ?? "account",
+      input.channel,
+      input.type,
+      this.toDateKey(input.now, input.timezone)
+    ].join(":");
+  }
+
+  private addDateKeyDays(dateKey: string, days: number) {
+    const [year, month, day] = dateKey.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day + days));
+    return date.toISOString().slice(0, 10);
+  }
+
+  private zonedDateTimeToUtc(dateKey: string, time: string, timezone: string) {
+    const [year, month, day] = dateKey.split("-").map(Number);
+    const [hour, minute] = time.split(":").map(Number);
+    const desiredUtcShape = Date.UTC(year, month - 1, day, hour, minute);
+    let guess = desiredUtcShape;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23"
+      }).formatToParts(new Date(guess));
+      const value = (type: string) => Number(
+        parts.find((part) => part.type === type)?.value ?? 0
+      );
+      const renderedUtcShape = Date.UTC(
+        value("year"),
+        value("month") - 1,
+        value("day"),
+        value("hour"),
+        value("minute")
+      );
+      guess += desiredUtcShape - renderedUtcShape;
+    }
+
+    return new Date(guess);
   }
 }

@@ -635,6 +635,9 @@ export interface NotificationPreference {
   reminderTypes: ReminderType[];
   channels: NotificationChannel[];
   timezone: string;
+  silentDays: number[];
+  examSprintDays: number;
+  nextScheduledAt: string;
   createdAt: string;
   updatedAt: string;
   availableTypes: Array<{
@@ -662,6 +665,9 @@ export interface EmailLog {
   providerMessageId: string | null;
   errorCode: string | null;
   error: string | null;
+  source: string;
+  schedulerRunId: string | null;
+  skipReason: string | null;
   scheduledFor: string | null;
   sentAt: string | null;
   createdAt: string;
@@ -1595,6 +1601,8 @@ export async function updateNotificationPreference(
     reminderTypes: ReminderType[];
     channels?: NotificationChannel[];
     timezone?: string;
+    silentDays?: number[];
+    examSprintDays?: number;
   }
 ) {
   const response = await fetch(`${API_BASE_URL}/notifications/preferences`, {
@@ -1982,6 +1990,30 @@ export async function retryAdminEmailLog(token: string, logId: string, reason: s
   const data = await parseJson<{ log: AdminEmailLog }>(response);
   if (!response.ok) throw new Error(getErrorMessage(data, "后台提醒重试失败"));
   return data as { log: AdminEmailLog };
+}
+
+export async function runAdminNotificationScheduler(
+  token: string,
+  payload: { now?: string; reason: string }
+) {
+  const response = await fetch(`${API_BASE_URL}/admin/notifications/scheduler/run`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await parseJson<{
+    schedulerRunId: string;
+    usersScanned: number;
+    logsQueued: number;
+    failures: number;
+  }>(response);
+  if (!response.ok) throw new Error(getErrorMessage(data, "提醒补偿调度失败"));
+  return data as {
+    schedulerRunId: string;
+    usersScanned: number;
+    logsQueued: number;
+    failures: number;
+  };
 }
 
 async function fetchAdminCollection<T>(token: string, path: string, fallback: string) {

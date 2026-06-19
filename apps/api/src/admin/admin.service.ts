@@ -24,6 +24,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
+import { NotificationsService } from "../notifications/notifications.service";
 
 type AdminRole = "OPERATOR" | "SUPER_ADMIN";
 
@@ -67,7 +68,7 @@ const AI_JOB_STATUSES = new Set<AiJobStatus>([
   "FAILED",
   "CANCELLED"
 ]);
-const EMAIL_LOG_STATUSES = new Set(["QUEUED", "SENT", "FAILED"]);
+const EMAIL_LOG_STATUSES = new Set(["QUEUED", "SENT", "FAILED", "SKIPPED"]);
 const NOTIFICATION_CHANNELS = new Set(["EMAIL", "WECHAT", "WEB"]);
 
 @Injectable()
@@ -76,7 +77,10 @@ export class AdminService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Optional()
     @Inject(QueueService)
-    private readonly queueService?: QueueService
+    private readonly queueService?: QueueService,
+    @Optional()
+    @Inject(NotificationsService)
+    private readonly notificationsService?: NotificationsService
   ) {}
 
   async getOverview(actorUserId: string) {
@@ -743,6 +747,43 @@ export class AdminService {
     };
   }
 
+  async runNotificationScheduler(actorUserId: string, input: unknown) {
+    await this.assertAdmin(actorUserId);
+    const body = input && typeof input === "object"
+      ? input as Record<string, unknown>
+      : {};
+    const reason = this.cleanText(body.reason, 500);
+
+    if (reason.length < 4) {
+      throw new BadRequestException("补偿调度原因至少需要 4 个字符");
+    }
+
+    if (!this.notificationsService) {
+      throw new BadRequestException("提醒调度服务未配置");
+    }
+
+    const result = await this.notificationsService.runDueNotificationScan({
+      now: typeof body.now === "string" ? body.now : undefined,
+      source: "ADMIN_COMPENSATION"
+    });
+
+    await this.createAuditLog(actorUserId, {
+      action: "NOTIFICATION_SCHEDULER_RUN",
+      targetType: "NOTIFICATION_SCHEDULER",
+      targetId: result.schedulerRunId,
+      reason,
+      metadata: {
+        source: result.source,
+        scannedAt: result.scannedAt,
+        usersScanned: result.usersScanned,
+        logsQueued: result.logsQueued,
+        failures: result.failures
+      }
+    });
+
+    return result;
+  }
+
   async upsertSystemConfig(actorUserId: string, input: unknown) {
     await this.assertAdmin(actorUserId, "SUPER_ADMIN");
     const payload = this.parseSystemConfigPayload(input);
@@ -967,6 +1008,10 @@ export class AdminService {
     return typeof value === "string" && value.trim()
       ? value.trim().slice(0, 80)
       : undefined;
+  }
+
+  private cleanText(value: unknown, maxLength: number) {
+    return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
   }
 
   private parseMembershipPayload(input: unknown) {
@@ -1215,6 +1260,9 @@ export class AdminService {
       providerMessageId: log.providerMessageId,
       errorCode: log.errorCode,
       error: log.error,
+      source: log.source,
+      schedulerRunId: log.schedulerRunId,
+      skipReason: log.skipReason,
       scheduledFor: log.scheduledFor?.toISOString() ?? null,
       sentAt: log.sentAt?.toISOString() ?? null,
       createdAt: log.createdAt.toISOString(),

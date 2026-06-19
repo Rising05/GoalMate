@@ -235,6 +235,75 @@ test("payment webhook replay activates Pro only once", async ({ request }) => {
   expect(await prisma.paymentEvent.count({ where: { orderId: order.order.id } })).toBe(1);
 });
 
+test("notification compensation scheduling is timezone-aware and idempotent", async ({ request }) => {
+  const stamp = Date.now();
+  const password = "Password123!";
+  const user = await registerViaApi(request, {
+    email: `e2e-scheduler-user-${stamp}@example.com`,
+    password,
+    displayName: "Scheduler User"
+  });
+  const admin = await registerViaApi(request, {
+    email: `e2e-scheduler-admin-${stamp}@example.com`,
+    password,
+    displayName: "Scheduler Admin"
+  });
+  await prisma.adminUser.create({
+    data: { userId: admin.user.id, role: "OPERATOR", status: "ACTIVE" }
+  });
+  const userSession = await loginViaApi(request, { email: user.user.email, password });
+  const adminSession = await loginViaApi(request, { email: admin.user.email, password });
+  const goal = await prisma.goal.create({
+    data: {
+      userId: user.user.id,
+      title: `E2E scheduler ${stamp}`,
+      description: "Timezone-aware notification scheduling",
+      category: "STUDY",
+      status: "ACTIVE",
+      startDate: new Date("2026-06-01T04:00:00.000Z"),
+      endDate: new Date("2026-06-30T04:00:00.000Z"),
+      toleranceDaysAllowed: 2,
+      dailyTasks: {
+        create: {
+          taskDate: new Date("2026-06-10T04:00:00.000Z"),
+          title: "New York due task",
+          description: "Notification E2E task",
+          status: "PENDING"
+        }
+      }
+    }
+  });
+  const preference = await request.put(`${apiUrl}/notifications/preferences`, {
+    headers: { Authorization: `Bearer ${userSession.token}` },
+    data: {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: ["DAILY_TASK"],
+      channels: ["EMAIL"],
+      timezone: "America/New_York",
+      silentDays: [],
+      examSprintDays: 7
+    }
+  });
+  expect(preference.ok()).toBeTruthy();
+
+  for (const reason of ["首次补偿提醒扫描", "重复补偿提醒扫描"]) {
+    const response = await request.post(`${apiUrl}/admin/notifications/scheduler/run`, {
+      headers: { Authorization: `Bearer ${adminSession.token}` },
+      data: { now: "2026-06-10T13:30:00.000Z", reason }
+    });
+    expect(response.ok()).toBeTruthy();
+  }
+
+  const logs = await prisma.emailLog.findMany({
+    where: { userId: user.user.id, goalId: goal.id, type: "DAILY_TASK" }
+  });
+  expect(logs).toHaveLength(1);
+  expect(logs[0].source).toBe("ADMIN_COMPENSATION");
+  expect(logs[0].dedupeKey).toContain("2026-06-10");
+  expect(logs[0].schedulerRunId).toBeTruthy();
+});
+
 test("new user completes the core GoalPilot MVP loop", async ({ page, request }) => {
   const stamp = Date.now();
   const email = `e2e-core-${stamp}@example.com`;

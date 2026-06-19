@@ -125,6 +125,104 @@ describe("NotificationsService integration", () => {
     assert.ok(processed.processed.every((log) => log.sentAt));
   });
 
+  it("runs automatic scans idempotently and records scheduler metadata", async () => {
+    const user = await createUser("scheduler-idempotency");
+    await createGoalForReminders(user.id);
+    await notificationsService.updatePreference(user.id, {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: ["DAILY_TASK"],
+      channels: ["EMAIL"],
+      timezone: "Asia/Shanghai",
+      silentDays: [],
+      examSprintDays: 7
+    });
+
+    await Promise.all([
+      notificationsService.runDueNotificationScan({
+        now: "2026-06-10T10:00:00.000+08:00",
+        source: "AUTOMATIC",
+        schedulerRunId: "scheduler-run-a"
+      }),
+      notificationsService.runDueNotificationScan({
+        now: "2026-06-10T10:00:00.000+08:00",
+        source: "AUTOMATIC",
+        schedulerRunId: "scheduler-run-b"
+      })
+    ]);
+
+    const logs = await prisma.emailLog.findMany({
+      where: { userId: user.id, type: "DAILY_TASK", channel: "EMAIL" }
+    });
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].source, "AUTOMATIC");
+    assert.ok(logs[0].schedulerRunId);
+    assert.ok(logs[0].dedupeKey?.endsWith(":2026-06-10"));
+  });
+
+  it("honors timezone, silent days, and persists skipped WeChat delivery", async () => {
+    const timezoneUser = await createUser("scheduler-timezone");
+    await prisma.goal.create({
+      data: {
+        userId: timezoneUser.id,
+        title: "New York study goal",
+        description: "Timezone scheduler coverage",
+        category: "STUDY",
+        status: "ACTIVE",
+        startDate: new Date("2026-06-01T04:00:00.000Z"),
+        endDate: new Date("2026-06-30T04:00:00.000Z"),
+        toleranceDaysAllowed: 2,
+        dailyTasks: {
+          create: {
+            taskDate: new Date("2026-06-10T04:00:00.000Z"),
+            title: "New York morning task",
+            description: "Due in America/New_York",
+            status: "PENDING"
+          }
+        }
+      }
+    });
+    await notificationsService.updatePreference(timezoneUser.id, {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: ["DAILY_TASK"],
+      channels: ["EMAIL", "WECHAT"],
+      timezone: "America/New_York",
+      silentDays: [],
+      examSprintDays: 10
+    });
+
+    const due = await notificationsService.enqueueDueEmailLogs(timezoneUser.id, {
+      now: "2026-06-10T13:30:00.000Z",
+      source: "AUTOMATIC",
+      schedulerRunId: "timezone-run"
+    });
+    assert.equal(due.queued.length, 1);
+    assert.ok(due.skipped.some((item) => item.includes("WECHAT 未绑定")));
+    const skipped = await prisma.emailLog.findFirst({
+      where: { userId: timezoneUser.id, channel: "WECHAT" }
+    });
+    assert.equal(skipped?.status, "SKIPPED");
+    assert.equal(skipped?.skipReason, "WECHAT 未绑定或不可用");
+
+    const silentUser = await createUser("scheduler-silent");
+    await createGoalForReminders(silentUser.id);
+    await notificationsService.updatePreference(silentUser.id, {
+      enabled: true,
+      reminderTime: "09:00",
+      reminderTypes: ["DAILY_TASK"],
+      channels: ["EMAIL"],
+      timezone: "Asia/Shanghai",
+      silentDays: [3],
+      examSprintDays: 14
+    });
+    const silent = await notificationsService.enqueueDueEmailLogs(silentUser.id, {
+      now: "2026-06-10T10:00:00.000+08:00"
+    });
+    assert.equal(silent.queued.length, 0);
+    assert.deepEqual(silent.skipped, ["今天是静默日"]);
+  });
+
   it("binds WeChat and creates channel-specific reminder logs", async () => {
     const user = await createUser("wechat");
     await createGoalForReminders(user.id);

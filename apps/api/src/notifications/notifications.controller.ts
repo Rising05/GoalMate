@@ -69,7 +69,14 @@ export class NotificationsController {
     @Req() request: AuthenticatedRequest,
     @Body() body: unknown
   ) {
-    return this.notificationsService.enqueueDueEmailLogs(request.user!.id, body);
+    const input = body && typeof body === "object"
+      ? body as Record<string, unknown>
+      : {};
+    return this.notificationsService.enqueueDueEmailLogs(request.user!.id, {
+      ...input,
+      source: "MANUAL",
+      schedulerRunId: null
+    });
   }
 
   @Post("email-logs/process-queue")

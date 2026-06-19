@@ -4,6 +4,7 @@ import { after, before, describe, it } from "node:test";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
 import { loadEnv } from "../config/load-env";
 import { GoalsService } from "../goals/goals.service";
+import { NotificationsService } from "../notifications/notifications.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdminService } from "./admin.service";
 
@@ -355,6 +356,34 @@ describe("AdminService integration", () => {
         (log) =>
           log.action === "SYSTEM_CONFIG_UPSERT" &&
           log.targetId === TEST_CONFIG_KEY
+      )
+    );
+  });
+
+  it("lets an admin run a notification compensation scan with audit logging", async () => {
+    const { user: admin } = await createUser("notification-scheduler-admin");
+    await prisma.adminUser.create({
+      data: { userId: admin.id, role: "OPERATOR", status: "ACTIVE" }
+    });
+    const service = new AdminService(
+      prisma,
+      undefined,
+      new NotificationsService(prisma)
+    );
+
+    const result = await service.runNotificationScheduler(admin.id, {
+      now: "2026-06-10T10:00:00.000+08:00",
+      reason: "补偿执行遗漏的到期提醒"
+    });
+    const auditLogs = await service.listAuditLogs(admin.id);
+
+    assert.equal(result.source, "ADMIN_COMPENSATION");
+    assert.ok(result.schedulerRunId);
+    assert.ok(
+      auditLogs.logs.some(
+        (log) =>
+          log.action === "NOTIFICATION_SCHEDULER_RUN" &&
+          log.targetId === result.schedulerRunId
       )
     );
   });

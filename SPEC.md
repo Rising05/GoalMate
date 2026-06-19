@@ -626,6 +626,11 @@ MVP 已落地的提醒日志和重试能力：
 - worker 路径发送失败时会累计 `attempts`；非最终 BullMQ attempt 会保持日志为 `QUEUED` 并抛错交给 BullMQ attempts/backoff 退避重试，最终 attempt 才落库为 `FAILED`。
 - 已新增 Resend 邮件 provider 和微信订阅消息 provider；通过 `MAIL_PROVIDER` / `WECHAT_PROVIDER` 配置开关启用，无密钥环境自动回退 Mock provider。
 - `email_logs` 已记录实际 provider、服务商消息 ID、错误码和尝试次数；worker 会根据服务商错误是否可重试决定 BullMQ 退避重试或直接失败。
+- 已新增应用内 `NotificationsScheduler`；设置 `NOTIFICATIONS_SCHEDULER_ENABLED=true` 后按配置间隔自动扫描所有已开启提醒的用户，调度器只创建持久化日志并入队，实际投递继续由 BullMQ Worker 完成。
+- `notification_preferences` 已新增 `silentDays` 和 `examSprintDays`，Web 账号页支持 IANA 时区、静默日和考前冲刺窗口配置，并展示下一次预计提醒时间。
+- `email_logs` 已新增 `source`、`schedulerRunId`、`dedupeKey` 和 `skipReason`；同一用户、目标、渠道、类型和用户自然日由数据库唯一键保证多实例幂等，微信未绑定等跳过原因也会持久化。
+- 新增 `POST /admin/notifications/scheduler/run` 管理员补偿扫描入口，要求填写原因并写入 `NOTIFICATION_SCHEDULER_RUN` 审计日志；后台和用户提醒日志均展示调度来源、运行 ID 和跳过原因。
+- 2026-06-19 已补充自动扫描并发去重、`America/New_York` 时区、静默日、微信跳过记录和管理员审计集成测试，以及跨时区重复补偿扫描 Playwright E2E。
 
 ## 9. 商业化
 

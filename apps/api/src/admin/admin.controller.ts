@@ -122,4 +122,12 @@ export class AdminController {
   ) {
     return this.adminService.upsertSystemConfig(request.user!.id, body);
   }
+
+  @Post("notifications/scheduler/run")
+  runNotificationScheduler(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.adminService.runNotificationScheduler(request.user!.id, body);
+  }
 }

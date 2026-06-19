@@ -7,6 +7,7 @@ import { MockMailProvider } from "./mock-mail.provider";
 import { MockWechatProvider } from "./mock-wechat.provider";
 import { NotificationsController } from "./notifications.controller";
 import { NotificationsService } from "./notifications.service";
+import { NotificationsScheduler } from "./notifications.scheduler";
 import { NotificationsWorker } from "./notifications.worker";
 import { ResendMailProvider } from "./resend-mail.provider";
 import { WECHAT_PROVIDER } from "./wechat-provider";
@@ -17,6 +18,7 @@ import { WechatSubscribeProvider } from "./wechat-subscribe.provider";
   controllers: [NotificationsController],
   providers: [
     NotificationsService,
+    NotificationsScheduler,
     NotificationsWorker,
     MockMailProvider,
     ResendMailProvider,
@@ -44,6 +46,7 @@ import { WechatSubscribeProvider } from "./wechat-subscribe.provider";
           ? wechatProvider
           : mockProvider
     }
-  ]
+  ],
+  exports: [NotificationsService]
 })
 export class NotificationsModule {}

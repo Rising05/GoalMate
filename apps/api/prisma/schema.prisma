@@ -149,6 +149,8 @@ model NotificationPreference {
   reminderTypes Json
   channels      Json?
   timezone      String   @default("Asia/Shanghai")
+  silentDays    Json?
+  examSprintDays Int     @default(14)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -172,6 +174,10 @@ model EmailLog {
   providerMessageId String?
   errorCode      String?
   error          String?   @db.Text
+  source         String    @default("MANUAL")
+  schedulerRunId String?
+  dedupeKey      String?   @unique
+  skipReason     String?   @db.Text
   scheduledFor   DateTime?
   sentAt         DateTime?
   createdAt      DateTime  @default(now())
@@ -183,6 +189,7 @@ model EmailLog {
   @@index([status, type])
   @@index([channel, status])
   @@index([provider, providerMessageId])
+  @@index([source, schedulerRunId])
   @@map("email_logs")
 }
 

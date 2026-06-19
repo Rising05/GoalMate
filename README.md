@@ -30,6 +30,7 @@ The MVP now covers the core GoalPilot AI loop:
 6. Privacy deletion endpoints, current-user data export, and upload evidence metadata endpoints for Web/WeChat check-in evidence.
 7. Liquid Glass web foundation with internal Glass components, semantic status/metric tokens, reduced-motion/fallback styling, and upgraded goal cockpit, plan review, today tasks, AI job status, timeline, rewards, account, and admin summary surfaces.
 8. Playwright E2E coverage for the new-user MVP loop from registration through plan confirmation, check-in, trend report generation/download, rescue task, heatmap, timeline, settlement, failure review, and restart.
+9. Opt-in automatic notification scheduler with IANA timezone handling, silent days, configurable exam-sprint windows, database-backed daily idempotency, persisted skip reasons, and audited administrator compensation scans.
 
 Useful optional environment variables for the API:
 
@@ -38,6 +39,8 @@ Useful optional environment variables for the API:
 - `DEEPSEEK_MODEL=deepseek-chat`
 - `BULLMQ_ENABLED=true`
 - `BULLMQ_WORKERS_ENABLED=true`
+- `NOTIFICATIONS_SCHEDULER_ENABLED=true`
+- `NOTIFICATIONS_SCHEDULER_INTERVAL_MS=60000`
 - `CHECKIN_SCORING_ASYNC=true`
 - `SCORE_APPEAL_ASYNC=true`
 - `RESCUE_TASK_ASYNC=true`

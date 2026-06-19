@@ -113,6 +113,7 @@ import {
   processQueuedEmailLogs,
   retryAdminAiJob,
   retryAdminEmailLog,
+  runAdminNotificationScheduler,
   requestGoalReplan,
   restartGoal,
   retryFailedEmailLogs,
@@ -2558,6 +2559,16 @@ export function App() {
     });
   }
 
+  function toggleSilentDay(day: number) {
+    setNotificationPreference((current) => {
+      if (!current) return current;
+      const silentDays = current.silentDays.includes(day)
+        ? current.silentDays.filter((item) => item !== day)
+        : [...current.silentDays, day].sort((left, right) => left - right);
+      return { ...current, silentDays };
+    });
+  }
+
   function updateWechatField(field: keyof typeof wechatForm, value: string) {
     setWechatForm((current) => ({
       ...current,
@@ -2579,7 +2590,9 @@ export function App() {
         reminderTime: notificationPreference.reminderTime,
         reminderTypes: notificationPreference.reminderTypes,
         channels: notificationPreference.channels,
-        timezone: notificationPreference.timezone
+        timezone: notificationPreference.timezone,
+        silentDays: notificationPreference.silentDays,
+        examSprintDays: notificationPreference.examSprintDays
       });
       setNotificationPreference(saved);
       setNotificationMessage("提醒偏好已保存。");
@@ -2798,6 +2811,23 @@ export function App() {
       setAdminMessage("失败提醒已重新排队并写入审计日志。");
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : "提醒重试失败");
+    }
+  }
+
+  async function handleRunAdminNotificationScheduler() {
+    if (!session) return;
+    const reason = window.prompt("填写补偿调度原因（至少 4 个字符）", "补偿执行到期提醒扫描");
+    if (!reason) return;
+    try {
+      const result = await runAdminNotificationScheduler(session.token, { reason });
+      setAdminMessage(
+        `调度 ${result.schedulerRunId} 已完成：扫描 ${result.usersScanned} 个用户，新增 ${result.logsQueued} 条提醒，失败 ${result.failures} 个。`
+      );
+      const response = await fetchAdminEmailLogs(session.token, adminEmailLogFilters);
+      setAdminEmailLogs(response.logs);
+      setAdminEmailLogTotal(response.total);
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "提醒补偿调度失败");
     }
   }
 
@@ -5118,6 +5148,50 @@ export function App() {
                         }
                       />
                     </label>
+                    <label>
+                      <span>IANA 时区</span>
+                      <input
+                        value={notificationPreference.timezone}
+                        onChange={(event) =>
+                          setNotificationPreference((current) => current
+                            ? { ...current, timezone: event.target.value }
+                            : current)
+                        }
+                        placeholder="Asia/Shanghai"
+                      />
+                    </label>
+                    <label>
+                      <span>考前冲刺提醒窗口（天）</span>
+                      <input
+                        min={1}
+                        max={60}
+                        type="number"
+                        value={notificationPreference.examSprintDays}
+                        onChange={(event) =>
+                          setNotificationPreference((current) => current
+                            ? { ...current, examSprintDays: Number(event.target.value) }
+                            : current)
+                        }
+                      />
+                    </label>
+                    <div>
+                      <span>静默日</span>
+                      <div className="reminder-type-list">
+                        {["周日", "周一", "周二", "周三", "周四", "周五", "周六"].map((label, day) => (
+                          <label className="toggle-row" key={label}>
+                            <input
+                              checked={notificationPreference.silentDays.includes(day)}
+                              type="checkbox"
+                              onChange={() => toggleSilentDay(day)}
+                            />
+                            <span>{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <p className="muted-text">
+                      下次预计提醒：{formatDateTime(notificationPreference.nextScheduledAt)}
+                    </p>
                     <div className="reminder-type-list">
                       {notificationPreference.availableTypes.map((type) => (
                         <label className="toggle-row" key={type.code}>
@@ -5258,13 +5332,15 @@ export function App() {
                     {emailLogs.slice(0, 5).map((log) => (
                       <div key={log.id}>
                         <span>
-                          {log.channel} · {log.subject} · 尝试 {log.attempts} 次
+                          {log.channel} · {log.subject} · {log.source} · 尝试 {log.attempts} 次
                         </span>
                         <strong>
                           {log.status}
                           {log.provider ? ` · ${log.provider}` : ""}
                         </strong>
                         {log.errorCode ? <span>{log.errorCode}</span> : null}
+                        {log.skipReason ? <span>{log.skipReason}</span> : null}
+                        {log.schedulerRunId ? <span>调度：{log.schedulerRunId}</span> : null}
                       </div>
                     ))}
                   </div>
@@ -5577,6 +5653,13 @@ export function App() {
                     <p className="muted-text">
                       当前显示 {adminEmailLogs.length}/{adminEmailLogTotal} 条日志。
                     </p>
+                    <button
+                      className="ghost-button"
+                      type="button"
+                      onClick={() => void handleRunAdminNotificationScheduler()}
+                    >
+                      补偿执行到期提醒扫描
+                    </button>
                     {adminEmailLogs.length ? (
                       <div className="admin-table-list">
                         {adminEmailLogs.slice(0, 8).map((log) => (
@@ -5587,13 +5670,15 @@ export function App() {
                             </div>
                             <span>
                               {log.channel} · {log.type} · {log.status}
-                              {log.provider ? ` · ${log.provider}` : ""} ·{" "}
+                              {log.provider ? ` · ${log.provider}` : ""} · {log.source} ·{" "}
                               {formatDateTime(log.createdAt)}
                             </span>
                             {log.providerMessageId ? (
                               <span>消息 ID：{log.providerMessageId}</span>
                             ) : null}
                             {log.errorCode ? <span>错误码：{log.errorCode}</span> : null}
+                            {log.skipReason ? <span>跳过原因：{log.skipReason}</span> : null}
+                            {log.schedulerRunId ? <span>调度 ID：{log.schedulerRunId}</span> : null}
                             {log.status === "FAILED" && log.attempts < 3 ? (
                               <button className="ghost-button" type="button" onClick={() => void handleRetryAdminEmailLog(log)}>
                                 重试提醒
