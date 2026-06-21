@@ -21,6 +21,9 @@ import { QueueService } from "../queue/queue.service";
 import { MockScoringProvider } from "./mock-scoring.provider";
 import { SCORING_PROVIDER, ScoringProvider } from "./scoring-provider";
 import { QuotaService } from "../quota/quota.service";
+import { AiCallService } from "../ai/ai-call.service";
+import { AI_PROMPTS } from "../ai/ai-prompts";
+import { objectValue, scoreValue, stringValue } from "../ai/ai-validators";
 import { randomUUID } from "node:crypto";
 
 type TaskWithGoalAndCheckins = DailyTask & {
@@ -111,6 +114,15 @@ const TIMEZONE = "Asia/Shanghai";
 const CHECKIN_SCORING = "CHECKIN_SCORING";
 const CHECKIN_SCORE_APPEAL = "CHECKIN_SCORE_APPEAL";
 
+interface ScoreAppealResult {
+  accepted: boolean;
+  newScore: number;
+  dimensions: Record<string, number>;
+  evidence: Record<string, unknown>;
+  summary: string;
+  suggestion: string;
+}
+
 @Injectable()
 export class DailyTasksService {
   constructor(
@@ -123,7 +135,10 @@ export class DailyTasksService {
     private readonly queueService?: QueueService,
     @Optional()
     @Inject(QuotaService)
-    private readonly quotaService: QuotaService = new QuotaService(prisma)
+    private readonly quotaService: QuotaService = new QuotaService(prisma),
+    @Optional()
+    @Inject(AiCallService)
+    private readonly aiCallService?: AiCallService
   ) {}
 
   async getTodayTasks(userId: string, goalId?: string) {
@@ -519,7 +534,7 @@ export class DailyTasksService {
         difficultyLevel: payload.difficultyLevel
       },
       task
-    });
+    }, { userId, goalId: task.goalId });
     const { completedTask, checkin, job } = await this.prisma.$transaction(async (tx) => {
       await tx.dailyTask.update({
         where: { id: task.id },
@@ -734,7 +749,7 @@ export class DailyTasksService {
           difficultyLevel: checkin.difficultyLevel ?? undefined
         },
         task: checkin.dailyTask
-      });
+      }, { userId: job.userId, goalId: job.goalId ?? undefined, aiJobId: job.id, attempt: runningJob.attempts });
       const { updatedCheckin, succeededJob } = await this.prisma.$transaction(
         async (tx) => {
           const aiScore = await tx.aiScore.upsert({
@@ -867,7 +882,7 @@ export class DailyTasksService {
             newScore: checkin.aiScore!.totalScore,
             evidence: {
               queued: true,
-              provider: "mock"
+              provider: this.aiCallService?.isConfigured() && process.env.AI_PROVIDER === "deepseek" ? "deepseek" : "mock"
             }
           }
         });
@@ -892,7 +907,7 @@ export class DailyTasksService {
             payload: {
               checkinId: checkin.id,
               appealId: createdAppeal.id,
-              provider: "mock"
+              provider: this.aiCallService?.isConfigured() && process.env.AI_PROVIDER === "deepseek" ? "deepseek" : "mock"
             }
           }
         });
@@ -911,7 +926,12 @@ export class DailyTasksService {
       };
     }
 
-    const appealResult = this.getMockAppealResult(payload, checkin.aiScore.totalScore);
+    const appealResult = await this.getAppealResult(
+      payload,
+      checkin.aiScore.totalScore,
+      { userId, goalId: checkin.goalId },
+      { task: checkin.dailyTask!, checkin: { content: checkin.content, investedMinutes: checkin.investedMinutes, completedSubtasks: checkin.completedSubtasks, evidenceLinks: checkin.evidenceLinks } }
+    );
     const { appeal, updatedCheckin, job } = await this.prisma.$transaction(async (tx) => {
       const createdAppeal = await tx.scoreAppeal.create({
         data: {
@@ -922,7 +942,7 @@ export class DailyTasksService {
           status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED",
           originalScore: checkin.aiScore!.totalScore,
           newScore: appealResult.newScore,
-          evidence: appealResult.evidence
+          evidence: this.toJson(appealResult.evidence)
         }
       });
       const appealJobId = randomUUID();
@@ -947,7 +967,7 @@ export class DailyTasksService {
           payload: {
             checkinId: checkin.id,
             appealId: createdAppeal.id,
-            provider: "mock"
+            provider: this.aiCallService?.isConfigured() && process.env.AI_PROVIDER === "deepseek" ? "deepseek" : "mock"
           },
           result: {
             accepted: appealResult.accepted,
@@ -963,7 +983,7 @@ export class DailyTasksService {
           data: {
             totalScore: appealResult.newScore,
             dimensions: appealResult.dimensions,
-            evidence: appealResult.evidence,
+            evidence: this.toJson(appealResult.evidence),
             summary: appealResult.summary,
             suggestion: appealResult.suggestion
           }
@@ -976,7 +996,8 @@ export class DailyTasksService {
           status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED"
         },
         include: {
-          aiScore: true
+          aiScore: true,
+          dailyTask: true
         }
       });
 
@@ -1025,7 +1046,8 @@ export class DailyTasksService {
           userId: job.userId
         },
         include: {
-          aiScore: true
+          aiScore: true,
+          dailyTask: true
         }
       }),
       this.prisma.scoreAppeal.findFirst({
@@ -1093,12 +1115,14 @@ export class DailyTasksService {
     });
 
     try {
-      const appealResult = this.getMockAppealResult(
+      const appealResult = await this.getAppealResult(
         {
           reason: appeal.reason,
           addedFacts: appeal.addedFacts
         },
-        checkin.aiScore.totalScore
+        checkin.aiScore.totalScore,
+        { userId: job.userId, goalId: job.goalId ?? undefined, aiJobId: job.id, attempt: runningJob.attempts },
+        { task: checkin.dailyTask!, checkin: { content: checkin.content, investedMinutes: checkin.investedMinutes, completedSubtasks: checkin.completedSubtasks, evidenceLinks: checkin.evidenceLinks } }
       );
       const { changedAppeal, changedCheckin, succeededJob } =
         await this.prisma.$transaction(async (tx) => {
@@ -1107,7 +1131,7 @@ export class DailyTasksService {
             data: {
               status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED",
               newScore: appealResult.newScore,
-              evidence: appealResult.evidence
+              evidence: this.toJson(appealResult.evidence)
             }
           });
 
@@ -1117,7 +1141,7 @@ export class DailyTasksService {
               data: {
                 totalScore: appealResult.newScore,
                 dimensions: appealResult.dimensions,
-                evidence: appealResult.evidence,
+                evidence: this.toJson(appealResult.evidence),
                 summary: appealResult.summary,
                 suggestion: appealResult.suggestion
               }
@@ -1582,7 +1606,7 @@ export class DailyTasksService {
   private getMockAppealResult(
     payload: ScoreAppealPayload,
     originalScore: number
-  ) {
+  ): ScoreAppealResult {
     const factLengthScore = Math.min(8, Math.floor(payload.addedFacts.length / 25));
     const deniesNewFacts = /没有新增|无新增|没有.*证据|无.*证据|没有.*事实|无.*事实/.test(
       payload.addedFacts
@@ -1631,6 +1655,58 @@ export class DailyTasksService {
         ? "后续复盘请直接写入关键证据，减少申诉成本。"
         : "如需复评，请补充更具体的产出、截图、数据或投入说明。"
     };
+  }
+
+  private async getAppealResult(
+    payload: ScoreAppealPayload,
+    originalScore: number,
+    context: { userId: string; goalId?: string; aiJobId?: string; attempt?: number },
+    source: { task: DailyTask; checkin: Record<string, unknown> }
+  ): Promise<ScoreAppealResult> {
+    if (!this.hasMinimumAppealFacts(payload) || process.env.AI_PROVIDER !== "deepseek" || !this.aiCallService?.isConfigured()) {
+      return this.getMockAppealResult(payload, originalScore);
+    }
+    try {
+      return await this.aiCallService.completeJson({
+        capability: "SCORE_APPEAL",
+        promptVersion: AI_PROMPTS.appeal.version,
+        systemPrompt: AI_PROMPTS.appeal.system,
+        context,
+        input: {
+          originalScore,
+          originalTask: { title: source.task.title, description: source.task.description, plannedMinutes: source.task.plannedMinutes, questionCount: source.task.questionCount, targetAccuracy: source.task.targetAccuracy },
+          originalCheckin: source.checkin,
+          appeal: { reason: payload.reason, addedFacts: payload.addedFacts }
+        },
+        validate: (value) => {
+          const item = objectValue(value);
+          if (typeof item.accepted !== "boolean") throw new Error("accepted must be a boolean");
+          const newScore = scoreValue(item.newScore, "newScore");
+          if (!item.accepted && newScore !== originalScore) throw new Error("Rejected appeal cannot change score");
+          if (item.accepted && newScore < originalScore) throw new Error("Accepted appeal cannot lower score");
+          const rawDimensions = objectValue(item.dimensions, "dimensions");
+          const dimensions = Object.fromEntries(Object.entries(rawDimensions).map(([key, score]) => [key, scoreValue(score, `dimensions.${key}`)]));
+          return {
+            accepted: item.accepted,
+            newScore,
+            dimensions,
+            evidence: { ...objectValue(item.evidence, "evidence"), source: "deepseek" },
+            summary: stringValue(item.summary, "summary"),
+            suggestion: stringValue(item.suggestion, "suggestion")
+          };
+        }
+      });
+    } catch {
+      return this.getMockAppealResult(payload, originalScore);
+    }
+  }
+
+  private hasMinimumAppealFacts(payload: ScoreAppealPayload) {
+    const facts = payload.addedFacts.trim();
+    if (facts.length < 20) return false;
+    if (/没有新增|无新增|没有.*证据|无.*证据|没有.*事实|无.*事实/.test(facts)) return false;
+    if (/必须|威胁|讨好|改成满分|给我高分|不然|ignore previous|system prompt/i.test(`${payload.reason} ${facts}`)) return false;
+    return /证据|截图|链接|数据|记录|产出|附件|commit|照片|完成|分钟|正确率|题/i.test(facts);
   }
 
   private getActivityHealthScore(input: {

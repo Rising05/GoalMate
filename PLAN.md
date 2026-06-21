@@ -2,7 +2,7 @@
 
 > 文档性质：后续开发的唯一执行清单与进度台账
 > 创建日期：2026-06-19
-> 当前状态：规划完成，尚未开始后续实施
+> 当前状态：实施中；P0-1、P0-2 已完成，P0-3 代码完成并等待真实 DeepSeek 预发布验证
 > 适用范围：`SPEC.md` 中尚未完整落地或仅完成基础版、预留版的能力
 
 ## 1. 文档目标
@@ -65,10 +65,8 @@
 
 ### 3.3 已知核心缺口
 
-- 提醒任务缺少应用内自动定时调度，目前依赖接口或外部调度触发。
-- AI Job、重规划和申诉配额主要为统计，未全部执行强制拦截。
-- 打卡评分、申诉、救援和失败复盘未全部接入真实 AI Provider。
-- 免费用户仍能看到基础总分，与完整版“只显示完成状态和基础进度”存在差异。
+- 自动提醒调度与服务端强制配额已完成；生产环境仍需显式启用调度器、BullMQ 和 Worker。
+- 真实 AI Provider 代码、统一调用日志和无密钥契约测试已完成；预发布真实 DeepSeek 调用仍缺少可用密钥。
 - 上传文件仍使用本地对象存储，病毒扫描只有预留状态。
 - 敏感字段加密、密钥轮换、隐私条款和 AI 脱敏未完整实现。
 - Stripe、微信支付目前是 Provider 边界和通用 HMAC 流程，不是官方生产支付集成。
@@ -236,7 +234,7 @@
 
 ### P0-3 真实 AI Provider 补齐
 
-**状态：** `NOT_STARTED`
+**状态：** `IN_PROGRESS`（代码与自动化验收完成，等待预发布 DeepSeek 密钥执行真实调用）
 **目标：** 在保留 Mock 测试能力的同时，为计划之外的关键 AI 链路提供真实 DeepSeek 实现和统一结构化输出验证。
 
 #### Provider 范围
@@ -296,18 +294,18 @@
 
 #### 实施清单
 
-- [ ] 建立统一 AI 调用和 Schema 校验基础层。
-- [ ] 增加 AI 调用日志数据模型或扩展现有 Job metadata。
-- [ ] 将 Prompt 抽离并版本化。
-- [ ] 实现 DeepSeek Scoring Provider。
-- [ ] 实现 DeepSeek Appeal Provider。
-- [ ] 实现 DeepSeek Rescue Provider。
-- [ ] 实现 DeepSeek Failure Report Provider。
-- [ ] 实现目标解析和可行性 Provider。
-- [ ] 接入 Worker、超时和重试策略。
-- [ ] 增加规则降级与用户错误提示。
-- [ ] 增加 Schema 非法、超时、限流和空响应测试。
-- [ ] 使用录制响应完成不依赖真实密钥的契约测试。
+- [x] 建立统一 AI 调用和 Schema 校验基础层。
+- [x] 增加 AI 调用日志数据模型或扩展现有 Job metadata。
+- [x] 将 Prompt 抽离并版本化。
+- [x] 实现 DeepSeek Scoring Provider。
+- [x] 实现 DeepSeek Appeal Provider。
+- [x] 实现 DeepSeek Rescue Provider。
+- [x] 实现 DeepSeek Failure Report Provider。
+- [x] 实现目标解析和可行性 Provider。
+- [x] 接入 Worker、超时和重试策略。
+- [x] 增加规则降级与用户错误提示。
+- [x] 增加 Schema 非法、超时、限流和空响应测试。
+- [x] 使用录制响应完成不依赖真实密钥的契约测试。
 - [ ] 在预发布环境完成少量真实调用验证。
 
 #### Definition of Done
@@ -854,7 +852,7 @@ npm run prisma:migrate -w @goalmate/api
 | --- | --- | --- | --- | --- | --- | --- |
 | P0-1 | 自动提醒调度 | `DONE` | 2026-06-19 | 2026-06-19 | Codex | 96/96 integration，5/5 E2E |
 | P0-2 | 会员额度强制执行 | `DONE` | 2026-06-19 | 2026-06-19 | Codex | 105/105 integration，6/6 E2E |
-| P0-3 | 真实 AI Provider 补齐 | `NOT_STARTED` | - | - | - | - |
+| P0-3 | 真实 AI Provider 补齐 | `IN_PROGRESS` | 2026-06-21 | - | Codex | 代码完成；114/114 integration，7/7 E2E；待预发布真实调用 |
 | P1-1 | 云对象存储与病毒扫描 | `NOT_STARTED` | - | - | - | - |
 | P1-2 | 敏感数据加密与 AI 脱敏 | `NOT_STARTED` | - | - | - | - |
 | P1-3 | 可观测性、备份与恢复 | `NOT_STARTED` | - | - | - | - |
@@ -892,6 +890,25 @@ npm run prisma:migrate -w @goalmate/api
 - 已知限制：
 - 后续依赖：
 ```
+
+### 2026-06-21 - P0-3 真实 AI Provider 补齐（代码与自动化验收）
+
+- 状态：`IN_PROGRESS`；实现、迁移和无密钥自动化已完成，唯一未完成项为预发布环境真实 DeepSeek 调用。
+- 实现摘要：新增统一 DeepSeek JSON 调用层；覆盖目标解析、计划/重规划、固定六维打卡评分、申诉复评、偏差摘要、救援任务、周报/月报文案和失败复盘；用户输入仅进入 JSON 数据消息，Prompt 集中版本化；各能力具备严格范围、长度和结构校验及确定性降级。
+- 数据库变更：新增 `ai_call_logs` 及 migration `20260621100000_add_ai_call_logs`，记录 provider、model、promptVersion、inputHash、requestId、token、耗时、估算成本、attempt、错误分类和 fallback；不持久化原始 AI 输入。
+- API 变更：新增 `POST /goals/analyze`、`POST /goals/:id/deviation-summary` 和管理员 `GET /admin/ai-call-logs`；救援响应会明确返回 provider、fallback 和 providerError。
+- Web/小程序变更：本工作项不新增 AI 助手交互页面；目标创建助手完整确认式 UI 仍归 P3-1。现有 Web 流程保持兼容。
+- 配置变更：支持 `DEEPSEEK_MODEL`、`DEEPSEEK_API_URL` 和输入/输出 token 单价；无 Key 或未启用 `AI_PROVIDER=deepseek` 时继续使用 Mock/规则能力，自动化不请求外网。
+- 测试新增或修改：新增统一调用日志成功/非法 Schema/429/空响应/超时测试，固定六维评分及后端总分测试、缺维拒绝、目标问题上限和所有能力 JSON Schema 清单测试；E2E 覆盖无 Key 目标分析与后台调用日志权限。
+- 验收结果：
+  - `npm run typecheck`：通过。
+  - `npm run test:integration`：114/114 通过。
+  - `npm run test:e2e`：7/7 通过。
+  - `npm run build`：通过。
+  - `git diff --check`：通过。
+  - migration：已有本地 MySQL 数据库从 22 迁移到 23 条成功。
+- 已知限制：当前 `.env` 的 `DEEPSEEK_API_KEY` 为空，无法伪造预发布真实调用证据，因此 P0-3 暂不标记 `DONE`；配置可用密钥后需对 8 类能力做少量真实请求并核验后台日志、输出质量与成本。
+- 后续依赖：完成真实调用后将 P0-3 改为 `DONE`；P1-3 基于 `ai_call_logs` 增加指标、告警和跨请求 trace；P3-1 使用目标分析 API 实现逐字段确认 UI。
 
 ### 2026-06-19 - P0-2 会员额度强制执行
 

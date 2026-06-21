@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import {
   AiJob,
+  AiCallLog,
   AiJobStatus,
   AuditLog,
   EmailLog,
@@ -386,6 +387,27 @@ export class AdminService {
     return {
       job: this.serializeAiJob(retriedJob),
       queue
+    };
+  }
+
+  async listAiCallLogs(actorUserId: string, input: unknown = {}) {
+    await this.assertAdmin(actorUserId);
+    const data = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+    const pagination = this.parsePagination(data);
+    const capability = typeof data.capability === "string" && data.capability.trim() ? data.capability.trim() : undefined;
+    const status = typeof data.status === "string" && ["SUCCEEDED", "FAILED"].includes(data.status) ? data.status : undefined;
+    const provider = typeof data.provider === "string" && data.provider.trim() ? data.provider.trim() : undefined;
+    const where: Prisma.AiCallLogWhereInput = { capability, status, provider };
+    const [logs, total] = await Promise.all([
+      this.prisma.aiCallLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: pagination.skip, take: pagination.pageSize }),
+      this.prisma.aiCallLog.count({ where })
+    ]);
+    return {
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      filters: { capability: capability ?? null, status: status ?? null, provider: provider ?? null },
+      logs: logs.map((log) => this.serializeAiCallLog(log))
     };
   }
 
@@ -1237,6 +1259,14 @@ export class AdminService {
       error: job.error,
       createdAt: job.createdAt.toISOString(),
       updatedAt: job.updatedAt.toISOString()
+    };
+  }
+
+  private serializeAiCallLog(log: AiCallLog) {
+    return {
+      ...log,
+      estimatedCost: log.estimatedCostMicros == null ? null : log.estimatedCostMicros / 1_000_000,
+      createdAt: log.createdAt.toISOString()
     };
   }
 

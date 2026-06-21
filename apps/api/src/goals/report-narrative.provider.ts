@@ -1,4 +1,5 @@
 export const REPORT_NARRATIVE_PROVIDER = "REPORT_NARRATIVE_PROVIDER";
+import { AiCallContext } from "../ai/ai-call.types";
 
 export interface ReportNarrativeInput {
   type: "WEEKLY_TREND" | "MONTHLY_TREND";
@@ -32,6 +33,7 @@ export interface ReportNarrativeProvider {
   readonly name: string;
   readonly model?: string;
   generate(
-    input: ReportNarrativeInput
+    input: ReportNarrativeInput,
+    context?: AiCallContext
   ): GeneratedReportNarrative | Promise<GeneratedReportNarrative>;
 }

@@ -11,10 +11,12 @@ import { RewardsModule } from "./rewards/rewards.module";
 import { UploadsModule } from "./uploads/uploads.module";
 import { BillingModule } from "./billing/billing.module";
 import { QuotaModule } from "./quota/quota.module";
+import { AiModule } from "./ai/ai.module";
 
 @Module({
   imports: [
     PrismaModule,
+    AiModule,
     AuthModule,
     GoalsModule,
     DailyTasksModule,

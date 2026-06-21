@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { Goal } from "@prisma/client";
 import {
   GeneratedDailyTask,
@@ -7,6 +7,9 @@ import {
   GeneratedWeeklyPlan
 } from "./mock-plan.provider";
 import { PlanProvider } from "./plan-provider";
+import { AiCallService } from "../ai/ai-call.service";
+import { AiCallContext } from "../ai/ai-call.types";
+import { AI_PROMPTS } from "../ai/ai-prompts";
 
 interface DeepSeekPlanResponse {
   summary?: unknown;
@@ -18,84 +21,35 @@ interface DeepSeekPlanResponse {
 export class DeepSeekPlanProvider implements PlanProvider {
   readonly name = "deepseek";
 
+  constructor(@Inject(AiCallService) private readonly ai: AiCallService) {}
+
   isConfigured() {
-    return Boolean(process.env.DEEPSEEK_API_KEY?.trim());
+    return this.ai.isConfigured();
   }
 
-  async generate(goal: Goal): Promise<GeneratedGoalPlan> {
-    const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
-
-    if (!apiKey) {
-      throw new Error("DeepSeek API key is not configured");
-    }
-
-    const response = await fetch("https://api.deepseek.com/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
+  async generate(goal: Goal, context?: AiCallContext): Promise<GeneratedGoalPlan> {
+    return this.ai.completeJson({
+      capability: "PLAN_GENERATION",
+      promptVersion: AI_PROMPTS.plan.version,
+      systemPrompt: AI_PROMPTS.plan.system,
+      context: context ?? { userId: goal.userId, goalId: goal.id },
+      input: {
+        title: goal.title, description: goal.description, category: goal.category,
+        startDate: goal.startDate.toISOString(), endDate: goal.endDate.toISOString(),
+        dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes, examName: goal.examName,
+        targetScore: goal.targetScore, currentScore: goal.currentScore,
+        examDate: goal.examDate?.toISOString(), subjects: goal.subjects,
+        materials: goal.materials, chapters: goal.chapters, weaknesses: goal.weaknesses,
+        studyDaysPerWeek: goal.studyDaysPerWeek, dailyStudyMinutes: goal.dailyStudyMinutes,
+        mockExamFrequency: goal.mockExamFrequency, currentBaseline: goal.currentBaseline,
+        constraints: goal.constraints, finalReward: goal.finalReward
       },
-      body: JSON.stringify({
-        model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You generate GoalPilot study plans. Return only valid JSON with summary, milestones, weeklyPlans, and dailyTasks. Use ISO date strings. Each daily task may include studyTaskType, subject, materialRef, chapterRef, questionCount, targetAccuracy, evidenceRequired, and priority."
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              title: goal.title,
-              description: goal.description,
-              category: goal.category,
-              startDate: goal.startDate.toISOString(),
-              endDate: goal.endDate.toISOString(),
-              dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes,
-              examName: goal.examName,
-              targetScore: goal.targetScore,
-              currentScore: goal.currentScore,
-              examDate: goal.examDate?.toISOString(),
-              subjects: goal.subjects,
-              materials: goal.materials,
-              chapters: goal.chapters,
-              weaknesses: goal.weaknesses,
-              studyDaysPerWeek: goal.studyDaysPerWeek,
-              dailyStudyMinutes: goal.dailyStudyMinutes,
-              mockExamFrequency: goal.mockExamFrequency,
-              currentBaseline: goal.currentBaseline,
-              constraints: goal.constraints,
-              finalReward: goal.finalReward
-            })
-          }
-        ]
-      })
+      validate: (value) => this.parsePlanValue(value)
     });
-
-    if (!response.ok) {
-      throw new Error(`DeepSeek plan generation failed: ${response.status}`);
-    }
-
-    const payload = await response.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = payload.choices?.[0]?.message?.content;
-
-    if (!content) {
-      throw new Error("DeepSeek returned an empty plan");
-    }
-
-    return this.parsePlan(content);
   }
 
-  private parsePlan(content: string): GeneratedGoalPlan {
-    const cleaned = content
-      .trim()
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "");
-    const parsed = JSON.parse(cleaned) as DeepSeekPlanResponse;
+  private parsePlanValue(value: unknown): GeneratedGoalPlan {
+    const parsed = this.requireObject(value, "response") as DeepSeekPlanResponse;
     const summary = this.requireString(parsed.summary, "summary");
     const milestones = this.requireArray(parsed.milestones, "milestones").map(
       (item, index) => this.parseMilestone(item, index)

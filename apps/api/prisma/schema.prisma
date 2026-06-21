@@ -97,6 +97,7 @@ model User {
   entitlements           Entitlement[]
   usageRecords           UsageRecord[]
   quotaBuckets           QuotaBucket[]
+  aiCallLogs             AiCallLog[]
 
   @@map("users")
 }
@@ -422,6 +423,7 @@ model Goal {
   healthSnapshots HealthSnapshot[]
   reportArtifacts ReportArtifact[]
   failureReport   FailureReport?
+  aiCallLogs      AiCallLog[]
 
   @@index([userId, status])
   @@map("goals")
@@ -707,8 +709,42 @@ model AiJob {
 
   user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   goal Goal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  aiCallLogs AiCallLog[]
 
   @@index([status, type])
   @@index([userId, createdAt])
   @@map("ai_jobs")
+}
+
+model AiCallLog {
+  id                  String   @id @default(cuid())
+  userId              String
+  goalId              String?
+  aiJobId             String?
+  capability          String
+  provider            String
+  model               String?
+  promptVersion       String
+  inputHash           String
+  requestId           String?
+  status              String
+  promptTokens        Int?
+  completionTokens    Int?
+  totalTokens         Int?
+  latencyMs           Int
+  estimatedCostMicros Int?
+  attempt             Int      @default(1)
+  errorCategory       String?
+  error               String?  @db.Text
+  fallbackUsed        Boolean  @default(false)
+  createdAt           DateTime @default(now())
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal  Goal?  @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  aiJob AiJob? @relation(fields: [aiJobId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([goalId, capability, createdAt])
+  @@index([status, errorCategory, createdAt])
+  @@map("ai_call_logs")
 }

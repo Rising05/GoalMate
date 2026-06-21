@@ -686,7 +686,12 @@ export class AiJobsService {
       });
 
       try {
-        return await this.planProvider.generate(goal);
+        return await this.planProvider.generate(goal, {
+          userId: goal.userId,
+          goalId: goal.id,
+          aiJobId: jobId,
+          attempt
+        });
       } catch (error) {
         lastError = error;
 

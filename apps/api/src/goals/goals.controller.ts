@@ -28,6 +28,11 @@ export class GoalsController {
     return this.goalsService.createGoal(request.user!.id, body);
   }
 
+  @Post("analyze")
+  analyze(@Req() request: AuthenticatedRequest, @Body() body: unknown) {
+    return this.goalsService.analyzeGoal(request.user!.id, body);
+  }
+
   @Get()
   list(@Req() request: AuthenticatedRequest) {
     return this.goalsService.listGoals(request.user!.id);
@@ -46,6 +51,11 @@ export class GoalsController {
   @Get(":id/health")
   getHealth(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.goalsService.getGoalHealth(request.user!.id, id);
+  }
+
+  @Post(":id/deviation-summary")
+  getDeviationSummary(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
+    return this.goalsService.getDeviationSummary(request.user!.id, id);
   }
 
   @Get(":id/health-snapshots")

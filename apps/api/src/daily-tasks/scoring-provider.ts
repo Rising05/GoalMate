@@ -1,4 +1,5 @@
 import { DailyTask } from "@prisma/client";
+import { AiCallContext } from "../ai/ai-call.types";
 
 export const SCORING_PROVIDER = "SCORING_PROVIDER";
 
@@ -30,5 +31,5 @@ export interface ScoreResult {
 
 export interface ScoringProvider {
   readonly name: string;
-  score(input: ScoreInput): ScoreResult | Promise<ScoreResult>;
+  score(input: ScoreInput, context?: AiCallContext): ScoreResult | Promise<ScoreResult>;
 }

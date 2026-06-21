@@ -109,12 +109,32 @@ test("admin navigation is only visible to active admin accounts", async ({
   });
   await loadWebSession(page, adminSession.token);
   await expect(page.getByRole("button", { name: /后台管理/ })).toBeVisible();
-  for (const path of ["upload-assets", "payment-events", "membership-audits"]) {
+  for (const path of ["upload-assets", "payment-events", "membership-audits", "ai-call-logs"]) {
     const response = await request.get(`${apiUrl}/admin/${path}`, {
       headers: { Authorization: `Bearer ${adminSession.token}` }
     });
     expect(response.ok()).toBeTruthy();
   }
+});
+
+test("goal analysis remains available without a real AI key", async ({ request }) => {
+  const stamp = Date.now();
+  const password = "Password123!";
+  const registered = await registerViaApi(request, {
+    email: `e2e-goal-analysis-${stamp}@example.com`,
+    password,
+    displayName: "Goal Analysis User"
+  });
+  const session = await loginViaApi(request, { email: registered.user.email, password });
+  const response = await request.post(`${apiUrl}/goals/analyze`, {
+    headers: { Authorization: `Bearer ${session.token}` },
+    data: { title: "六个月后英语考试达到 80 分" }
+  });
+  expect(response.ok()).toBeTruthy();
+  const result = await response.json();
+  expect(result.provider).toBe("rule");
+  expect(result.questions.length).toBeLessThanOrEqual(3);
+  expect(result.structuredFields.title).toContain("英语考试");
 });
 
 test("queued AI jobs can be cancelled by the owning user", async ({ request }) => {

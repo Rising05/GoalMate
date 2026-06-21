@@ -7,6 +7,7 @@ import { DailyTasksService } from "./daily-tasks.service";
 import { MockScoringProvider } from "./mock-scoring.provider";
 import { SCORING_PROVIDER } from "./scoring-provider";
 import { QuotaModule } from "../quota/quota.module";
+import { DeepSeekScoringProvider } from "./deepseek-scoring.provider";
 
 @Module({
   imports: [AuthModule, PrismaModule, QueueModule, QuotaModule],
@@ -14,9 +15,12 @@ import { QuotaModule } from "../quota/quota.module";
   providers: [
     DailyTasksService,
     MockScoringProvider,
+    DeepSeekScoringProvider,
     {
       provide: SCORING_PROVIDER,
-      useExisting: MockScoringProvider
+      inject: [MockScoringProvider, DeepSeekScoringProvider],
+      useFactory: (mock: MockScoringProvider, deepseek: DeepSeekScoringProvider) =>
+        process.env.AI_PROVIDER === "deepseek" && deepseek.isConfigured() ? deepseek : mock
     }
   ],
   exports: [DailyTasksService]

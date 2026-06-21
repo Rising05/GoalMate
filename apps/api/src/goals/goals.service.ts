@@ -29,6 +29,9 @@ import {
   ReportNarrativeProvider
 } from "./report-narrative.provider";
 import { QuotaService } from "../quota/quota.service";
+import { AiCallService } from "../ai/ai-call.service";
+import { AI_PROMPTS } from "../ai/ai-prompts";
+import { objectValue, scoreValue, stringArray, stringValue } from "../ai/ai-validators";
 
 interface CreateGoalPayload {
   title: string;
@@ -208,8 +211,86 @@ export class GoalsService {
     private readonly storage?: StorageProvider,
     @Optional()
     @Inject(QuotaService)
-    private readonly quotaService: QuotaService = new QuotaService(prisma)
+    private readonly quotaService: QuotaService = new QuotaService(prisma),
+    @Optional()
+    @Inject(AiCallService)
+    private readonly aiCallService?: AiCallService
   ) {}
+
+  async analyzeGoal(userId: string, input: unknown) {
+    const item = objectValue(input, "body");
+    const title = stringValue(item.title, "title");
+    const description = typeof item.description === "string" ? item.description.trim() : "";
+    if (!this.useDeepSeek()) {
+      return {
+        provider: "rule",
+        structuredFields: { title, category: item.category ?? null, examName: item.examName ?? null, targetScore: item.targetScore ?? null, currentScore: item.currentScore ?? null, targetDate: item.targetDate ?? null, subjects: Array.isArray(item.subjects) ? item.subjects : [], materials: Array.isArray(item.materials) ? item.materials : [] },
+        feasible: true,
+        riskLevel: "warning",
+        feasibilityScore: 70,
+        reasons: description ? [] : ["目标完成标准尚不明确。"],
+        assumptions: [],
+        suggestedChanges: ["补充截止日期和每日可投入时间。"],
+        questions: description ? [] : ["你的具体完成标准是什么？"]
+      };
+    }
+    const result = await this.aiCallService!.completeJson({
+      capability: "GOAL_ANALYSIS",
+      promptVersion: AI_PROMPTS.goalAnalysis.version,
+      systemPrompt: AI_PROMPTS.goalAnalysis.system,
+      context: { userId },
+      input: item,
+      validate: (value) => {
+        const data = objectValue(value);
+        const structured = objectValue(data.structuredFields, "structuredFields");
+        const optionalText = (value: unknown, field: string) => value == null ? null : stringValue(value, field, 500);
+        if (typeof data.feasible !== "boolean") throw new Error("feasible must be a boolean");
+        const riskLevel = stringValue(data.riskLevel, "riskLevel");
+        if (!["stable", "warning", "danger"].includes(riskLevel)) throw new Error("riskLevel is invalid");
+        return {
+          structuredFields: {
+            title,
+            category: optionalText(structured.category, "structuredFields.category"),
+            examName: optionalText(structured.examName, "structuredFields.examName"),
+            targetScore: optionalText(structured.targetScore, "structuredFields.targetScore"),
+            currentScore: optionalText(structured.currentScore, "structuredFields.currentScore"),
+            targetDate: optionalText(structured.targetDate, "structuredFields.targetDate"),
+            subjects: Array.isArray(structured.subjects) ? stringArray(structured.subjects, "structuredFields.subjects", 0, 20) : [],
+            materials: Array.isArray(structured.materials) ? stringArray(structured.materials, "structuredFields.materials", 0, 20) : []
+          },
+          feasible: data.feasible,
+          riskLevel,
+          feasibilityScore: scoreValue(data.feasibilityScore, "feasibilityScore"),
+          reasons: stringArray(data.reasons, "reasons", 0, 6),
+          assumptions: stringArray(data.assumptions, "assumptions", 0, 6),
+          suggestedChanges: stringArray(data.suggestedChanges, "suggestedChanges", 0, 6),
+          questions: stringArray(data.questions, "questions", 0, 3)
+        };
+      }
+    });
+    return { provider: "deepseek", ...result };
+  }
+
+  async getDeviationSummary(userId: string, id: string) {
+    const health = await this.getGoalHealth(userId, id);
+    if (!this.useDeepSeek()) {
+      return { provider: "rule", summary: health.deviation.reasons.map((item: { detail: string }) => item.detail).join("；") || "当前执行节奏稳定。", riskLevel: health.deviation.riskLevel, recommendations: health.deviation.reasons.length ? ["优先完成一个最小可交付动作并提交证据。"] : ["保持当前节奏。"] };
+    }
+    const result = await this.aiCallService!.completeJson({
+      capability: "DEVIATION_SUMMARY",
+      promptVersion: AI_PROMPTS.deviation.version,
+      systemPrompt: AI_PROMPTS.deviation.system,
+      context: { userId, goalId: id },
+      input: { healthScore: health.healthScore, deviation: health.deviation },
+      validate: (value) => {
+        const data = objectValue(value);
+        const riskLevel = stringValue(data.riskLevel, "riskLevel");
+        if (!["stable", "warning", "danger"].includes(riskLevel)) throw new Error("riskLevel is invalid");
+        return { summary: stringValue(data.summary, "summary"), riskLevel, recommendations: stringArray(data.recommendations, "recommendations", 2, 4) };
+      }
+    });
+    return { provider: "deepseek", ...result };
+  }
 
   async createGoal(userId: string, input: unknown) {
     const payload = this.parseCreateGoalPayload(input);
@@ -705,12 +786,19 @@ export class GoalsService {
       riskCounts: report.riskCounts,
       insights: report.insights
     };
+    const goalOwner = await client.goal.findUniqueOrThrow({
+      where: { id: report.goalId },
+      select: { userId: true }
+    });
     let provider = selectedProvider;
     let providerError: string | null = null;
     let narrative;
 
     try {
-      narrative = await selectedProvider.generate(narrativeInput);
+      narrative = await selectedProvider.generate(narrativeInput, {
+        userId: goalOwner.userId,
+        goalId: report.goalId
+      });
     } catch (error) {
       providerError =
         error instanceof Error ? error.message : "Report narrative provider failed";
@@ -737,7 +825,7 @@ export class GoalsService {
         recommendations: this.toJson(narrative.recommendations),
         provider: provider.name,
         model: provider.model ?? null,
-        promptVersion: "health-trend-narrative-v1",
+        promptVersion: AI_PROMPTS.report.version,
         status: "READY",
         error: providerError
       },
@@ -749,7 +837,7 @@ export class GoalsService {
         recommendations: this.toJson(narrative.recommendations),
         provider: provider.name,
         model: provider.model ?? null,
-        promptVersion: "health-trend-narrative-v1",
+        promptVersion: AI_PROMPTS.report.version,
         status: "READY",
         error: providerError
       }
@@ -990,7 +1078,7 @@ export class GoalsService {
             riskLevel: context.deviation.riskLevel,
             triggerReason: context.deviation.reasons[0]?.label ?? null,
             triggerCode: context.deviation.reasons[0]?.code ?? null,
-            provider: "mock-rescue"
+            provider: this.useDeepSeek() ? "deepseek" : "mock-rescue"
           }
         }
       });
@@ -1022,14 +1110,16 @@ export class GoalsService {
           riskLevel: context.deviation.riskLevel,
           triggerReason: context.deviation.reasons[0]?.label ?? null,
           triggerCode: context.deviation.reasons[0]?.code ?? null,
-          provider: "mock-rescue",
+          provider: this.useDeepSeek() ? "deepseek" : "mock-rescue",
           mode: "sync-compatible"
         },
         result: {
           rescueTaskId: result.rescueTask.id,
           deviationEventId: result.deviation.eventId,
           riskLevel: result.deviation.riskLevel,
-          fallback: false
+          fallback: result.fallback,
+          provider: result.provider,
+          providerError: result.providerError
         }
       }
     });
@@ -1115,7 +1205,10 @@ export class GoalsService {
         : null;
 
     try {
-      const result = await this.persistRescueTaskFromContext(context);
+      const result = await this.persistRescueTaskFromContext(context, {
+        aiJobId: job.id,
+        attempt: runningJob.attempts
+      });
       const succeededJob = await this.prisma.aiJob.update({
         where: { id: runningJob.id },
         data: {
@@ -1124,8 +1217,9 @@ export class GoalsService {
             rescueTaskId: result.rescueTask.id,
             deviationEventId: result.deviation.eventId,
             riskLevel: result.deviation.riskLevel,
-            fallback: Boolean(providerError),
-            providerError
+            fallback: Boolean(providerError) || result.fallback,
+            provider: result.provider,
+            providerError: providerError ?? result.providerError
           },
           error: providerError
         }
@@ -1135,7 +1229,8 @@ export class GoalsService {
         ...result,
         job: this.serializeAiJob(succeededJob),
         processed: true,
-        fallback: Boolean(providerError)
+        fallback: Boolean(providerError) || result.fallback,
+        providerError: providerError ?? result.providerError
       };
     } catch (error) {
       const failedJob = await this.prisma.aiJob.update({
@@ -1229,11 +1324,12 @@ export class GoalsService {
   }
 
   private async persistRescueTaskFromContext(
-    context: RescueTaskGenerationContext
+    context: RescueTaskGenerationContext,
+    callContext?: { aiJobId?: string; attempt?: number }
   ) {
     const { goal, todayStart, deviation, sourceTask, existingRescueTask, deviationEvent } =
       context;
-    const rescueTaskDraft = this.buildMockRescueTask(goal, deviation);
+    const rescueTaskDraft = await this.getRescueTaskDraft(goal, deviation, callContext);
     const rescueTask = existingRescueTask
       ? existingRescueTask.deviationEventId || !deviationEvent
         ? existingRescueTask
@@ -1262,7 +1358,10 @@ export class GoalsService {
       goalId: goal.id,
       goalTitle: goal.title,
       deviation: this.serializeDeviationSignal(deviation, deviationEvent),
-      rescueTask: this.serializeRescueTask(goal, rescueTask)
+      rescueTask: this.serializeRescueTask(goal, rescueTask),
+      provider: rescueTaskDraft.provider,
+      fallback: rescueTaskDraft.fallback,
+      providerError: rescueTaskDraft.providerError
     };
   }
 
@@ -1300,8 +1399,8 @@ export class GoalsService {
           goalId: goal.id,
           missedDayCount: missedDays.length,
           toleranceDaysAllowed: goal.toleranceDaysAllowed,
-          provider: "rule-failure-report",
-          promptVersion: "failure-report-v1"
+          provider: this.useDeepSeek() ? "deepseek" : "rule-failure-report",
+          promptVersion: AI_PROMPTS.failureReview.version
         }
       }
     });
@@ -1330,14 +1429,14 @@ export class GoalsService {
         goalId: goal.id,
         missedDayCount: missedDays.length,
         toleranceDaysAllowed: goal.toleranceDaysAllowed,
-        provider: "rule-failure-report",
-        promptVersion: "failure-report-v1",
+        provider: this.useDeepSeek() ? "deepseek" : "rule-failure-report",
+        promptVersion: AI_PROMPTS.failureReview.version,
         mode: "sync-compatible"
       }),
       result: this.toJson({
         failureReportId: report.id,
         missedDayCount: missedDays.length,
-        provider: "rule-failure-report"
+        provider: this.useDeepSeek() ? "deepseek" : "rule-failure-report"
       }),
       error: null
     };
@@ -1524,7 +1623,7 @@ export class GoalsService {
             result: {
               failureReportId: report.id,
               missedDayCount: missedDays.length,
-              provider: "rule-failure-report"
+              provider: this.useDeepSeek() ? "deepseek" : "rule-failure-report"
             },
             error: null
           }
@@ -1728,13 +1827,29 @@ export class GoalsService {
       constraints: goal.constraints,
       finalReward: goal.finalReward
     };
-    const reasonAnalysis = this.buildFailureReasonAnalysis({
+    let reasonAnalysis = this.buildFailureReasonAnalysis({
       goal,
       missedDays,
       lowScoreTaskCount: lowScoreTasks.length,
       keyDeviationCount: keyDeviationNodes.length
     });
-    const suggestion = this.buildFailureSuggestion(goal, missedDays, lowScoreTasks.length);
+    let suggestion = this.buildFailureSuggestion(goal, missedDays, lowScoreTasks.length);
+    if (this.useDeepSeek()) {
+      try {
+        const review = await this.aiCallService!.completeJson({
+          capability: "FAILURE_REVIEW",
+          promptVersion: AI_PROMPTS.failureReview.version,
+          systemPrompt: AI_PROMPTS.failureReview.system,
+          context: { userId: goal.userId, goalId: goal.id },
+          input: { goal: { title: goal.title, description: goal.description }, missedDays, lowScoreTasks, keyDeviationNodes },
+          validate: (value) => { const item = objectValue(value); return { reasonAnalysis: stringValue(item.reasonAnalysis, "reasonAnalysis"), suggestion: stringValue(item.suggestion, "suggestion") }; }
+        });
+        reasonAnalysis = review.reasonAnalysis;
+        suggestion = review.suggestion;
+      } catch {
+        // Deterministic report remains available when the provider fails.
+      }
+    }
     const data = {
       reasonAnalysis,
       brokenStreakTimeline: this.toJson(missedDays),
@@ -2377,6 +2492,51 @@ export class GoalsService {
         incompleteTodayTaskCount
       }
     };
+  }
+
+  private useDeepSeek() {
+    return process.env.AI_PROVIDER === "deepseek" && Boolean(this.aiCallService?.isConfigured());
+  }
+
+  private async getRescueTaskDraft(
+    goal: Goal,
+    deviation: DeviationSignal,
+    callContext?: { aiJobId?: string; attempt?: number }
+  ) {
+    if (this.useDeepSeek()) {
+      try {
+        const draft = await this.aiCallService!.completeJson({
+          capability: "RESCUE_TASK_GENERATION",
+          promptVersion: AI_PROMPTS.rescue.version,
+          systemPrompt: AI_PROMPTS.rescue.system,
+          context: { userId: goal.userId, goalId: goal.id, ...callContext },
+          input: { goal: { title: goal.title, description: goal.description, dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes }, deviation },
+          validate: (value) => {
+            const item = objectValue(value);
+            const estimatedMinutes = Number(item.estimatedMinutes);
+            if (!Number.isInteger(estimatedMinutes) || estimatedMinutes < 5 || estimatedMinutes > 60) throw new Error("estimatedMinutes must be an integer between 5 and 60");
+            return {
+              title: stringValue(item.title, "title"),
+              description: stringValue(item.description, "description"),
+              estimatedMinutes,
+              reason: stringValue(item.reason, "reason"),
+              triggerCode: deviation.reasons[0]?.code ?? null,
+              createdAt: new Date().toISOString()
+            };
+          }
+        });
+        return { ...draft, provider: "deepseek", fallback: false, providerError: null as string | null };
+      } catch (error) {
+        // Provider failures use the bounded deterministic rescue task below.
+        return {
+          ...this.buildMockRescueTask(goal, deviation),
+          provider: "mock-rescue",
+          fallback: true,
+          providerError: error instanceof Error ? error.message : "Rescue provider failed"
+        };
+      }
+    }
+    return { ...this.buildMockRescueTask(goal, deviation), provider: "mock-rescue", fallback: false, providerError: null as string | null };
   }
 
   private buildMockRescueTask(goal: Goal, deviation: DeviationSignal) {
