@@ -165,6 +165,7 @@ model NotificationPreference {
 
 model EmailLog {
   id             String    @id @default(cuid())
+  traceId        String?
   userId         String
   goalId         String?
   channel        String    @default("EMAIL")
@@ -194,6 +195,7 @@ model EmailLog {
   @@index([channel, status])
   @@index([provider, providerMessageId])
   @@index([source, schedulerRunId])
+  @@index([traceId])
   @@map("email_logs")
 }
 
@@ -696,6 +698,7 @@ model AiScore {
 
 model AiJob {
   id        String      @id @default(cuid())
+  traceId   String?
   userId    String
   goalId    String?
   type      String
@@ -713,6 +716,7 @@ model AiJob {
 
   @@index([status, type])
   @@index([userId, createdAt])
+  @@index([traceId])
   @@map("ai_jobs")
 }
 
@@ -721,6 +725,7 @@ model AiCallLog {
   userId              String
   goalId              String?
   aiJobId             String?
+  traceId             String?
   capability          String
   provider            String
   model               String?
@@ -746,5 +751,6 @@ model AiCallLog {
   @@index([userId, createdAt])
   @@index([goalId, capability, createdAt])
   @@index([status, errorCategory, createdAt])
+  @@index([traceId, createdAt])
   @@map("ai_call_logs")
 }

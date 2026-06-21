@@ -26,6 +26,7 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { QueueReconciliationService } from "../observability/queue-reconciliation.service";
 
 type AdminRole = "OPERATOR" | "SUPER_ADMIN";
 
@@ -81,7 +82,10 @@ export class AdminService {
     private readonly queueService?: QueueService,
     @Optional()
     @Inject(NotificationsService)
-    private readonly notificationsService?: NotificationsService
+    private readonly notificationsService?: NotificationsService,
+    @Optional()
+    @Inject(QueueReconciliationService)
+    private readonly queueReconciliation?: QueueReconciliationService
   ) {}
 
   async getOverview(actorUserId: string) {
@@ -134,6 +138,18 @@ export class AdminService {
         this.serializeAuditLog(log, log.actor)
       )
     };
+  }
+
+  async reconcileQueues(actorUserId: string, input: unknown) {
+    await this.assertAdmin(actorUserId);
+    if (!this.queueReconciliation) throw new BadRequestException("队列补偿服务未配置");
+    const body = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    if (reason.length < 5) throw new BadRequestException("队列补偿必须填写至少 5 个字符的原因");
+    const dryRun = body.dryRun === true;
+    const result = await this.queueReconciliation.reconcile({ dryRun });
+    await this.prisma.auditLog.create({ data: { actorUserId, action: "QUEUE_RECONCILIATION_RUN", targetType: "QUEUE", reason, metadata: result as unknown as Prisma.InputJsonValue } });
+    return result;
   }
 
   async listUsers(actorUserId: string, input: unknown = {}) {
@@ -397,7 +413,11 @@ export class AdminService {
     const capability = typeof data.capability === "string" && data.capability.trim() ? data.capability.trim() : undefined;
     const status = typeof data.status === "string" && ["SUCCEEDED", "FAILED"].includes(data.status) ? data.status : undefined;
     const provider = typeof data.provider === "string" && data.provider.trim() ? data.provider.trim() : undefined;
-    const where: Prisma.AiCallLogWhereInput = { capability, status, provider };
+    const traceId = typeof data.traceId === "string" && data.traceId.trim() ? data.traceId.trim() : undefined;
+    const aiJobId = typeof data.aiJobId === "string" && data.aiJobId.trim() ? data.aiJobId.trim() : undefined;
+    const userId = typeof data.userId === "string" && data.userId.trim() ? data.userId.trim() : undefined;
+    const goalId = typeof data.goalId === "string" && data.goalId.trim() ? data.goalId.trim() : undefined;
+    const where: Prisma.AiCallLogWhereInput = { capability, status, provider, traceId, aiJobId, userId, goalId };
     const [logs, total] = await Promise.all([
       this.prisma.aiCallLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: pagination.skip, take: pagination.pageSize }),
       this.prisma.aiCallLog.count({ where })
@@ -406,7 +426,7 @@ export class AdminService {
       total,
       page: pagination.page,
       pageSize: pagination.pageSize,
-      filters: { capability: capability ?? null, status: status ?? null, provider: provider ?? null },
+      filters: { capability: capability ?? null, status: status ?? null, provider: provider ?? null, traceId: traceId ?? null, aiJobId: aiJobId ?? null, userId: userId ?? null, goalId: goalId ?? null },
       logs: logs.map((log) => this.serializeAiCallLog(log))
     };
   }
@@ -1247,6 +1267,7 @@ export class AdminService {
   ) {
     return {
       id: job.id,
+      traceId: job.traceId,
       userId: job.userId,
       userEmail: job.user.email,
       userDisplayName: job.user.displayName,
@@ -1276,6 +1297,7 @@ export class AdminService {
   ) {
     return {
       id: log.id,
+      traceId: log.traceId,
       userId: log.userId,
       userEmail: user?.email ?? log.recipientEmail,
       userDisplayName: user?.displayName ?? null,

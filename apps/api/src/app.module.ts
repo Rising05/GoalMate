@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
 import { AdminModule } from "./admin/admin.module";
 import { AuthModule } from "./auth/auth.module";
 import { DailyTasksModule } from "./daily-tasks/daily-tasks.module";
@@ -12,11 +12,14 @@ import { UploadsModule } from "./uploads/uploads.module";
 import { BillingModule } from "./billing/billing.module";
 import { QuotaModule } from "./quota/quota.module";
 import { AiModule } from "./ai/ai.module";
+import { ObservabilityModule } from "./observability/observability.module";
+import { RequestTracingMiddleware } from "./observability/request-tracing.middleware";
 
 @Module({
   imports: [
     PrismaModule,
     AiModule,
+    ObservabilityModule,
     AuthModule,
     GoalsModule,
     DailyTasksModule,
@@ -31,4 +34,8 @@ import { AiModule } from "./ai/ai.module";
   controllers: [HealthController],
   providers: []
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RequestTracingMiddleware).forRoutes("*");
+  }
+}

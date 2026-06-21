@@ -123,6 +123,7 @@ function buildLog(channel: "EMAIL" | "WECHAT"): EmailLog {
 
   return {
     id: `notification-provider-${channel.toLowerCase()}`,
+    traceId: null,
     userId: "user-test",
     goalId: "goal-test",
     channel,

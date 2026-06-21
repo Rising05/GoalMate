@@ -64,6 +64,7 @@ describe("GoalsService health snapshots integration", () => {
         reportDate: toDateKey(todayStart)
       });
       const processed = await service.processQueuedReportJob({
+        aiJobId: queued.job.id,
         type: "HEALTH_SNAPSHOT",
         userId: goal.userId,
         goalId: goal.id,
@@ -82,7 +83,9 @@ describe("GoalsService health snapshots integration", () => {
       assert.equal(queued.report.type, "HEALTH_SNAPSHOT");
       assert.equal(queued.queue.queued, false);
       assert.equal(queued.queue.queueName, "reports");
+      assert.equal(queued.job.status, "QUEUED");
       assert.equal(processed.processed, true);
+      assert.equal("job" in processed ? processed.job.status : null, "SUCCEEDED");
       assert.ok(processed.snapshot);
       assert.ok(repeated.snapshot);
       assert.equal(processed.snapshot.date, toDateKey(todayStart));

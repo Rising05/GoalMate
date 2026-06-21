@@ -19,6 +19,7 @@ import { QueueService } from "../queue/queue.service";
 import { GeneratedGoalPlan, MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER, PlanProvider } from "./plan-provider";
 import { QuotaService } from "../quota/quota.service";
+import { TraceContextService } from "../observability/trace-context.service";
 import { randomUUID } from "node:crypto";
 
 const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
@@ -44,7 +45,10 @@ export class AiJobsService {
     private readonly queueService?: QueueService,
     @Optional()
     @Inject(QuotaService)
-    private readonly quotaService: QuotaService = new QuotaService(prisma)
+    private readonly quotaService: QuotaService = new QuotaService(prisma),
+    @Optional()
+    @Inject(TraceContextService)
+    private readonly traces: TraceContextService = new TraceContextService()
   ) {}
 
   async generateGoalPlan(userId: string, goalId: string) {
@@ -74,6 +78,7 @@ export class AiJobsService {
       },
       (tx) => tx.aiJob.create({ data: {
         id: jobId,
+        traceId: this.traces.getTraceId(),
         userId,
         goalId,
         type: GOAL_PLAN_GENERATION,
@@ -196,6 +201,7 @@ export class AiJobsService {
         const createdJob = await tx.aiJob.create({
           data: {
             id: jobId,
+            traceId: this.traces.getTraceId(),
             userId,
             goalId,
             type: GOAL_PLAN_REPLAN,
@@ -893,6 +899,7 @@ export class AiJobsService {
   private serializeAiJob(job: AiJob) {
     return {
       id: job.id,
+      traceId: job.traceId,
       userId: job.userId,
       goalId: job.goalId,
       type: job.type,

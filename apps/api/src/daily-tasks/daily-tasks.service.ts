@@ -24,6 +24,7 @@ import { QuotaService } from "../quota/quota.service";
 import { AiCallService } from "../ai/ai-call.service";
 import { AI_PROMPTS } from "../ai/ai-prompts";
 import { objectValue, scoreValue, stringValue } from "../ai/ai-validators";
+import { TraceContextService } from "../observability/trace-context.service";
 import { randomUUID } from "node:crypto";
 
 type TaskWithGoalAndCheckins = DailyTask & {
@@ -138,7 +139,10 @@ export class DailyTasksService {
     private readonly quotaService: QuotaService = new QuotaService(prisma),
     @Optional()
     @Inject(AiCallService)
-    private readonly aiCallService?: AiCallService
+    private readonly aiCallService?: AiCallService,
+    @Optional()
+    @Inject(TraceContextService)
+    private readonly traces: TraceContextService = new TraceContextService()
   ) {}
 
   async getTodayTasks(userId: string, goalId?: string) {
@@ -481,6 +485,7 @@ export class DailyTasksService {
 
           const createdJob = await tx.aiJob.create({
             data: {
+              traceId: this.traces.getTraceId(),
               id: scoringJobId,
               userId,
               goalId: task.goalId,
@@ -580,6 +585,7 @@ export class DailyTasksService {
 
       const createdJob = await tx.aiJob.create({
         data: {
+          traceId: this.traces.getTraceId(),
           id: scoringJobId,
           userId,
           goalId: task.goalId,
@@ -899,6 +905,7 @@ export class DailyTasksService {
         );
         const createdJob = await tx.aiJob.create({
           data: {
+            traceId: this.traces.getTraceId(),
             id: appealJobId,
             userId,
             goalId: checkin.goalId,
@@ -958,6 +965,7 @@ export class DailyTasksService {
       );
       const createdJob = await tx.aiJob.create({
         data: {
+          traceId: this.traces.getTraceId(),
           id: appealJobId,
           userId,
           goalId: checkin.goalId,
@@ -2126,6 +2134,7 @@ export class DailyTasksService {
 
   private serializeAiJob(job: {
     id: string;
+    traceId?: string | null;
     goalId: string | null;
     type: string;
     status: string;
@@ -2136,6 +2145,7 @@ export class DailyTasksService {
   }) {
     return {
       id: job.id,
+      traceId: job.traceId ?? null,
       goalId: job.goalId,
       type: job.type,
       status: job.status,

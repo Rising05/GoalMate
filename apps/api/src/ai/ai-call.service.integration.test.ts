@@ -30,6 +30,7 @@ describe("AiCallService integration", () => {
   });
 
   it("validates JSON and records request metadata without raw input", async () => {
+    const job = await prisma.aiJob.create({ data: { userId, traceId: "trace-provider-contract", type: "CONTRACT_TEST", status: "RUNNING", payload: {} } });
     global.fetch = async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
       assert.match(body.messages[1].content, /private evidence/);
@@ -45,7 +46,7 @@ describe("AiCallService integration", () => {
       promptVersion: "contract.v1",
       systemPrompt: "Return JSON",
       input: { note: "private evidence" },
-      context: { userId, attempt: 2 },
+      context: { userId, aiJobId: job.id, attempt: 2 },
       validate: (value) => {
         const item = value as { answer?: unknown };
         if (item.answer !== "ok") throw new Error("answer is invalid");
@@ -59,6 +60,7 @@ describe("AiCallService integration", () => {
     assert.equal(log.requestId, "header-request-1");
     assert.equal(log.totalTokens, 14);
     assert.equal(log.attempt, 2);
+    assert.equal(log.traceId, "trace-provider-contract");
     assert.equal(log.inputHash.length, 64);
     assert.equal(JSON.stringify(log).includes("private evidence"), false);
   });

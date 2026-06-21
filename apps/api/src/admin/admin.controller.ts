@@ -138,4 +138,12 @@ export class AdminController {
   ) {
     return this.adminService.runNotificationScheduler(request.user!.id, body);
   }
+
+  @Post("queues/reconcile")
+  reconcileQueues(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: unknown
+  ) {
+    return this.adminService.reconcileQueues(request.user!.id, body);
+  }
 }

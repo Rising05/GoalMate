@@ -33,6 +33,7 @@ The MVP now covers the core GoalPilot AI loop:
 9. Opt-in automatic notification scheduler with IANA timezone handling, silent days, configurable exam-sprint windows, database-backed daily idempotency, persisted skip reasons, and audited administrator compensation scans.
 10. Server-enforced Free/Pro quotas backed by atomic period buckets, immutable usage records, entitlement overrides, cancellation/deletion release rules, structured HTTP 429 responses, account usage display, and strict Free AI-analysis hiding.
 11. Unified DeepSeek JSON providers for goal analysis, plan/replan, six-dimension scoring, appeals, deviation summaries, rescue tasks, trend narratives, and failure review, with versioned prompts, schema validation, deterministic fallbacks, and administrator-visible call telemetry at `GET /admin/ai-call-logs`.
+12. Request/trace IDs, sanitized JSON access/error logs, Prometheus business metrics, dependency readiness, persistent report jobs, audited queue reconciliation, MySQL binlog/backup/restore tooling, alert rules, and a verified local recovery drill.
 
 Useful optional environment variables for the API:
 
@@ -42,6 +43,9 @@ Useful optional environment variables for the API:
 - `DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions`
 - `DEEPSEEK_INPUT_COST_MICROS_PER_TOKEN=0.14`
 - `DEEPSEEK_OUTPUT_COST_MICROS_PER_TOKEN=0.28`
+- `METRICS_TOKEN=...`
+- `QUEUE_RECONCILIATION_ENABLED=true`
+- `QUEUE_RECONCILIATION_INTERVAL_MS=60000`
 - `BULLMQ_ENABLED=true`
 - `BULLMQ_WORKERS_ENABLED=true`
 - `NOTIFICATIONS_SCHEDULER_ENABLED=true`

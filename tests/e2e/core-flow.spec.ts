@@ -52,16 +52,38 @@ async function loadWebSession(
   page: import("@playwright/test").Page,
   token: string
 ) {
-  await page.goto("/");
+  if (page.url() === "about:blank") {
+    await page.goto("/");
+  }
   await page.evaluate((sessionToken) => {
     localStorage.setItem("goalmate.session", sessionToken);
   }, token);
-  await page.reload();
+  const [authResponse] = await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/auth/me") && response.ok()),
+    page.reload()
+  ]);
   await expect(page.getByRole("heading", { level: 1, name: "创建目标" })).toBeVisible();
+  return (await authResponse.json()) as { user: { email: string; adminRole: string | null } };
 }
 
 test.afterAll(async () => {
   await prisma.$disconnect();
+});
+
+test("health and metrics expose correlation and operational signals", async ({ request }) => {
+  const requestId = `e2e-request-${Date.now()}`;
+  const health = await request.get(`${apiUrl}/health`, { headers: { "x-request-id": requestId } });
+  expect(health.ok()).toBeTruthy();
+  expect(health.headers()["x-request-id"]).toBe(requestId);
+  expect(health.headers()["x-trace-id"]).toBe(requestId);
+  const readiness = await request.get(`${apiUrl}/health/readiness`);
+  expect(readiness.ok()).toBeTruthy();
+  expect((await readiness.json()).mysqlUp).toBe(true);
+  const metrics = await request.get(`${apiUrl}/metrics`);
+  expect(metrics.ok()).toBeTruthy();
+  const text = await metrics.text();
+  expect(text).toContain("goalmate_http_requests_total");
+  expect(text).toContain("goalmate_ai_jobs_total");
 });
 
 test("admin navigation is only visible to active admin accounts", async ({
@@ -107,7 +129,8 @@ test("admin navigation is only visible to active admin accounts", async ({
     email: admin.user.email,
     password
   });
-  await loadWebSession(page, adminSession.token);
+  const loadedAdmin = await loadWebSession(page, adminSession.token);
+  expect(loadedAdmin.user.adminRole).toBe("OPERATOR");
   await expect(page.getByRole("button", { name: /后台管理/ })).toBeVisible();
   for (const path of ["upload-assets", "payment-events", "membership-audits", "ai-call-logs"]) {
     const response = await request.get(`${apiUrl}/admin/${path}`, {

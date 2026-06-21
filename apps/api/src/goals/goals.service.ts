@@ -32,6 +32,7 @@ import { QuotaService } from "../quota/quota.service";
 import { AiCallService } from "../ai/ai-call.service";
 import { AI_PROMPTS } from "../ai/ai-prompts";
 import { objectValue, scoreValue, stringArray, stringValue } from "../ai/ai-validators";
+import { TraceContextService } from "../observability/trace-context.service";
 
 interface CreateGoalPayload {
   title: string;
@@ -214,7 +215,10 @@ export class GoalsService {
     private readonly quotaService: QuotaService = new QuotaService(prisma),
     @Optional()
     @Inject(AiCallService)
-    private readonly aiCallService?: AiCallService
+    private readonly aiCallService?: AiCallService,
+    @Optional()
+    @Inject(TraceContextService)
+    private readonly traces: TraceContextService = new TraceContextService()
   ) {}
 
   async analyzeGoal(userId: string, input: unknown) {
@@ -539,7 +543,18 @@ export class GoalsService {
     const body = this.inputObject(input);
     const type = this.parseReportType(body.type ?? "HEALTH_SNAPSHOT");
     const reportDate = this.parseOptionalDateKey(body.reportDate);
+    const job = await this.prisma.aiJob.create({
+      data: {
+        traceId: this.traces.getTraceId(),
+        userId,
+        goalId: goal.id,
+        type: `REPORT_${type}`,
+        status: "QUEUED",
+        payload: { type, userId, goalId: goal.id, reportDate }
+      }
+    });
     const queue = await this.enqueueReportJob({
+      aiJobId: job.id,
       type,
       userId,
       goalId: goal.id,
@@ -553,7 +568,8 @@ export class GoalsService {
         goalId: goal.id,
         reportDate
       },
-      queue
+      queue,
+      job: this.serializeAiJob(job)
     };
   }
 
@@ -637,6 +653,28 @@ export class GoalsService {
 
   async processQueuedReportJob(input: unknown) {
     const payload = this.parseReportWorkerPayload(input);
+    const job = payload.aiJobId
+      ? await this.prisma.aiJob.findFirst({ where: { id: payload.aiJobId, userId: payload.userId, goalId: payload.goalId } })
+      : null;
+    if (job?.status === "CANCELLED") throw new BadRequestException("报告任务已取消");
+    if (job) {
+      await this.prisma.aiJob.update({ where: { id: job.id }, data: { status: "RUNNING", attempts: { increment: 1 }, error: null } });
+    }
+    try {
+      const execute = () => this.processReportPayload(payload);
+      const result = job?.traceId
+        ? await this.traces.run({ traceId: job.traceId, requestId: job.traceId }, execute)
+        : await execute();
+      if (!job) return result;
+      const succeeded = await this.prisma.aiJob.update({ where: { id: job.id }, data: { status: "SUCCEEDED", result: this.toJson(result), error: null } });
+      return { ...result, job: this.serializeAiJob(succeeded) };
+    } catch (error) {
+      if (job) await this.prisma.aiJob.update({ where: { id: job.id }, data: { status: "FAILED", error: error instanceof Error ? error.message : "Report worker failed" } });
+      throw error;
+    }
+  }
+
+  private async processReportPayload(payload: ReturnType<GoalsService["parseReportWorkerPayload"]>) {
 
     if (payload.type === "HEALTH_SNAPSHOT") {
       const result = await this.getGoalHealth(payload.userId, payload.goalId);
@@ -983,6 +1021,7 @@ export class GoalsService {
     const userId = this.cleanText(body.userId, 191);
     const goalId = this.cleanText(body.goalId, 191);
     const reportDate = this.parseOptionalDateKey(body.reportDate);
+    const aiJobId = this.cleanText(body.aiJobId, 191) || null;
 
     if (!userId || !goalId) {
       throw new BadRequestException("报告任务缺少用户或目标");
@@ -992,11 +1031,13 @@ export class GoalsService {
       type,
       userId,
       goalId,
-      reportDate
+      reportDate,
+      aiJobId
     };
   }
 
   private async enqueueReportJob(input: {
+    aiJobId?: string;
     type: ReportType;
     userId: string;
     goalId: string;
@@ -1068,6 +1109,7 @@ export class GoalsService {
     if (this.shouldQueueRescueTask()) {
       const job = await this.prisma.aiJob.create({
         data: {
+          traceId: this.traces.getTraceId(),
           userId,
           goalId: context.goal.id,
           type: RESCUE_TASK_GENERATION,
@@ -1099,6 +1141,7 @@ export class GoalsService {
     const result = await this.persistRescueTaskFromContext(context);
     const job = await this.prisma.aiJob.create({
       data: {
+        traceId: this.traces.getTraceId(),
         userId,
         goalId: context.goal.id,
         type: RESCUE_TASK_GENERATION,
@@ -1391,6 +1434,7 @@ export class GoalsService {
 
     const job = await this.prisma.aiJob.create({
       data: {
+        traceId: this.traces.getTraceId(),
         userId: goal.userId,
         goalId: goal.id,
         type: FAILURE_REPORT_GENERATION,
@@ -1450,6 +1494,7 @@ export class GoalsService {
 
     return this.prisma.aiJob.create({
       data: {
+        traceId: this.traces.getTraceId(),
         userId: goal.userId,
         goalId: goal.id,
         type: FAILURE_REPORT_GENERATION,
@@ -2906,6 +2951,7 @@ export class GoalsService {
   private serializeAiJob(job: AiJob) {
     return {
       id: job.id,
+      traceId: job.traceId,
       userId: job.userId,
       goalId: job.goalId,
       type: job.type,

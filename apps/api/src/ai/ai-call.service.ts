@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AiJsonCall, AiProviderError } from "./ai-call.types";
+import { TraceContextService } from "../observability/trace-context.service";
 
 @Injectable()
 export class AiCallService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(TraceContextService) private readonly traces: TraceContextService = new TraceContextService()
+  ) {}
 
   get provider() {
     return "deepseek";
@@ -105,11 +110,15 @@ export class AiCallService {
     const promptTokens = usage.prompt_tokens;
     const completionTokens = usage.completion_tokens;
     const costMicros = promptTokens == null && completionTokens == null ? undefined : Math.round((promptTokens ?? 0) * Number(process.env.DEEPSEEK_INPUT_COST_MICROS_PER_TOKEN || 0.14) + (completionTokens ?? 0) * Number(process.env.DEEPSEEK_OUTPUT_COST_MICROS_PER_TOKEN || 0.28));
+    const jobTraceId = !call.context.traceId && !this.traces.getTraceId() && call.context.aiJobId
+      ? (await this.prisma.aiJob.findUnique({ where: { id: call.context.aiJobId }, select: { traceId: true } }))?.traceId
+      : undefined;
     await this.prisma.aiCallLog.create({
       data: {
         userId: call.context.userId,
         goalId: call.context.goalId,
         aiJobId: call.context.aiJobId,
+        traceId: call.context.traceId ?? this.traces.getTraceId() ?? jobTraceId,
         capability: call.capability,
         provider: this.provider,
         model: this.model,

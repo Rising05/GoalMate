@@ -1,0 +1,3 @@
+# Install with secret-managed environment variables; do not put passwords in this file.
+15 2 * * * cd /srv/goalmate && BACKUP_DIR=/srv/backups/mysql ./ops/mysql/backup.sh >> /var/log/goalmate-backup.log 2>&1
+45 2 * * * cd /srv/goalmate && BACKUP_DIR=/srv/backups/storage ./ops/storage/backup-local.sh >> /var/log/goalmate-backup.log 2>&1

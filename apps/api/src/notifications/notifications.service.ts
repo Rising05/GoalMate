@@ -9,6 +9,7 @@ import { EmailLog, NotificationPreference, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
+import { TraceContextService } from "../observability/trace-context.service";
 import { MAIL_PROVIDER, MailProvider } from "./mail-provider";
 import { MockMailProvider } from "./mock-mail.provider";
 import { MockWechatProvider } from "./mock-wechat.provider";
@@ -61,7 +62,10 @@ export class NotificationsService {
     private readonly queueService?: QueueService,
     @Optional()
     @Inject(WECHAT_PROVIDER)
-    private readonly wechatProvider: WechatProvider = new MockWechatProvider()
+    private readonly wechatProvider: WechatProvider = new MockWechatProvider(),
+    @Optional()
+    @Inject(TraceContextService)
+    private readonly traces: TraceContextService = new TraceContextService()
   ) {}
 
   async getPreference(userId: string) {
@@ -188,6 +192,7 @@ export class NotificationsService {
     const subject = REMINDER_TYPE_LABELS[type] ?? "GoalMate 提醒";
     const log = await this.prisma.emailLog.create({
       data: {
+        traceId: this.traces.getTraceId(),
         userId,
         goalId: typeof body.goalId === "string" ? body.goalId : null,
         type,
@@ -1105,7 +1110,7 @@ export class NotificationsService {
     skipReason?: string | null;
   }): Promise<EmailLog & { created: boolean }> {
     try {
-      const log = await this.prisma.emailLog.create({ data: input });
+      const log = await this.prisma.emailLog.create({ data: { ...input, traceId: this.traces.getTraceId() } });
       return Object.assign(log, { created: true });
     } catch (error) {
       if (
@@ -1274,6 +1279,7 @@ export class NotificationsService {
   private serializeEmailLog(log: EmailLog) {
     return {
       id: log.id,
+      traceId: log.traceId,
       userId: log.userId,
       goalId: log.goalId,
       channel: log.channel,

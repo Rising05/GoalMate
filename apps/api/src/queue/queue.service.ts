@@ -28,20 +28,37 @@ export class QueueService implements OnModuleDestroy {
     goalId?: string | null;
     userId: string;
   }) {
-    return this.enqueue("ai-jobs", input.type, input);
+    return this.enqueue("ai-jobs", input.type, input, input.jobId);
   }
 
   async enqueueEmailLog(input: { emailLogId: string; userId: string; type: string }) {
-    return this.enqueue("email", input.type, input);
+    return this.enqueue("email", input.type, input, input.emailLogId);
   }
 
   async enqueueReportJob(input: {
+    aiJobId?: string;
     type: string;
     userId: string;
     goalId: string;
     reportDate?: string | null;
   }) {
-    return this.enqueue("reports", input.type, input);
+    return this.enqueue("reports", input.type, input, input.aiJobId);
+  }
+
+  async getOperationalMetrics() {
+    if (!this.enabled) return { enabled: false, redisUp: false, queues: [] as Array<Record<string, unknown>> };
+    const queueNames = ["ai-jobs", "email", "reports"];
+    try {
+      const queues = await Promise.all(queueNames.map(async (name) => {
+        const queue = this.getQueue(name);
+        await queue.waitUntilReady();
+        const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed", "paused");
+        return { name, ...counts };
+      }));
+      return { enabled: true, redisUp: true, queues };
+    } catch (error) {
+      return { enabled: true, redisUp: false, error: error instanceof Error ? error.message : "Redis unavailable", queues: [] as Array<Record<string, unknown>> };
+    }
   }
 
   createWorker(
@@ -87,7 +104,7 @@ export class QueueService implements OnModuleDestroy {
     ]);
   }
 
-  private async enqueue(queueName: string, jobName: string, data: Record<string, unknown>) {
+  private async enqueue(queueName: string, jobName: string, data: Record<string, unknown>, dedupeId?: string) {
     if (!this.enabled) {
       return {
         queued: false,
@@ -96,7 +113,19 @@ export class QueueService implements OnModuleDestroy {
       };
     }
 
-    const job = await this.getQueue(queueName).add(jobName, data, {
+    const queue = this.getQueue(queueName);
+    const jobId = dedupeId ? `${queueName}-${dedupeId}` : undefined;
+    if (jobId) {
+      const existing = await queue.getJob(jobId);
+      if (existing) {
+        const state = await existing.getState();
+        if (state === "failed") await existing.retry();
+        if (state !== "completed") return { queued: true, queueName, jobId, deduplicated: true, state };
+        await existing.remove();
+      }
+    }
+    const job = await queue.add(jobName, data, {
+      jobId,
       attempts: 3,
       backoff: {
         type: "exponential",

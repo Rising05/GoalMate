@@ -4,6 +4,7 @@ export interface AiCallContext {
   aiJobId?: string;
   attempt?: number;
   fallbackUsed?: boolean;
+  traceId?: string;
 }
 
 export type AiErrorCategory =

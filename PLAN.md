@@ -416,7 +416,7 @@
 
 ### P1-3 可观测性、备份与故障恢复
 
-**状态：** `NOT_STARTED`
+**状态：** `IN_PROGRESS`（仓库实现与本地恢复演练完成，待部署 Alertmanager 接收人和异地备份）
 
 #### 监控指标
 
@@ -447,14 +447,14 @@
 
 #### 实施清单
 
-- [ ] 选定日志、指标和错误追踪平台。
-- [ ] 实现 request/trace ID。
-- [ ] 添加关键业务指标。
+- [x] 选定日志、指标和错误追踪平台。
+- [x] 实现 request/trace ID。
+- [x] 添加关键业务指标。
 - [ ] 配置告警阈值和通知接收人。
-- [ ] 配置数据库与对象存储备份。
-- [ ] 实现 queued Job 补偿扫描。
-- [ ] 编写故障处理 Runbook。
-- [ ] 完成一次恢复演练。
+- [x] 配置数据库与对象存储备份脚本和计划任务模板。
+- [x] 实现 queued Job 补偿扫描。
+- [x] 编写故障处理 Runbook。
+- [x] 完成一次恢复演练。
 
 #### Definition of Done
 
@@ -855,7 +855,7 @@ npm run prisma:migrate -w @goalmate/api
 | P0-3 | 真实 AI Provider 补齐 | `IN_PROGRESS` | 2026-06-21 | - | Codex | 代码完成；114/114 integration，7/7 E2E；待预发布真实调用 |
 | P1-1 | 云对象存储与病毒扫描 | `NOT_STARTED` | - | - | - | - |
 | P1-2 | 敏感数据加密与 AI 脱敏 | `NOT_STARTED` | - | - | - | - |
-| P1-3 | 可观测性、备份与恢复 | `NOT_STARTED` | - | - | - | - |
+| P1-3 | 可观测性、备份与恢复 | `IN_PROGRESS` | 2026-06-21 | - | Codex | 117/117 integration，8/8 E2E；本地恢复演练 PASS；待外部接收人与异地备份 |
 | P2-1 | Stripe 正式支付 | `NOT_STARTED` | - | - | - | - |
 | P2-2 | 微信支付正式接入 | `NOT_STARTED` | - | - | - | - |
 | P2-3 | 订阅与会员权益模型 | `NOT_STARTED` | - | - | - | - |
@@ -890,6 +890,24 @@ npm run prisma:migrate -w @goalmate/api
 - 已知限制：
 - 后续依赖：
 ```
+
+### 2026-06-21 - P1-3 可观测性、备份与故障恢复（仓库与本地演练）
+
+- 状态：`IN_PROGRESS`；代码、配置模板和本地恢复演练已完成，生产 Alertmanager 接收人、Sentry 项目和异地备份凭据仍需部署环境提供。
+- 实现摘要：全部 HTTP 请求生成并回传 request/trace ID；访问和异常日志使用不含请求正文的 JSON；AI Job、AI 调用和提醒日志持久化 trace；报告队列改为数据库 `AiJob` 先落库；新增定时和管理员审计式 queued Job/邮件补偿扫描。
+- 数据库变更：新增 migration `20260621160000_add_trace_ids`，为 `ai_jobs`、`ai_call_logs` 和 `email_logs` 增加 nullable trace ID 及索引，不影响已有数据。
+- API 变更：新增 `GET /health/readiness`、受 `METRICS_TOKEN` 保护的 `GET /metrics`、`POST /admin/queues/reconcile`；后台 AI Job、AI call log 和提醒日志返回 trace，AI call log 支持 trace/job/user/goal 过滤。
+- 指标与告警：Prometheus 指标覆盖 HTTP 延迟与状态、MySQL 连接/慢查询/事务、Redis 和 BullMQ、AI Job/Provider token/成本/错误、通知、上传、支付；提交 Alertmanager 阈值规则和接收器模板。
+- 备份恢复：MySQL 启用 ROW binlog 和 7 天本地保留；提供原子 gzip dump、SHA-256、保留期、受保护恢复、隔离恢复演练及本地对象备份脚本和 cron 模板。
+- 恢复演练：2026-06-21 将真实备份恢复到隔离临时库，校验 31 张表和 24 条完成 migration，耗时 1 秒；临时库清理后数量为 0；确认 `log_bin=ON`、`binlog_format=ROW`。证据见 `docs/operations/recovery-drills/2026-06-21-local-mysql.md`。
+- 验收结果：
+  - `npm run typecheck`：通过。
+  - `npm run test:integration`：117/117 通过。
+  - `npm run test:e2e`：8/8 通过。
+  - `npm run build`：通过。
+  - `git diff --check`：通过。
+- 已知限制：本地演练不等于云端异地恢复；Alertmanager 接收器仍是模板，生产通知地址和 Sentry DSN 必须通过密钥系统配置；云对象存储版本控制归 P1-1。
+- 后续依赖：部署环境配置监控接收人、Prometheus/Grafana/Loki/Sentry 和异地备份存储后完成生产告警演练，再将 P1-3 标为 `DONE`。
 
 ### 2026-06-21 - P0-3 真实 AI Provider 补齐（代码与自动化验收）
 
