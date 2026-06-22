@@ -59,6 +59,7 @@ describe("Observability integration", () => {
     const output = await metrics.toPrometheus();
     assert.match(output, /goalmate_http_requests_total 2/);
     assert.match(output, /goalmate_ai_jobs_total/);
+    assert.match(output, /goalmate_object_deletion_jobs_total/);
     assert.match(output, /goalmate_mysql_status/);
   });
 });

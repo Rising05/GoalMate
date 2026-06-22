@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "../../apps/api/node_modules/@prisma/client";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 
 const apiPort = process.env.E2E_API_PORT ?? "3100";
 const apiUrl = `http://127.0.0.1:${apiPort}`;
@@ -158,6 +158,36 @@ test("goal analysis remains available without a real AI key", async ({ request }
   expect(result.provider).toBe("rule");
   expect(result.questions.length).toBeLessThanOrEqual(3);
   expect(result.structuredFields.title).toContain("英语考试");
+});
+
+test("evidence upload is verified, scanned, and owner protected", async ({ request }) => {
+  const stamp = Date.now();
+  const password = "Password123!";
+  const owner = await registerViaApi(request, { email: `e2e-upload-owner-${stamp}@example.com`, password, displayName: "Upload Owner" });
+  const other = await registerViaApi(request, { email: `e2e-upload-other-${stamp}@example.com`, password, displayName: "Upload Other" });
+  const ownerToken = (await loginViaApi(request, { email: owner.user.email, password })).token;
+  const otherToken = (await loginViaApi(request, { email: other.user.email, password })).token;
+  const content = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const checksumSha256 = createHash("sha256").update(content).digest("hex");
+  const registeredResponse = await request.post(`${apiUrl}/uploads/evidence`, {
+    headers: { Authorization: `Bearer ${ownerToken}` },
+    data: { fileName: "proof.png", mimeType: "image/png", sizeBytes: content.length, checksumSha256 }
+  });
+  expect(registeredResponse.ok()).toBeTruthy();
+  const registered = await registeredResponse.json();
+  expect(registered.asset.status).toBe("PENDING_UPLOAD");
+  const uploadedResponse = await request.put(`${apiUrl}${registered.upload.url}`, {
+    headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "image/png" },
+    data: content
+  });
+  expect(uploadedResponse.ok()).toBeTruthy();
+  const completedResponse = await request.post(`${apiUrl}/uploads/evidence/${registered.asset.id}/complete`, { headers: { Authorization: `Bearer ${ownerToken}` } });
+  const completed = await completedResponse.json();
+  expect(completed.asset.status).toBe("READY");
+  expect(completed.asset.scanStatus).toBe("CLEAN");
+  expect(completed.download.url).toContain(`/uploads/evidence/${registered.asset.id}/download`);
+  const foreignRead = await request.get(`${apiUrl}/uploads/evidence/${registered.asset.id}`, { headers: { Authorization: `Bearer ${otherToken}` } });
+  expect(foreignRead.status()).toBe(404);
 });
 
 test("queued AI jobs can be cancelled by the owning user", async ({ request }) => {
@@ -476,10 +506,10 @@ test("new user completes the core GoalPilot MVP loop", async ({ page, request })
   await page.getByLabel("上传图片、截图或 PDF").setInputFiles({
     name: "e2e-proof.png",
     mimeType: "image/png",
-    buffer: Buffer.concat([
-      Buffer.from("89504e470d0a1a0a", "hex"),
-      Buffer.from("goalmate-e2e-proof")
-    ])
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64"
+    )
   });
   await page.getByLabel("遇到的问题").fill("时间较短，需要保持任务粒度足够小。");
   await page.getByLabel("明日调整").fill("明天先复习今日笔记，再进入下一项任务。");

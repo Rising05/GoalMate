@@ -29,11 +29,12 @@ export class QueueReconciliationService implements OnModuleInit, OnModuleDestroy
     const olderThanMs = Math.max(5_000, input.olderThanMs ?? Number(process.env.QUEUE_RECONCILIATION_GRACE_MS || 30_000));
     const limit = Math.min(500, Math.max(1, input.limit ?? 100));
     const cutoff = new Date(Date.now() - olderThanMs);
-    const [jobs, emails] = await Promise.all([
+    const [jobs, emails, objectDeletions] = await Promise.all([
       this.prisma.aiJob.findMany({ where: { userId: input.userId, status: "QUEUED", createdAt: { lte: cutoff } }, orderBy: { createdAt: "asc" }, take: limit }),
-      this.prisma.emailLog.findMany({ where: { userId: input.userId, status: "QUEUED", createdAt: { lte: cutoff }, OR: [{ scheduledFor: null }, { scheduledFor: { lte: new Date() } }] }, orderBy: { createdAt: "asc" }, take: limit })
+      this.prisma.emailLog.findMany({ where: { userId: input.userId, status: "QUEUED", createdAt: { lte: cutoff }, OR: [{ scheduledFor: null }, { scheduledFor: { lte: new Date() } }] }, orderBy: { createdAt: "asc" }, take: limit }),
+      input.userId ? Promise.resolve([]) : this.prisma.objectDeletionJob.findMany({ where: { status: { in: ["QUEUED", "FAILED"] }, attempts: { lt: 5 }, createdAt: { lte: cutoff } }, orderBy: { createdAt: "asc" }, take: limit })
     ]);
-    if (input.dryRun) return { dryRun: true, cutoff: cutoff.toISOString(), aiJobsFound: jobs.length, emailLogsFound: emails.length, recovered: 0 };
+    if (input.dryRun) return { dryRun: true, cutoff: cutoff.toISOString(), aiJobsFound: jobs.length, emailLogsFound: emails.length, objectDeletionsFound: objectDeletions.length, recovered: 0 };
 
     const results: Array<{ resourceType: string; resourceId: string; queued: boolean; queueName: string }> = [];
     for (const job of jobs) {
@@ -48,7 +49,11 @@ export class QueueReconciliationService implements OnModuleInit, OnModuleDestroy
       const queueResult = await this.queues.enqueueEmailLog({ emailLogId: email.id, userId: email.userId, type: email.type });
       results.push({ resourceType: "EMAIL_LOG", resourceId: email.id, queued: queueResult.queued, queueName: queueResult.queueName });
     }
-    return { dryRun: false, cutoff: cutoff.toISOString(), aiJobsFound: jobs.length, emailLogsFound: emails.length, recovered: results.filter((item) => item.queued).length, results };
+    for (const deletion of objectDeletions) {
+      const queueResult = await this.queues.enqueueObjectDeletionJob(deletion.id);
+      results.push({ resourceType: "OBJECT_DELETION_JOB", resourceId: deletion.id, queued: queueResult.queued, queueName: queueResult.queueName });
+    }
+    return { dryRun: false, cutoff: cutoff.toISOString(), aiJobsFound: jobs.length, emailLogsFound: emails.length, objectDeletionsFound: objectDeletions.length, recovered: results.filter((item) => item.queued).length, results };
   }
 }
 

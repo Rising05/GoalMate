@@ -14,12 +14,17 @@
     "prisma:studio": "XDG_CACHE_HOME=../../.cache prisma studio --schema prisma/schema.prisma"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1073.0",
+    "@aws-sdk/s3-request-presigner": "^3.1073.0",
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
     "@prisma/client": "^6.19.3",
     "bullmq": "^5.78.0",
+    "file-type": "^21.3.4",
+    "image-size": "^2.0.2",
     "ioredis": "^5.11.1",
+    "pdf-lib": "^1.17.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.0"
   },

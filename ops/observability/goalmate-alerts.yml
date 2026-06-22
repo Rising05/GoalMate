@@ -41,3 +41,8 @@ groups:
         for: 15m
         labels: { severity: critical }
         annotations: { summary: "No successful GoalMate backup has been observed for 26 hours" }
+      - alert: GoalMateUploadSecurityFailures
+        expr: sum(goalmate_upload_assets_total{status=~"SCAN_FAILED|DELETE_FAILED"}) > 0 or sum(goalmate_object_deletion_jobs_total{status="FAILED"}) > 0
+        for: 10m
+        labels: { severity: critical }
+        annotations: { summary: "Upload scanning or object deletion remains failed" }

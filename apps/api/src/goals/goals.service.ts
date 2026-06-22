@@ -21,7 +21,7 @@ import {
 } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
-import { STORAGE_PROVIDER, StorageProvider } from "../uploads/storage-provider";
+import { ObjectDeletionService } from "../object-lifecycle/object-deletion.service";
 import { MockReportNarrativeProvider } from "./mock-report-narrative.provider";
 import {
   REPORT_NARRATIVE_PROVIDER,
@@ -208,8 +208,8 @@ export class GoalsService {
     @Inject(REPORT_NARRATIVE_PROVIDER)
     private readonly reportNarrativeProvider?: ReportNarrativeProvider,
     @Optional()
-    @Inject(STORAGE_PROVIDER)
-    private readonly storage?: StorageProvider,
+    @Inject(ObjectDeletionService)
+    private readonly objectDeletions: ObjectDeletionService = new ObjectDeletionService(prisma),
     @Optional()
     @Inject(QuotaService)
     private readonly quotaService: QuotaService = new QuotaService(prisma),
@@ -361,27 +361,13 @@ export class GoalsService {
 
   async deleteGoal(userId: string, id: string) {
     const goal = await this.getOwnedGoal(userId, id);
-    const assets = await this.prisma.uploadAsset.findMany({
-      where: { userId },
-      select: { id: true, objectKey: true, storageProvider: true, metadata: true }
+    const goalAssets = await this.prisma.uploadAsset.findMany({
+      where: { userId, goalId: goal.id },
+      select: { id: true, objectKey: true, storageProvider: true }
     });
-    const goalAssets = assets.filter((asset) => {
-      const metadata = asset.metadata && typeof asset.metadata === "object" &&
-        !Array.isArray(asset.metadata)
-        ? asset.metadata as Record<string, unknown>
-        : {};
-      return metadata.goalId === goal.id;
-    });
-
-    if (this.storage) {
-      await Promise.all(
-        goalAssets
-          .filter((asset) => asset.storageProvider === this.storage!.name)
-          .map((asset) => this.storage!.delete(asset.objectKey))
-      );
-    }
 
     await this.prisma.$transaction(async (tx) => {
+      await this.objectDeletions.scheduleWithClient(tx, goalAssets, "GOAL_DELETION", goal.id);
       await tx.emailLog.updateMany({
         where: {
           userId,
@@ -404,7 +390,8 @@ export class GoalsService {
     });
 
     return {
-      deletedGoalId: goal.id
+      deletedGoalId: goal.id,
+      objectDeletionsScheduled: goalAssets.length
     };
   }
 

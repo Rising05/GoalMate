@@ -27,6 +27,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { QueueService } from "../queue/queue.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { QueueReconciliationService } from "../observability/queue-reconciliation.service";
+import { UploadsService } from "../uploads/uploads.service";
 
 type AdminRole = "OPERATOR" | "SUPER_ADMIN";
 
@@ -85,7 +86,10 @@ export class AdminService {
     private readonly notificationsService?: NotificationsService,
     @Optional()
     @Inject(QueueReconciliationService)
-    private readonly queueReconciliation?: QueueReconciliationService
+    private readonly queueReconciliation?: QueueReconciliationService,
+    @Optional()
+    @Inject(UploadsService)
+    private readonly uploadsService?: UploadsService
   ) {}
 
   async getOverview(actorUserId: string) {
@@ -495,16 +499,30 @@ export class AdminService {
       }),
       this.prisma.uploadAsset.count({ where })
     ]);
+    await this.prisma.auditLog.create({ data: { actorUserId, action: "UPLOAD_ASSETS_VIEWED", targetType: "UPLOAD_ASSET", reason: "Administrator opened upload asset list", metadata: { status: status ?? null, page: pagination.page, pageSize: pagination.pageSize, resultCount: assets.length } } });
     return {
       total, page: pagination.page, pageSize: pagination.pageSize,
       assets: assets.map((asset) => ({
         id: asset.id, userId: asset.userId, userEmail: asset.user.email,
         fileName: asset.fileName, mimeType: asset.mimeType, sizeBytes: asset.sizeBytes,
         source: asset.source, purpose: asset.purpose, status: asset.status,
-        scanStatus: asset.scanStatus, storageProvider: asset.storageProvider,
+        scanStatus: asset.scanStatus, scanResult: asset.scanResult,
+        scanAttempts: asset.scanAttempts, deleteAttempts: asset.deleteAttempts,
+        deleteError: asset.deleteError, storageProvider: asset.storageProvider,
         createdAt: asset.createdAt.toISOString()
       }))
     };
+  }
+
+  async cleanupUploads(actorUserId: string, input: unknown) {
+    await this.assertAdmin(actorUserId);
+    if (!this.uploadsService) throw new BadRequestException("上传清理服务未配置");
+    const body = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    if (reason.length < 5) throw new BadRequestException("上传清理必须填写至少 5 个字符的原因");
+    const result = await this.uploadsService.cleanupUploadAssets();
+    await this.prisma.auditLog.create({ data: { actorUserId, action: "UPLOAD_CLEANUP_RUN", targetType: "UPLOAD_ASSET", reason, metadata: result as unknown as Prisma.InputJsonValue } });
+    return result;
   }
 
   async listPaymentEvents(actorUserId: string, input: unknown = {}) {

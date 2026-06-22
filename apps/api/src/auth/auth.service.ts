@@ -8,12 +8,8 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import { PasswordService } from "./password.service";
 import { SessionTokenService } from "./session-token.service";
-import {
-  LocalStorageProvider,
-  STORAGE_PROVIDER,
-  StorageProvider
-} from "../uploads/storage-provider";
 import { QuotaService } from "../quota/quota.service";
+import { ObjectDeletionService } from "../object-lifecycle/object-deletion.service";
 
 interface AuthPayload {
   email: string;
@@ -74,8 +70,8 @@ export class AuthService {
     @Inject(SessionTokenService)
     private readonly sessionTokenService: SessionTokenService,
     @Optional()
-    @Inject(STORAGE_PROVIDER)
-    private readonly storage: StorageProvider = new LocalStorageProvider(),
+    @Inject(ObjectDeletionService)
+    private readonly objectDeletions: ObjectDeletionService = new ObjectDeletionService(prisma),
     @Optional()
     @Inject(QuotaService)
     private readonly quotaService: QuotaService = new QuotaService(prisma)
@@ -169,16 +165,17 @@ export class AuthService {
     }
 
     const assets = await this.prisma.uploadAsset.findMany({
-      where: { userId: user.id, storageProvider: this.storage.name },
-      select: { objectKey: true }
+      where: { userId: user.id },
+      select: { objectKey: true, storageProvider: true }
     });
-    await Promise.all(assets.map((asset) => this.storage.delete(asset.objectKey)));
-    await this.prisma.user.delete({
-      where: { id: user.id }
+    await this.prisma.$transaction(async (tx) => {
+      await this.objectDeletions.scheduleWithClient(tx, assets, "ACCOUNT_DELETION");
+      await tx.user.delete({ where: { id: user.id } });
     });
 
     return {
-      deletedUserId: user.id
+      deletedUserId: user.id,
+      objectDeletionsScheduled: assets.length
     };
   }
 

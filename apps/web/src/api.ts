@@ -177,6 +177,8 @@ export type EvidenceFile =
       storageProvider: string;
       objectKey: string;
       url: string;
+      status?: string;
+      scanStatus?: string;
     };
 
 export interface UploadAsset {
@@ -192,6 +194,10 @@ export interface UploadAsset {
   objectKey: string;
   publicUrl: string | null;
   status: string;
+  scanStatus: string;
+  scanResult: string | null;
+  uploadExpiresAt: string | null;
+  scanAttempts: number;
   metadata: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
@@ -200,8 +206,9 @@ export interface UploadAsset {
 export interface EvidenceUploadResponse {
   asset: UploadAsset;
   evidenceFile: Exclude<EvidenceFile, string>;
-  upload?: { method: "PUT"; url: string; expiresAt: string } | null;
+  upload?: { method: "PUT"; url: string; headers?: Record<string, string>; expiresAt: string } | null;
   download?: { method: "GET"; url: string; expiresAt: string } | null;
+  queue?: { queued: boolean; queueName: string } | null;
 }
 
 export interface BillingOrder {
@@ -940,6 +947,8 @@ export interface AdminRawContent {
 export interface AdminUploadAsset {
   id: string; userEmail: string; fileName: string; mimeType: string;
   sizeBytes: number; status: string; scanStatus: string; storageProvider: string;
+  scanResult: string | null; scanAttempts: number; deleteAttempts: number;
+  deleteError: string | null;
   createdAt: string;
 }
 
@@ -1113,12 +1122,16 @@ export async function getEvidenceUpload(token: string, uploadId: string) {
 export async function uploadEvidenceFile(
   token: string,
   file: File,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  onProgress?: (stage: "hashing" | "uploading" | "scanning" | "ready") => void
 ) {
+  onProgress?.("hashing");
+  const checksumSha256 = await sha256Hex(await file.arrayBuffer());
   const registered = await createEvidenceUpload(token, {
     fileName: file.name,
     mimeType: file.type,
     sizeBytes: file.size,
+    checksumSha256,
     metadata
   });
 
@@ -1126,21 +1139,49 @@ export async function uploadEvidenceFile(
     throw new Error("上传地址生成失败");
   }
 
-  const response = await fetch(`${API_BASE_URL}${registered.upload.url}`, {
+  onProgress?.("uploading");
+  const direct = /^https?:\/\//i.test(registered.upload.url);
+  const response = await fetch(direct ? registered.upload.url : `${API_BASE_URL}${registered.upload.url}`, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": file.type
+      ...registered.upload.headers,
+      ...(direct ? {} : { Authorization: `Bearer ${token}` })
     },
     body: file
   });
-  const data = await parseJson<EvidenceUploadResponse>(response);
 
   if (!response.ok) {
+    const data = direct ? null : await parseJson<EvidenceUploadResponse>(response);
     throw new Error(getErrorMessage(data, "证据文件上传失败"));
   }
+  onProgress?.("scanning");
+  const completed = await completeEvidenceUpload(token, registered.asset.id);
+  let current = completed;
+  for (let attempt = 0; attempt < 60 && ["UPLOADED", "SCANNING", "SCAN_FAILED"].includes(current.asset.status); attempt += 1) {
+    if (current.asset.status === "SCAN_FAILED") throw new Error(current.asset.scanResult || "文件扫描失败，请重试");
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    current = await getEvidenceUpload(token, registered.asset.id);
+  }
+  if (current.asset.status !== "READY" || current.asset.scanStatus !== "CLEAN") {
+    throw new Error(current.asset.status === "QUARANTINED" ? "文件未通过安全扫描" : "文件扫描尚未完成，请稍后重试");
+  }
+  onProgress?.("ready");
+  return current;
+}
 
+export async function completeEvidenceUpload(token: string, uploadId: string) {
+  const response = await fetch(`${API_BASE_URL}/uploads/evidence/${uploadId}/complete`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await parseJson<EvidenceUploadResponse>(response);
+  if (!response.ok) throw new Error(getErrorMessage(data, "上传完成校验失败"));
   return data as EvidenceUploadResponse;
+}
+
+async function sha256Hex(content: ArrayBuffer) {
+  const digest = await crypto.subtle.digest("SHA-256", content);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function createBillingOrder(

@@ -31,6 +31,21 @@ services:
     volumes:
       - goalmate_redis_data:/data
 
+  clamav:
+    image: clamav/clamav:stable
+    container_name: goalmate-clamav
+    profiles: ["security"]
+    ports:
+      - "3310:3310"
+    volumes:
+      - goalmate_clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
 volumes:
   goalmate_mysql_data:
   goalmate_redis_data:
+  goalmate_clamav_data:

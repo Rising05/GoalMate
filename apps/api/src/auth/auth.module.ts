@@ -4,10 +4,6 @@ import { AuthGuard } from "./auth.guard";
 import { AuthService } from "./auth.service";
 import { PasswordService } from "./password.service";
 import { SessionTokenService } from "./session-token.service";
-import {
-  LocalStorageProvider,
-  STORAGE_PROVIDER
-} from "../uploads/storage-provider";
 import { QuotaModule } from "../quota/quota.module";
 
 @Module({
@@ -17,9 +13,7 @@ import { QuotaModule } from "../quota/quota.module";
     AuthGuard,
     AuthService,
     PasswordService,
-    SessionTokenService,
-    LocalStorageProvider,
-    { provide: STORAGE_PROVIDER, useExisting: LocalStorageProvider }
+    SessionTokenService
   ],
   exports: [AuthGuard, AuthService, SessionTokenService]
 })

@@ -133,6 +133,8 @@ describe("DailyTasksService check-in evidence integration", () => {
         fileName: "owned-proof.png",
         mimeType: "image/png",
         sizeBytes: 123_456,
+        status: "READY",
+        scanStatus: "CLEAN",
         storageProvider: "LOCAL_PLACEHOLDER",
         objectKey: `evidence/${user.id}/owned-proof.png`
       }
@@ -145,6 +147,8 @@ describe("DailyTasksService check-in evidence integration", () => {
         fileName: "foreign-proof.png",
         mimeType: "image/png",
         sizeBytes: 10_000,
+        status: "READY",
+        scanStatus: "CLEAN",
         storageProvider: "LOCAL_PLACEHOLDER",
         objectKey: `evidence/${other.id}/foreign-proof.png`
       }

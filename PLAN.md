@@ -322,7 +322,7 @@
 
 ### P1-1 云对象存储与病毒扫描
 
-**状态：** `NOT_STARTED`
+**状态：** `IN_PROGRESS`（仓库实现与自动化验收已完成，待生产 S3 私有 Bucket 和 ClamAV 部署联调）
 
 #### 功能需求
 
@@ -347,14 +347,14 @@
 
 #### 实施清单
 
-- [ ] 选择生产对象存储供应商。
-- [ ] 实现云存储 Provider。
-- [ ] 设计完成回调和扫描状态机。
-- [ ] 接入病毒扫描服务。
-- [ ] 增加清理 Worker。
-- [ ] 更新 Web 上传进度和扫描状态。
-- [ ] 增加恶意 MIME、超限和跨用户测试。
-- [ ] 增加对象清理和失败补偿测试。
+- [x] 选择 AWS S3 API 作为生产对象存储协议，并允许通过 endpoint 配置兼容 OSS/COS。
+- [x] 实现 S3 云存储 Provider；本地 Provider 仅允许开发和测试，生产配置为本地存储时拒绝启动。
+- [x] 设计并实现创建、直传、完成回调、服务端复核、异步扫描和就绪状态机。
+- [x] 接入 ClamAV `INSTREAM` 扫描协议；超时、协议错误和不可用均不默认放行。
+- [x] 增加 BullMQ 扫描/删除/清理 Worker、定时调度、失败重试和孤立对象清理。
+- [x] 更新 Web SHA-256 计算、直传进度、完成回调、扫描轮询和失败提示。
+- [x] 增加恶意 MIME、魔数不符、EICAR、超限、未扫描引用和跨用户访问测试。
+- [x] 增加 S3 SDK 协议往返、正常删除、目标/账号删除任务、过期上传清理和删除失败补偿测试。
 
 #### Definition of Done
 
@@ -853,7 +853,7 @@ npm run prisma:migrate -w @goalmate/api
 | P0-1 | 自动提醒调度 | `DONE` | 2026-06-19 | 2026-06-19 | Codex | 96/96 integration，5/5 E2E |
 | P0-2 | 会员额度强制执行 | `DONE` | 2026-06-19 | 2026-06-19 | Codex | 105/105 integration，6/6 E2E |
 | P0-3 | 真实 AI Provider 补齐 | `IN_PROGRESS` | 2026-06-21 | - | Codex | 代码完成；114/114 integration，7/7 E2E；待预发布真实调用 |
-| P1-1 | 云对象存储与病毒扫描 | `NOT_STARTED` | - | - | - | - |
+| P1-1 | 云对象存储与病毒扫描 | `IN_PROGRESS` | 2026-06-22 | - | Codex | 仓库实现完成；126/126 integration，9/9 E2E；待生产 S3/ClamAV 联调 |
 | P1-2 | 敏感数据加密与 AI 脱敏 | `NOT_STARTED` | - | - | - | - |
 | P1-3 | 可观测性、备份与恢复 | `IN_PROGRESS` | 2026-06-21 | - | Codex | 117/117 integration，8/8 E2E；本地恢复演练 PASS；待外部接收人与异地备份 |
 | P2-1 | Stripe 正式支付 | `NOT_STARTED` | - | - | - | - |
@@ -890,6 +890,26 @@ npm run prisma:migrate -w @goalmate/api
 - 已知限制：
 - 后续依赖：
 ```
+
+### 2026-06-22 - P1-1 云对象存储与病毒扫描（仓库实现与自动化验收）
+
+- 状态：`IN_PROGRESS`；代码、数据库迁移、Web 流程、运维配置和自动化验收已完成，真实生产私有 Bucket、部署密钥、CORS 与 ClamAV 服务联调仍需部署环境提供。
+- 实现摘要：上传资产改为 `PENDING_UPLOAD -> UPLOADED/PENDING -> SCANNING -> READY/CLEAN | QUARANTINED/INFECTED | SCAN_FAILED/FAILED`；仅 `READY/CLEAN` 可下载或用于打卡；生产环境强制 S3、ClamAV、BullMQ 和异步扫描，拒绝本地存储、Mock 扫描或同步放行。
+- 数据库变更：migration `20260622090000_add_upload_lifecycle` 增加服务端 MIME/大小、上传过期、扫描尝试/时间和删除重试字段；migration `20260622100000_add_object_deletion_jobs` 增加目标关联和独立对象删除任务，支持账号或目标数据库记录删除后继续重试云对象清理。
+- API 变更：新增完成回调 `POST /uploads/evidence/:id/complete`；上传创建返回校验和绑定的预签名 PUT；下载返回短时签名 GET；后台新增带审计的资产清理入口；资产后台列表暴露扫描和删除故障信息。
+- 存储与扫描：新增 AWS SDK v3 S3 Provider，支持私有 Bucket、S3-compatible endpoint、HEAD/GET/PUT/LIST/DELETE 和签名 URL；新增 ClamAV `INSTREAM` Provider；完成回调复核对象长度、SHA-256、文件魔数、图片尺寸/像素和 PDF 页数，SVG/HTML 等主动内容不进入允许列表。
+- 删除与清理：删除资产、目标或账号时先持久化 `ObjectDeletionJob`；Worker 和 reconciliation 可恢复排队任务；定时清理过期上传、失败/失联扫描、到期隔离对象、失败删除和孤立对象；失败次数、错误和完成时间可审计，并输出 Prometheus 指标与告警。
+- Web 变更：浏览器计算 SHA-256 后申请上传，区分 API 本地上传与 S3 绝对 URL，执行完成回调并轮询扫描状态；界面显示哈希、上传、扫描、就绪和失败阶段。
+- 配置与文档：`.env.example` 增加 S3、ClamAV、清理周期和文件限制配置；Docker Compose 增加可选 ClamAV profile；`docs/operations/s3-upload-security.md` 记录私有 Bucket、最小权限、CORS、加密、版本控制、生命周期和事件处理要求。
+- 测试新增或修改：覆盖真实 AWS SDK 对本地 S3 协议服务的 PUT/HEAD/GET/LIST/签名下载/DELETE 往返、ClamAV 协议与病毒签名、异步 Worker 门禁、生产错误配置拒绝、文件魔数、EICAR 隔离、额度、跨用户、未扫描打卡引用、账号/目标删除任务、过期上传和删除失败后 cleanup 自动恢复；E2E 覆盖浏览器安全上传、扫描、下载权限和完整 MVP 上传流程。
+- 验收结果：
+  - `npm run typecheck`：通过。
+  - `npm run test:integration`：126/126 通过。
+  - `npm run test:e2e`：9/9 通过。
+  - `npm run build`：通过。
+  - `git diff --check`：通过。
+- 已知限制：当前环境没有真实 AWS/OSS/COS 生产凭据和线上 ClamAV 服务，因此尚未验证实际 Bucket CORS、云端校验和 header、服务端加密/版本控制/生命周期策略、真实病毒库更新和跨网络超时；Nest 传递依赖当前仍含 `multer@2.1.1` 的已知高危审计项，P1-1 上传接口未使用 Multer 内存缓冲，但发布前仍需随 Nest 修复版本升级或采用稳定 override。
+- 后续依赖：部署环境创建私有 Bucket 并配置最小权限角色、密钥系统、精确 CORS、SSE、版本控制和生命周期；部署 ClamAV 并验证病毒库健康；完成干净文件、EICAR、超时、删除补偿和孤立对象的预发布联调后，将 P1-1 标为 `DONE`。
 
 ### 2026-06-21 - P1-3 可观测性、备份与故障恢复（仓库与本地演练）
 

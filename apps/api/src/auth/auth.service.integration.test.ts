@@ -476,7 +476,7 @@ describe("AuthService quota integration", () => {
         plannedMinutes: 20
       }
     });
-    await prisma.uploadAsset.create({
+    const deletionAsset = await prisma.uploadAsset.create({
       data: {
         userId: registered.user.id,
         source: "WEB",
@@ -502,11 +502,14 @@ describe("AuthService quota integration", () => {
       ]);
 
     assert.equal(result.deletedUserId, registered.user.id);
+    assert.equal(result.objectDeletionsScheduled, 1);
     assert.equal(storedUser, null);
     assert.equal(goalCount, 0);
     assert.equal(taskCount, 0);
     assert.equal(membershipCount, 0);
     assert.equal(uploadCount, 0);
+    const deletionJob = await prisma.objectDeletionJob.findFirstOrThrow({ where: { sourceType: "ACCOUNT_DELETION", objectKey: deletionAsset.objectKey } });
+    assert.equal(deletionJob.status, "QUEUED");
   });
 });
 

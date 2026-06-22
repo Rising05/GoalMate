@@ -85,6 +85,11 @@ export class AdminController {
     return this.adminService.listUploadAssets(request.user!.id, query);
   }
 
+  @Post("upload-assets/cleanup")
+  cleanupUploads(@Req() request: AuthenticatedRequest, @Body() body: unknown) {
+    return this.adminService.cleanupUploads(request.user!.id, body);
+  }
+
   @Get("payment-events")
   listPaymentEvents(@Req() request: AuthenticatedRequest, @Query() query: Record<string, unknown>) {
     return this.adminService.listPaymentEvents(request.user!.id, query);

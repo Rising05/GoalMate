@@ -14,12 +14,14 @@ import { QuotaModule } from "./quota/quota.module";
 import { AiModule } from "./ai/ai.module";
 import { ObservabilityModule } from "./observability/observability.module";
 import { RequestTracingMiddleware } from "./observability/request-tracing.middleware";
+import { ObjectLifecycleModule } from "./object-lifecycle/object-lifecycle.module";
 
 @Module({
   imports: [
     PrismaModule,
     AiModule,
     ObservabilityModule,
+    ObjectLifecycleModule,
     AuthModule,
     GoalsModule,
     DailyTasksModule,

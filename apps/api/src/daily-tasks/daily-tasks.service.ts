@@ -1554,7 +1554,8 @@ export class DailyTasksService {
         id: {
           in: uploadIds
         },
-        status: "READY"
+        status: "READY",
+        scanStatus: "CLEAN"
       }
     });
 

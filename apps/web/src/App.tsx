@@ -1998,6 +1998,9 @@ export function App() {
           const upload = await uploadEvidenceFile(session.token, file, {
             goalId: completionTask.goalId,
             dailyTaskId: completionTask.id
+          }, (stage) => {
+            const labels = { hashing: "正在计算文件校验值...", uploading: "正在直传证据文件...", scanning: "文件已上传，正在安全扫描...", ready: "文件扫描通过，正在提交打卡..." };
+            setDailyTaskMessage(labels[stage]);
           });
           return upload.evidenceFile;
         })
@@ -5713,6 +5716,8 @@ export function App() {
                         <article key={asset.id}>
                           <div><strong>{asset.fileName}</strong><span>{asset.userEmail} · {asset.mimeType}</span></div>
                           <span>{asset.status} · 扫描 {asset.scanStatus} · {asset.storageProvider}</span>
+                          {asset.scanResult ? <span>扫描结果：{asset.scanResult}</span> : null}
+                          {asset.deleteError ? <span>删除失败：{asset.deleteError}</span> : null}
                         </article>
                       ))}
                       {adminPaymentEvents.slice(0, 5).map((event) => (

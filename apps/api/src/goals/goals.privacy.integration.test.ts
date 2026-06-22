@@ -36,6 +36,17 @@ describe("GoalsService privacy deletion integration", () => {
         status: "QUEUED"
       }
     });
+    const upload = await prisma.uploadAsset.create({
+      data: {
+        userId: user.id,
+        goalId: goal.id,
+        fileName: "goal-delete-proof.png",
+        mimeType: "image/png",
+        sizeBytes: 68,
+        storageProvider: "LOCAL",
+        objectKey: `evidence/${user.id}/goal-delete-proof`
+      }
+    });
 
     const result = await goalsService.deleteGoal(user.id, goal.id);
     const [storedGoal, taskCount, checkinCount, scoreCount, eventCount, emailLog] =
@@ -49,11 +60,14 @@ describe("GoalsService privacy deletion integration", () => {
       ]);
 
     assert.equal(result.deletedGoalId, goal.id);
+    assert.equal(result.objectDeletionsScheduled, 1);
     assert.equal(storedGoal, null);
     assert.equal(taskCount, 0);
     assert.equal(checkinCount, 0);
     assert.equal(scoreCount, 0);
     assert.equal(eventCount, 0);
+    const deletionJob = await prisma.objectDeletionJob.findFirstOrThrow({ where: { sourceType: "GOAL_DELETION", objectKey: upload.objectKey } });
+    assert.equal(deletionJob.status, "QUEUED");
     assert.equal(emailLog?.goalId, null);
     assert.equal(task.goalId, goal.id);
   });

@@ -6,6 +6,7 @@ import {
   Headers,
   Inject,
   Param,
+  PayloadTooLargeException,
   Post,
   Put,
   Query,
@@ -49,9 +50,15 @@ export class UploadsController {
     @Headers("content-type") contentType?: string
   ) {
     const chunks: Buffer[] = [];
+    let receivedBytes = 0;
 
     for await (const chunk of request) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      receivedBytes += buffer.length;
+      if (receivedBytes > 10 * 1024 * 1024) {
+        throw new PayloadTooLargeException("上传内容超过 10MB 限制");
+      }
+      chunks.push(buffer);
     }
 
     return this.uploadsService.storeEvidenceContent(
@@ -62,6 +69,14 @@ export class UploadsController {
       contentType,
       Buffer.concat(chunks)
     );
+  }
+
+  @Post("evidence/:id/complete")
+  completeEvidenceUpload(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string
+  ) {
+    return this.uploadsService.completeEvidenceUpload(request.user!.id, id);
   }
 
   @Get("evidence/:id/download")

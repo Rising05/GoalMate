@@ -35,6 +35,18 @@ export class QueueService implements OnModuleDestroy {
     return this.enqueue("email", input.type, input, input.emailLogId);
   }
 
+  async enqueueUploadJob(input: { uploadId: string; userId: string; type: string }) {
+    return this.enqueue("uploads", input.type, input, `${input.type}-${input.uploadId}`);
+  }
+
+  async enqueueUploadCleanup(runId: string) {
+    return this.enqueue("uploads", "UPLOAD_CLEANUP", { type: "UPLOAD_CLEANUP", runId }, `UPLOAD_CLEANUP-${runId}`);
+  }
+
+  async enqueueObjectDeletionJob(deletionJobId: string) {
+    return this.enqueue("uploads", "OBJECT_DELETE", { type: "OBJECT_DELETE", deletionJobId }, `OBJECT_DELETE-${deletionJobId}`);
+  }
+
   async enqueueReportJob(input: {
     aiJobId?: string;
     type: string;
@@ -47,7 +59,7 @@ export class QueueService implements OnModuleDestroy {
 
   async getOperationalMetrics() {
     if (!this.enabled) return { enabled: false, redisUp: false, queues: [] as Array<Record<string, unknown>> };
-    const queueNames = ["ai-jobs", "email", "reports"];
+    const queueNames = ["ai-jobs", "email", "reports", "uploads"];
     try {
       const queues = await Promise.all(queueNames.map(async (name) => {
         const queue = this.getQueue(name);
