@@ -12,6 +12,18 @@ export interface AuthUser {
     expiresAt: string | null;
   } | null;
   adminRole: string | null;
+  legalConsent: {
+    termsVersion: string | null;
+    termsAcceptedAt: string | null;
+    privacyVersion: string | null;
+    privacyAcceptedAt: string | null;
+    aiDisclosureVersion: string | null;
+    aiDisclosureAcceptedAt: string | null;
+    requiresTermsAcceptance: boolean;
+    currentTermsVersion: string;
+    currentPrivacyVersion: string;
+    currentAiDisclosureVersion: string;
+  };
   quota: {
     plan: string;
     hasProAccess: boolean;

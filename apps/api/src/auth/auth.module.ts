@@ -5,9 +5,10 @@ import { AuthService } from "./auth.service";
 import { PasswordService } from "./password.service";
 import { SessionTokenService } from "./session-token.service";
 import { QuotaModule } from "../quota/quota.module";
+import { SecurityModule } from "../security/security.module";
 
 @Module({
-  imports: [QuotaModule],
+  imports: [QuotaModule, SecurityModule],
   controllers: [AuthController],
   providers: [
     AuthGuard,

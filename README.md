@@ -34,6 +34,7 @@ The MVP now covers the core GoalPilot AI loop:
 10. Server-enforced Free/Pro quotas backed by atomic period buckets, immutable usage records, entitlement overrides, cancellation/deletion release rules, structured HTTP 429 responses, account usage display, and strict Free AI-analysis hiding.
 11. Unified DeepSeek JSON providers for goal analysis, plan/replan, six-dimension scoring, appeals, deviation summaries, rescue tasks, trend narratives, and failure review, with versioned prompts, schema validation, deterministic fallbacks, and administrator-visible call telemetry at `GET /admin/ai-call-logs`.
 12. Request/trace IDs, sanitized JSON access/error logs, Prometheus business metrics, dependency readiness, persistent report jobs, audited queue reconciliation, MySQL binlog/backup/restore tooling, alert rules, and a verified local recovery drill.
+13. Versioned application-layer encryption for sensitive goal/check-in/reward/WeChat/admin-audit fields, minimized AI DTOs, legal consent tracking, and current-user export without key metadata.
 
 Useful optional environment variables for the API:
 
@@ -43,6 +44,9 @@ Useful optional environment variables for the API:
 - `DEEPSEEK_API_URL=https://api.deepseek.com/chat/completions`
 - `DEEPSEEK_INPUT_COST_MICROS_PER_TOKEN=0.14`
 - `DEEPSEEK_OUTPUT_COST_MICROS_PER_TOKEN=0.28`
+- `FIELD_ENCRYPTION_KEYS=v1:base64:<32-byte-key>`
+- `FIELD_ENCRYPTION_ACTIVE_VERSION=v1`
+- `FIELD_ENCRYPTION_HASH_SECRET=base64:<32-byte-key>`
 - `METRICS_TOKEN=...`
 - `QUEUE_RECONCILIATION_ENABLED=true`
 - `QUEUE_RECONCILIATION_INTERVAL_MS=60000`

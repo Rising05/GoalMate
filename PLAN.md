@@ -2,7 +2,7 @@
 
 > 文档性质：后续开发的唯一执行清单与进度台账
 > 创建日期：2026-06-19
-> 当前状态：实施中；P0-1、P0-2 已完成，P0-3 代码完成并等待真实 DeepSeek 预发布验证
+> 当前状态：实施中；P0-1、P0-2 已完成，P0-3 代码完成并等待真实 DeepSeek 预发布验证；P1-2 仓库实现完成并等待生产密钥和历史数据迁移演练
 > 适用范围：`SPEC.md` 中尚未完整落地或仅完成基础版、预留版的能力
 
 ## 1. 文档目标
@@ -367,7 +367,7 @@
 
 ### P1-2 敏感数据加密与 AI 脱敏
 
-**状态：** `NOT_STARTED`
+**状态：** `IN_PROGRESS`（仓库实现与自动化验收已完成，待生产 KMS/密钥托管、历史数据迁移和轮换演练）
 
 #### 数据分类
 
@@ -377,7 +377,7 @@
 
 #### 功能需求
 
-- 对敏感原文字段采用应用层信封加密。
+- 对敏感原文字段采用应用层版本化 AES-256-GCM 加密。
 - 每条密文保存 key version，支持密钥轮换。
 - 搜索需要的字段使用规范化 hash 或单独的安全索引字段。
 - 日志、异常和审计 metadata 不得输出完整复盘、Token、密码或支付密钥。
@@ -395,15 +395,15 @@
 
 #### 实施清单
 
-- [ ] 输出数据分类表和威胁模型。
-- [ ] 选择 KMS 或主密钥管理方式。
-- [ ] 实现版本化加解密服务。
-- [ ] 编写存量明文迁移和回滚方案。
-- [ ] 接入目标、打卡、奖励和微信字段。
-- [ ] 建立 AI DTO 白名单和脱敏测试。
-- [ ] 清理日志中的敏感字段。
-- [ ] 新增条款、同意记录模型和页面。
-- [ ] 增加轮换、导出、删除和管理员查看测试。
+- [x] 输出数据分类表和威胁模型。
+- [x] 选择 KMS 或主密钥管理方式。
+- [x] 实现版本化加解密服务。
+- [x] 编写存量明文迁移和回滚方案。
+- [x] 接入目标、打卡、奖励和微信字段。
+- [x] 建立 AI DTO 白名单和脱敏测试。
+- [x] 清理日志中的敏感字段。
+- [x] 新增条款、同意记录模型和页面。
+- [x] 增加轮换、导出、删除和管理员查看测试。
 
 #### Definition of Done
 
@@ -854,7 +854,7 @@ npm run prisma:migrate -w @goalmate/api
 | P0-2 | 会员额度强制执行 | `DONE` | 2026-06-19 | 2026-06-19 | Codex | 105/105 integration，6/6 E2E |
 | P0-3 | 真实 AI Provider 补齐 | `IN_PROGRESS` | 2026-06-21 | - | Codex | 代码完成；114/114 integration，7/7 E2E；待预发布真实调用 |
 | P1-1 | 云对象存储与病毒扫描 | `IN_PROGRESS` | 2026-06-22 | - | Codex | 仓库实现完成；126/126 integration，9/9 E2E；待生产 S3/ClamAV 联调 |
-| P1-2 | 敏感数据加密与 AI 脱敏 | `NOT_STARTED` | - | - | - | - |
+| P1-2 | 敏感数据加密与 AI 脱敏 | `IN_PROGRESS` | 2026-06-23 | - | Codex | 仓库实现完成；126/126 integration，9/9 E2E；待生产 KMS/历史迁移/轮换演练 |
 | P1-3 | 可观测性、备份与恢复 | `IN_PROGRESS` | 2026-06-21 | - | Codex | 117/117 integration，8/8 E2E；本地恢复演练 PASS；待外部接收人与异地备份 |
 | P2-1 | Stripe 正式支付 | `NOT_STARTED` | - | - | - | - |
 | P2-2 | 微信支付正式接入 | `NOT_STARTED` | - | - | - | - |
@@ -910,6 +910,24 @@ npm run prisma:migrate -w @goalmate/api
   - `git diff --check`：通过。
 - 已知限制：当前环境没有真实 AWS/OSS/COS 生产凭据和线上 ClamAV 服务，因此尚未验证实际 Bucket CORS、云端校验和 header、服务端加密/版本控制/生命周期策略、真实病毒库更新和跨网络超时；Nest 传递依赖当前仍含 `multer@2.1.1` 的已知高危审计项，P1-1 上传接口未使用 Multer 内存缓冲，但发布前仍需随 Nest 修复版本升级或采用稳定 override。
 - 后续依赖：部署环境创建私有 Bucket 并配置最小权限角色、密钥系统、精确 CORS、SSE、版本控制和生命周期；部署 ClamAV 并验证病毒库健康；完成干净文件、EICAR、超时、删除补偿和孤立对象的预发布联调后，将 P1-1 标为 `DONE`。
+
+### 2026-06-23 - P1-2 敏感数据加密与 AI 脱敏（仓库实现与自动化验收）
+
+- 状态：`IN_PROGRESS`；代码、数据库迁移、迁移脚本、合规说明、Web 注册提示和自动化验收已完成，生产 KMS/密钥托管、历史数据迁移、轮换演练和预发布抓包仍需部署环境执行。
+- 实现摘要：新增 `FieldEncryptionService`，采用 `enc:<version>:<iv>:<tag>:<ciphertext>` AES-256-GCM 格式；支持 `FIELD_ENCRYPTION_KEYS` 多版本密钥、`FIELD_ENCRYPTION_ACTIVE_VERSION` 活跃版本和 `FIELD_ENCRYPTION_HASH_SECRET` HMAC blind index；旧明文读取兼容，便于灰度上线。
+- 数据库变更：migration `20260623090000_add_sensitive_data_encryption` 增加用户条款/隐私/AI 使用同意记录、敏感字段 key version、微信 openId/unionId blind index，并将微信唯一性从明文字段迁移到 hash 字段。
+- 接入范围：目标描述/基线/限制/最终奖励、打卡复盘/学习状态/难度、评分申诉原因/补充事实、奖励卡描述、失败报告原因/建议、微信 openId/unionId、管理员审计原因和会员审计原因已改为加密写入、授权解密读取。
+- AI 脱敏：目标分析改为白名单 DTO；计划生成/重规划的 `AiJob.payload` 不再保存目标描述、限制或基线原文；DeepSeek 计划、评分、申诉、救援和失败复盘调用只在调用前临时使用必要明文字段；AI 调用日志继续只保存 `inputHash`。
+- 合规与导出：新增 `/legal`、`/legal/terms`、`/legal/privacy`、`/legal/ai-disclosure`；注册时记录当前条款、隐私和 AI 使用说明版本与时间；Web 注册面板展示合规说明；用户数据导出解密当前用户数据但剥离 `*KeyVersion`、`openIdHash`、`unionIdHash` 和密码哈希。
+- 运维文档：新增 `docs/operations/sensitive-data-encryption.md`，记录数据分类、威胁模型、密钥配置、存量明文迁移、回滚和轮换流程；新增 `apps/api/src/security/encrypt-sensitive-fields.script.ts` 支持 dry-run 和迁移执行。
+- 验收：
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过。
+  - `npm run test:integration`：126/126 通过。
+  - `npm run test:e2e`：9/9 通过。
+  - `prisma migrate deploy`：本地 MySQL 成功应用。
+- 已知限制：当前实现是应用层 envelope 格式和环境变量密钥加载，生产仍需接入云 KMS/Secrets Manager、密钥访问审计、历史数据迁移演练、真实轮换演练和预发布 AI 抓包验证；`PaymentEvent.payload` 仍保留结构化支付事件，正式 Stripe/微信支付接入时需在 P2 同步最小化或加密官方回调原文。
+- 后续依赖：配置生产密钥版本和 hash secret；在预发布执行 `encrypt-sensitive-fields.script.ts --dry-run` 与正式迁移；完成 v1→v2 轮换演练；抓包验证 AI 请求不含邮箱、昵称、支付信息或无关身份字段后，将 P1-2 标为 `DONE`。
 
 ### 2026-06-21 - P1-3 可观测性、备份与故障恢复（仓库与本地演练）
 

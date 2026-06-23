@@ -28,6 +28,7 @@ import { QueueService } from "../queue/queue.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { QueueReconciliationService } from "../observability/queue-reconciliation.service";
 import { UploadsService } from "../uploads/uploads.service";
+import { FieldEncryptionService } from "../security/field-encryption.service";
 
 type AdminRole = "OPERATOR" | "SUPER_ADMIN";
 
@@ -89,7 +90,10 @@ export class AdminService {
     private readonly queueReconciliation?: QueueReconciliationService,
     @Optional()
     @Inject(UploadsService)
-    private readonly uploadsService?: UploadsService
+    private readonly uploadsService?: UploadsService,
+    @Optional()
+    @Inject(FieldEncryptionService)
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
   ) {}
 
   async getOverview(actorUserId: string) {
@@ -152,7 +156,12 @@ export class AdminService {
     if (reason.length < 5) throw new BadRequestException("队列补偿必须填写至少 5 个字符的原因");
     const dryRun = body.dryRun === true;
     const result = await this.queueReconciliation.reconcile({ dryRun });
-    await this.prisma.auditLog.create({ data: { actorUserId, action: "QUEUE_RECONCILIATION_RUN", targetType: "QUEUE", reason, metadata: result as unknown as Prisma.InputJsonValue } });
+    await this.createAuditLog(actorUserId, {
+      action: "QUEUE_RECONCILIATION_RUN",
+      targetType: "QUEUE",
+      reason,
+      metadata: result as unknown as Prisma.InputJsonValue
+    });
     return result;
   }
 
@@ -499,7 +508,12 @@ export class AdminService {
       }),
       this.prisma.uploadAsset.count({ where })
     ]);
-    await this.prisma.auditLog.create({ data: { actorUserId, action: "UPLOAD_ASSETS_VIEWED", targetType: "UPLOAD_ASSET", reason: "Administrator opened upload asset list", metadata: { status: status ?? null, page: pagination.page, pageSize: pagination.pageSize, resultCount: assets.length } } });
+    await this.createAuditLog(actorUserId, {
+      action: "UPLOAD_ASSETS_VIEWED",
+      targetType: "UPLOAD_ASSET",
+      reason: "Administrator opened upload asset list",
+      metadata: { status: status ?? null, page: pagination.page, pageSize: pagination.pageSize, resultCount: assets.length }
+    });
     return {
       total, page: pagination.page, pageSize: pagination.pageSize,
       assets: assets.map((asset) => ({
@@ -521,7 +535,12 @@ export class AdminService {
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
     if (reason.length < 5) throw new BadRequestException("上传清理必须填写至少 5 个字符的原因");
     const result = await this.uploadsService.cleanupUploadAssets();
-    await this.prisma.auditLog.create({ data: { actorUserId, action: "UPLOAD_CLEANUP_RUN", targetType: "UPLOAD_ASSET", reason, metadata: result as unknown as Prisma.InputJsonValue } });
+    await this.createAuditLog(actorUserId, {
+      action: "UPLOAD_CLEANUP_RUN",
+      targetType: "UPLOAD_ASSET",
+      reason,
+      metadata: result as unknown as Prisma.InputJsonValue
+    });
     return result;
   }
 
@@ -569,7 +588,8 @@ export class AdminService {
         id: audit.id, userEmail: audit.user.email, actorEmail: audit.actor?.email ?? null,
         action: audit.action, fromPlan: audit.fromPlan, toPlan: audit.toPlan,
         fromStatus: audit.fromStatus, toStatus: audit.toStatus,
-        expiresAt: audit.expiresAt?.toISOString() ?? null, reason: audit.reason,
+        expiresAt: audit.expiresAt?.toISOString() ?? null,
+        reason: this.fields.decryptNullable(audit.reason),
         createdAt: audit.createdAt.toISOString()
       }))
     };
@@ -643,6 +663,7 @@ export class AdminService {
         expiresAt: membership.expiresAt?.toISOString() ?? null
       }
     });
+    const membershipReason = this.fields.encrypt(payload.reason ?? "后台手动调整会员");
     await this.prisma.membershipAudit.create({
       data: {
         userId: targetUserId,
@@ -653,7 +674,8 @@ export class AdminService {
         fromStatus: previousMembership?.status ?? null,
         toStatus: membership.status,
         expiresAt: membership.expiresAt,
-        reason: payload.reason ?? "后台手动调整会员",
+        reason: membershipReason.ciphertext,
+        reasonKeyVersion: membershipReason.keyVersion,
         metadata: { targetEmail: targetUser.email }
       }
     });
@@ -729,16 +751,16 @@ export class AdminService {
       goals: user.goals.map((goal) => ({
         id: goal.id,
         title: goal.title,
-        description: goal.description,
-        currentBaseline: goal.currentBaseline,
-        constraints: goal.constraints,
-        finalReward: goal.finalReward,
+        description: this.fields.decrypt(goal.description),
+        currentBaseline: this.fields.decryptNullable(goal.currentBaseline),
+        constraints: this.fields.decryptNullable(goal.constraints),
+        finalReward: this.fields.decryptNullable(goal.finalReward),
         status: goal.status,
         createdAt: goal.createdAt.toISOString(),
         checkins: goal.checkins.map((checkin) => ({
           id: checkin.id,
           taskTitle: checkin.dailyTask?.title ?? null,
-          content: checkin.content,
+          content: this.fields.decrypt(checkin.content),
           investedMinutes: checkin.investedMinutes,
           completedSubtasks: checkin.completedSubtasks,
           actualQuestionCount: checkin.actualQuestionCount,
@@ -746,8 +768,8 @@ export class AdminService {
           accuracy: checkin.accuracy,
           evidenceFiles: checkin.evidenceFiles,
           evidenceLinks: checkin.evidenceLinks,
-          studyMood: checkin.studyMood,
-          difficultyLevel: checkin.difficultyLevel,
+          studyMood: this.fields.decryptNullable(checkin.studyMood),
+          difficultyLevel: this.fields.decryptNullable(checkin.difficultyLevel),
           submittedAt: checkin.submittedAt.toISOString(),
           aiScore: checkin.aiScore
             ? {
@@ -761,7 +783,7 @@ export class AdminService {
         rewardCards: goal.rewardCards.map((card) => ({
           id: card.id,
           title: card.title,
-          description: card.description,
+          description: this.fields.decryptNullable(card.description),
           cardType: card.cardType,
           sourceType: card.sourceType,
           imageUrl: card.imageUrl,
@@ -1224,13 +1246,15 @@ export class AdminService {
       metadata: Prisma.InputJsonValue;
     }
   ) {
+    const reason = this.fields.encryptNullable(input.reason);
     return this.prisma.auditLog.create({
       data: {
         actorUserId,
         action: input.action,
         targetType: input.targetType,
         targetId: input.targetId ?? null,
-        reason: input.reason ?? null,
+        reason: reason.ciphertext,
+        reasonKeyVersion: reason.ciphertext ? reason.keyVersion : undefined,
         metadata: input.metadata
       }
     });
@@ -1352,7 +1376,7 @@ export class AdminService {
       action: log.action,
       targetType: log.targetType,
       targetId: log.targetId,
-      reason: log.reason,
+      reason: this.fields.decryptNullable(log.reason),
       metadata: log.metadata,
       createdAt: log.createdAt.toISOString()
     };

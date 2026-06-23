@@ -10,12 +10,17 @@ import { PasswordService } from "./password.service";
 import { SessionTokenService } from "./session-token.service";
 import { QuotaService } from "../quota/quota.service";
 import { ObjectDeletionService } from "../object-lifecycle/object-deletion.service";
+import { FieldEncryptionService } from "../security/field-encryption.service";
 
 interface AuthPayload {
   email: string;
   password: string;
   displayName?: string;
 }
+
+const CURRENT_TERMS_VERSION = "terms-2026-06-23";
+const CURRENT_PRIVACY_VERSION = "privacy-2026-06-23";
+const CURRENT_AI_DISCLOSURE_VERSION = "ai-disclosure-2026-06-23";
 
 const EXPORT_SCOPES = [
   "profile",
@@ -74,7 +79,10 @@ export class AuthService {
     private readonly objectDeletions: ObjectDeletionService = new ObjectDeletionService(prisma),
     @Optional()
     @Inject(QuotaService)
-    private readonly quotaService: QuotaService = new QuotaService(prisma)
+    private readonly quotaService: QuotaService = new QuotaService(prisma),
+    @Optional()
+    @Inject(FieldEncryptionService)
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
   ) {}
 
   async register(input: unknown) {
@@ -88,11 +96,19 @@ export class AuthService {
     }
 
     const passwordHash = this.passwordService.hash(payload.password);
+    const acceptedAt = new Date();
     const user = await this.prisma.user.create({
       data: {
         email: payload.email,
         passwordHash,
         displayName: payload.displayName,
+        termsVersion: CURRENT_TERMS_VERSION,
+        termsAcceptedAt: acceptedAt,
+        privacyVersion: CURRENT_PRIVACY_VERSION,
+        privacyAcceptedAt: acceptedAt,
+        aiDisclosureVersion: CURRENT_AI_DISCLOSURE_VERSION,
+        aiDisclosureAcceptedAt: acceptedAt,
+        requiresTermsAcceptance: false,
         membership: {
           create: {
             plan: "FREE",
@@ -298,6 +314,13 @@ export class AuthService {
           email: true,
           displayName: true,
           status: true,
+          termsVersion: true,
+          termsAcceptedAt: true,
+          privacyVersion: true,
+          privacyAcceptedAt: true,
+          aiDisclosureVersion: true,
+          aiDisclosureAcceptedAt: true,
+          requiresTermsAcceptance: true,
           createdAt: true,
           updatedAt: true
         }
@@ -311,10 +334,11 @@ export class AuthService {
     }
 
     if (scopeSet.has("goals")) {
-      data.goals = await this.prisma.goal.findMany({
+      const goals = await this.prisma.goal.findMany({
         where: { userId },
         orderBy: { createdAt: "asc" }
       });
+      data.goals = goals.map((goal) => this.exportGoal(goal));
     }
 
     if (scopeSet.has("plans")) {
@@ -344,10 +368,11 @@ export class AuthService {
     }
 
     if (scopeSet.has("checkins")) {
-      data.checkins = await this.prisma.checkin.findMany({
+      const checkins = await this.prisma.checkin.findMany({
         where: { userId },
         orderBy: { submittedAt: "asc" }
       });
+      data.checkins = checkins.map((checkin) => this.exportCheckin(checkin));
     }
 
     if (scopeSet.has("aiScores")) {
@@ -362,10 +387,11 @@ export class AuthService {
     }
 
     if (scopeSet.has("scoreAppeals")) {
-      data.scoreAppeals = await this.prisma.scoreAppeal.findMany({
+      const appeals = await this.prisma.scoreAppeal.findMany({
         where: { userId },
         orderBy: { createdAt: "asc" }
       });
+      data.scoreAppeals = appeals.map((appeal) => this.exportScoreAppeal(appeal));
     }
 
     if (scopeSet.has("deviationEvents")) {
@@ -390,24 +416,27 @@ export class AuthService {
     }
 
     if (scopeSet.has("rewardCards")) {
-      data.rewardCards = await this.prisma.rewardCard.findMany({
+      const rewardCards = await this.prisma.rewardCard.findMany({
         where: { goalId: { in: goalIds } },
         orderBy: [{ goalId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }]
       });
+      data.rewardCards = rewardCards.map((card) => this.exportRewardCard(card));
     }
 
     if (scopeSet.has("failureReports")) {
-      data.failureReports = await this.prisma.failureReport.findMany({
+      const failureReports = await this.prisma.failureReport.findMany({
         where: { goalId: { in: goalIds } },
         orderBy: { createdAt: "asc" }
       });
+      data.failureReports = failureReports.map((report) => this.exportFailureReport(report));
     }
 
     if (scopeSet.has("aiJobs")) {
-      data.aiJobs = await this.prisma.aiJob.findMany({
+      const aiJobs = await this.prisma.aiJob.findMany({
         where: { userId },
         orderBy: { createdAt: "asc" }
       });
+      data.aiJobs = aiJobs.map((job) => this.exportAiJob(job));
     }
 
     if (scopeSet.has("notificationPreference")) {
@@ -425,9 +454,10 @@ export class AuthService {
     }
 
     if (scopeSet.has("wechatBinding")) {
-      data.wechatBinding = await this.prisma.wechatBinding.findUnique({
+      const binding = await this.prisma.wechatBinding.findUnique({
         where: { userId }
       });
+      data.wechatBinding = binding ? this.exportWechatBinding(binding) : null;
     }
 
     if (scopeSet.has("uploadAssets")) {
@@ -452,10 +482,11 @@ export class AuthService {
     }
 
     if (scopeSet.has("membershipAudits")) {
-      data.membershipAudits = await this.prisma.membershipAudit.findMany({
+      const audits = await this.prisma.membershipAudit.findMany({
         where: { userId },
         orderBy: { createdAt: "asc" }
       });
+      data.membershipAudits = audits.map((audit) => this.exportMembershipAudit(audit));
     }
 
     if (scopeSet.has("entitlements")) {
@@ -479,10 +510,11 @@ export class AuthService {
     }
 
     if (scopeSet.has("auditLogs")) {
-      data.auditLogs = await this.prisma.auditLog.findMany({
+      const auditLogs = await this.prisma.auditLog.findMany({
         where: { actorUserId: userId },
         orderBy: { createdAt: "asc" }
       });
+      data.auditLogs = auditLogs.map((audit) => this.exportAuditLog(audit));
     }
 
     return this.serializeExportValue(data) as Record<string, unknown>;
@@ -494,6 +526,13 @@ export class AuthService {
     displayName: string | null;
     status: string;
     createdAt: Date;
+    termsVersion?: string | null;
+    termsAcceptedAt?: Date | null;
+    privacyVersion?: string | null;
+    privacyAcceptedAt?: Date | null;
+    aiDisclosureVersion?: string | null;
+    aiDisclosureAcceptedAt?: Date | null;
+    requiresTermsAcceptance?: boolean;
     membership: {
       plan: string;
       status: string;
@@ -521,6 +560,13 @@ export class AuthService {
     displayName: string | null;
     status: string;
     createdAt: Date;
+    termsVersion?: string | null;
+    termsAcceptedAt?: Date | null;
+    privacyVersion?: string | null;
+    privacyAcceptedAt?: Date | null;
+    aiDisclosureVersion?: string | null;
+    aiDisclosureAcceptedAt?: Date | null;
+    requiresTermsAcceptance?: boolean;
     membership: {
       plan: string;
       status: string;
@@ -546,6 +592,18 @@ export class AuthService {
         : null,
       adminRole:
         user.adminProfile?.status === "ACTIVE" ? user.adminProfile.role : null,
+      legalConsent: {
+        termsVersion: user.termsVersion ?? null,
+        termsAcceptedAt: user.termsAcceptedAt?.toISOString() ?? null,
+        privacyVersion: user.privacyVersion ?? null,
+        privacyAcceptedAt: user.privacyAcceptedAt?.toISOString() ?? null,
+        aiDisclosureVersion: user.aiDisclosureVersion ?? null,
+        aiDisclosureAcceptedAt: user.aiDisclosureAcceptedAt?.toISOString() ?? null,
+        requiresTermsAcceptance: user.requiresTermsAcceptance ?? false,
+        currentTermsVersion: CURRENT_TERMS_VERSION,
+        currentPrivacyVersion: CURRENT_PRIVACY_VERSION,
+        currentAiDisclosureVersion: CURRENT_AI_DISCLOSURE_VERSION
+      },
       quota: await this.getQuotaSummary(user.id, user.membership)
     };
   }
@@ -869,6 +927,159 @@ export class AuthService {
     });
 
     return goals.map((goal) => goal.id);
+  }
+
+  private exportGoal(goal: Record<string, unknown> & {
+    description: string;
+    currentBaseline: string | null;
+    constraints: string | null;
+    finalReward: string | null;
+  }) {
+    const {
+      descriptionKeyVersion,
+      currentBaselineKeyVersion,
+      constraintsKeyVersion,
+      finalRewardKeyVersion,
+      ...rest
+    } = goal;
+
+    return {
+      ...rest,
+      description: this.fields.decrypt(goal.description),
+      currentBaseline: this.fields.decryptNullable(goal.currentBaseline),
+      constraints: this.fields.decryptNullable(goal.constraints),
+      finalReward: this.fields.decryptNullable(goal.finalReward)
+    };
+  }
+
+  private exportCheckin(checkin: Record<string, unknown> & {
+    content: string;
+    studyMood: string | null;
+    difficultyLevel: string | null;
+  }) {
+    const {
+      contentKeyVersion,
+      studyMoodKeyVersion,
+      difficultyLevelKeyVersion,
+      ...rest
+    } = checkin;
+
+    return {
+      ...rest,
+      content: this.fields.decrypt(checkin.content),
+      studyMood: this.fields.decryptNullable(checkin.studyMood),
+      difficultyLevel: this.fields.decryptNullable(checkin.difficultyLevel)
+    };
+  }
+
+  private exportScoreAppeal(appeal: Record<string, unknown> & {
+    reason: string;
+    addedFacts: string;
+  }) {
+    const { reasonKeyVersion, addedFactsKeyVersion, ...rest } = appeal;
+
+    return {
+      ...rest,
+      reason: this.fields.decrypt(appeal.reason),
+      addedFacts: this.fields.decrypt(appeal.addedFacts)
+    };
+  }
+
+  private exportRewardCard(card: Record<string, unknown> & {
+    description: string | null;
+  }) {
+    const { descriptionKeyVersion, ...rest } = card;
+
+    return {
+      ...rest,
+      description: this.fields.decryptNullable(card.description)
+    };
+  }
+
+  private exportFailureReport(report: Record<string, unknown> & {
+    reasonAnalysis: string;
+    suggestion: string;
+  }) {
+    const { reasonAnalysisKeyVersion, suggestionKeyVersion, ...rest } = report;
+
+    return {
+      ...rest,
+      reasonAnalysis: this.fields.decrypt(report.reasonAnalysis),
+      suggestion: this.fields.decrypt(report.suggestion)
+    };
+  }
+
+  private exportWechatBinding(binding: Record<string, unknown> & {
+    openId: string;
+    unionId: string | null;
+  }) {
+    const {
+      openIdHash,
+      unionIdHash,
+      openIdKeyVersion,
+      unionIdKeyVersion,
+      ...rest
+    } = binding;
+
+    return {
+      ...rest,
+      openId: this.fields.decrypt(binding.openId),
+      unionId: this.fields.decryptNullable(binding.unionId)
+    };
+  }
+
+  private exportAiJob(job: Record<string, unknown> & { payload: unknown; result: unknown }) {
+    return {
+      ...job,
+      payload: this.redactAiJobPayload(job.payload),
+      result: this.redactAiJobPayload(job.result)
+    };
+  }
+
+  private redactAiJobPayload(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.redactAiJobPayload(item));
+    }
+
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+
+    const sensitiveKeys = new Set([
+      "description",
+      "constraints",
+      "currentBaseline",
+      "finalReward",
+      "adjustmentReason",
+      "content",
+      "reason",
+      "addedFacts"
+    ]);
+
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [
+        key,
+        sensitiveKeys.has(key) ? "[REDACTED]" : this.redactAiJobPayload(nestedValue)
+      ])
+    );
+  }
+
+  private exportAuditLog(log: Record<string, unknown> & { reason: string | null }) {
+    const { reasonKeyVersion, ...rest } = log;
+
+    return {
+      ...rest,
+      reason: this.fields.decryptNullable(log.reason)
+    };
+  }
+
+  private exportMembershipAudit(log: Record<string, unknown> & { reason: string | null }) {
+    const { reasonKeyVersion, ...rest } = log;
+
+    return {
+      ...rest,
+      reason: this.fields.decryptNullable(log.reason)
+    };
   }
 
   private serializeExportValue(value: unknown): unknown {

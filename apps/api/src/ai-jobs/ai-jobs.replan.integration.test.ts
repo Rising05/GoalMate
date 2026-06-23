@@ -49,7 +49,9 @@ describe("AiJobsService requestGoalReplan integration", () => {
     assert.equal(result.plan?.version, 2);
     assert.equal(result.plan?.isActive, false);
     assert.equal(latestGoal.dailyTimeBudgetMinutes, 25);
-    assert.equal(latestGoal.constraints, "每天只保留一个最小可完成动作。");
+    assert.equal(result.goal.constraints, "每天只保留一个最小可完成动作。");
+    assert.match(latestGoal.constraints ?? "", /^enc:v1:/);
+    assert.notEqual(latestGoal.constraints, "每天只保留一个最小可完成动作。");
     assert.equal(activeOldTasks, 0);
   });
 

@@ -33,6 +33,7 @@ import { AiCallService } from "../ai/ai-call.service";
 import { AI_PROMPTS } from "../ai/ai-prompts";
 import { objectValue, scoreValue, stringArray, stringValue } from "../ai/ai-validators";
 import { TraceContextService } from "../observability/trace-context.service";
+import { FieldEncryptionService } from "../security/field-encryption.service";
 
 interface CreateGoalPayload {
   title: string;
@@ -218,7 +219,10 @@ export class GoalsService {
     private readonly aiCallService?: AiCallService,
     @Optional()
     @Inject(TraceContextService)
-    private readonly traces: TraceContextService = new TraceContextService()
+    private readonly traces: TraceContextService = new TraceContextService(),
+    @Optional()
+    @Inject(FieldEncryptionService)
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
   ) {}
 
   async analyzeGoal(userId: string, input: unknown) {
@@ -243,7 +247,7 @@ export class GoalsService {
       promptVersion: AI_PROMPTS.goalAnalysis.version,
       systemPrompt: AI_PROMPTS.goalAnalysis.system,
       context: { userId },
-      input: item,
+      input: this.buildGoalAnalysisAiInput(item),
       validate: (value) => {
         const data = objectValue(value);
         const structured = objectValue(data.structuredFields, "structuredFields");
@@ -298,11 +302,16 @@ export class GoalsService {
 
   async createGoal(userId: string, input: unknown) {
     const payload = this.parseCreateGoalPayload(input);
+    const description = this.fields.encrypt(payload.description);
+    const currentBaseline = this.fields.encryptNullable(payload.currentBaseline);
+    const constraints = this.fields.encryptNullable(payload.constraints);
+    const finalReward = this.fields.encryptNullable(payload.finalReward);
     const goal = await this.prisma.goal.create({
       data: {
         userId,
         title: payload.title,
-        description: payload.description,
+        description: description.ciphertext,
+        descriptionKeyVersion: description.keyVersion,
         category: payload.category,
         status: "DRAFT",
         startDate: payload.startDate,
@@ -320,9 +329,12 @@ export class GoalsService {
         dailyStudyMinutes: payload.dailyStudyMinutes,
         mockExamFrequency: payload.mockExamFrequency,
         toleranceDaysAllowed: payload.toleranceDaysAllowed,
-        currentBaseline: payload.currentBaseline,
-        constraints: payload.constraints,
-        finalReward: payload.finalReward
+        currentBaseline: currentBaseline.ciphertext,
+        currentBaselineKeyVersion: currentBaseline.ciphertext ? currentBaseline.keyVersion : undefined,
+        constraints: constraints.ciphertext,
+        constraintsKeyVersion: constraints.ciphertext ? constraints.keyVersion : undefined,
+        finalReward: finalReward.ciphertext,
+        finalRewardKeyVersion: finalReward.ciphertext ? finalReward.keyVersion : undefined
       }
     });
 
@@ -1758,11 +1770,17 @@ export class GoalsService {
     const payload = this.parseRestartGoalPayload(input);
     const startDate = payload.startDate ?? this.getDateRange(this.toDateKey(new Date())).start;
     const endDate = payload.endDate ?? this.addDays(startDate, this.getGoalDurationDays(original));
+    const originalPlain = this.decryptGoal(original);
+    const description = this.fields.encrypt(payload.description ?? originalPlain.description);
+    const currentBaseline = this.fields.encryptNullable(originalPlain.currentBaseline);
+    const constraints = this.fields.encryptNullable(originalPlain.constraints);
+    const finalReward = this.fields.encryptNullable(originalPlain.finalReward);
     const goal = await this.prisma.goal.create({
       data: {
         userId,
         title: payload.title ?? `${original.title}（重新开始）`,
-        description: payload.description ?? original.description,
+        description: description.ciphertext,
+        descriptionKeyVersion: description.keyVersion,
         category: original.category,
         status: "DRAFT",
         startDate,
@@ -1771,9 +1789,12 @@ export class GoalsService {
           payload.dailyTimeBudgetMinutes ?? original.dailyTimeBudgetMinutes,
         toleranceDaysAllowed:
           payload.toleranceDaysAllowed ?? original.toleranceDaysAllowed,
-        currentBaseline: original.currentBaseline,
-        constraints: original.constraints,
-        finalReward: original.finalReward
+        currentBaseline: currentBaseline.ciphertext,
+        currentBaselineKeyVersion: currentBaseline.ciphertext ? currentBaseline.keyVersion : undefined,
+        constraints: constraints.ciphertext,
+        constraintsKeyVersion: constraints.ciphertext ? constraints.keyVersion : undefined,
+        finalReward: finalReward.ciphertext,
+        finalRewardKeyVersion: finalReward.ciphertext ? finalReward.keyVersion : undefined
       }
     });
 
@@ -1845,27 +1866,28 @@ export class GoalsService {
     tasks: GoalSettlementTask[],
     missedDays: ReturnType<GoalsService["getMissedTaskDays"]>
   ) {
+    const plainGoal = this.decryptGoal(goal);
     const [lowScoreTasks, keyDeviationNodes] = await Promise.all([
       this.getLowScoreTasks(goal.id),
       this.getKeyDeviationNodes(goal.id)
     ]);
     const restartGoalDraft = {
       title: `${goal.title}（重新开始）`,
-      description: goal.description,
+      description: plainGoal.description,
       category: goal.category,
       dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes,
       toleranceDaysAllowed: goal.toleranceDaysAllowed,
-      currentBaseline: goal.currentBaseline,
-      constraints: goal.constraints,
-      finalReward: goal.finalReward
+      currentBaseline: plainGoal.currentBaseline,
+      constraints: plainGoal.constraints,
+      finalReward: plainGoal.finalReward
     };
     let reasonAnalysis = this.buildFailureReasonAnalysis({
-      goal,
+      goal: plainGoal,
       missedDays,
       lowScoreTaskCount: lowScoreTasks.length,
       keyDeviationCount: keyDeviationNodes.length
     });
-    let suggestion = this.buildFailureSuggestion(goal, missedDays, lowScoreTasks.length);
+    let suggestion = this.buildFailureSuggestion(plainGoal, missedDays, lowScoreTasks.length);
     if (this.useDeepSeek()) {
       try {
         const review = await this.aiCallService!.completeJson({
@@ -1873,7 +1895,7 @@ export class GoalsService {
           promptVersion: AI_PROMPTS.failureReview.version,
           systemPrompt: AI_PROMPTS.failureReview.system,
           context: { userId: goal.userId, goalId: goal.id },
-          input: { goal: { title: goal.title, description: goal.description }, missedDays, lowScoreTasks, keyDeviationNodes },
+          input: { goal: { title: goal.title, description: plainGoal.description }, missedDays, lowScoreTasks, keyDeviationNodes },
           validate: (value) => { const item = objectValue(value); return { reasonAnalysis: stringValue(item.reasonAnalysis, "reasonAnalysis"), suggestion: stringValue(item.suggestion, "suggestion") }; }
         });
         reasonAnalysis = review.reasonAnalysis;
@@ -1882,12 +1904,16 @@ export class GoalsService {
         // Deterministic report remains available when the provider fails.
       }
     }
+    const encryptedReason = this.fields.encrypt(reasonAnalysis);
+    const encryptedSuggestion = this.fields.encrypt(suggestion);
     const data = {
-      reasonAnalysis,
+      reasonAnalysis: encryptedReason.ciphertext,
+      reasonAnalysisKeyVersion: encryptedReason.keyVersion,
       brokenStreakTimeline: this.toJson(missedDays),
       lowScoreTasks: this.toJson(lowScoreTasks),
       keyDeviationNodes: this.toJson(keyDeviationNodes),
-      suggestion,
+      suggestion: encryptedSuggestion.ciphertext,
+      suggestionKeyVersion: encryptedSuggestion.keyVersion,
       restartGoalDraft: this.toJson(restartGoalDraft)
     };
     const existing = await this.prisma.failureReport.findUnique({
@@ -2530,11 +2556,30 @@ export class GoalsService {
     return process.env.AI_PROVIDER === "deepseek" && Boolean(this.aiCallService?.isConfigured());
   }
 
+  private buildGoalAnalysisAiInput(item: Record<string, unknown>) {
+    return {
+      title: typeof item.title === "string" ? item.title.trim().slice(0, 120) : "",
+      description: typeof item.description === "string" ? item.description.trim().slice(0, 2000) : "",
+      category: typeof item.category === "string" ? item.category.trim().slice(0, 60) : null,
+      examName: typeof item.examName === "string" ? item.examName.trim().slice(0, 120) : null,
+      targetScore: typeof item.targetScore === "string" ? item.targetScore.trim().slice(0, 120) : null,
+      currentScore: typeof item.currentScore === "string" ? item.currentScore.trim().slice(0, 120) : null,
+      targetDate: typeof item.targetDate === "string" ? item.targetDate.trim().slice(0, 40) : null,
+      subjects: Array.isArray(item.subjects)
+        ? item.subjects.filter((value): value is string => typeof value === "string").map((value) => value.trim().slice(0, 80)).filter(Boolean).slice(0, 20)
+        : [],
+      materials: Array.isArray(item.materials)
+        ? item.materials.filter((value): value is string => typeof value === "string").map((value) => value.trim().slice(0, 120)).filter(Boolean).slice(0, 20)
+        : []
+    };
+  }
+
   private async getRescueTaskDraft(
     goal: Goal,
     deviation: DeviationSignal,
     callContext?: { aiJobId?: string; attempt?: number }
   ) {
+    const plainGoal = this.decryptGoal(goal);
     if (this.useDeepSeek()) {
       try {
         const draft = await this.aiCallService!.completeJson({
@@ -2542,7 +2587,7 @@ export class GoalsService {
           promptVersion: AI_PROMPTS.rescue.version,
           systemPrompt: AI_PROMPTS.rescue.system,
           context: { userId: goal.userId, goalId: goal.id, ...callContext },
-          input: { goal: { title: goal.title, description: goal.description, dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes }, deviation },
+          input: { goal: { title: goal.title, description: plainGoal.description, dailyTimeBudgetMinutes: goal.dailyTimeBudgetMinutes }, deviation },
           validate: (value) => {
             const item = objectValue(value);
             const estimatedMinutes = Number(item.estimatedMinutes);
@@ -2952,11 +2997,22 @@ export class GoalsService {
     };
   }
 
+  private decryptGoal<T extends Goal>(goal: T): T {
+    return {
+      ...goal,
+      description: this.fields.decrypt(goal.description),
+      currentBaseline: this.fields.decryptNullable(goal.currentBaseline),
+      constraints: this.fields.decryptNullable(goal.constraints),
+      finalReward: this.fields.decryptNullable(goal.finalReward)
+    };
+  }
+
   private serializeGoal(goal: Goal) {
+    const plainGoal = this.decryptGoal(goal);
     return {
       id: goal.id,
       title: goal.title,
-      description: goal.description,
+      description: plainGoal.description,
       category: goal.category,
       status: goal.status,
       startDate: goal.startDate.toISOString(),
@@ -2976,9 +3032,9 @@ export class GoalsService {
       studyDaysPerWeek: goal.studyDaysPerWeek,
       dailyStudyMinutes: goal.dailyStudyMinutes,
       mockExamFrequency: goal.mockExamFrequency,
-      currentBaseline: goal.currentBaseline,
-      constraints: goal.constraints,
-      finalReward: goal.finalReward,
+      currentBaseline: plainGoal.currentBaseline,
+      constraints: plainGoal.constraints,
+      finalReward: plainGoal.finalReward,
       createdAt: goal.createdAt.toISOString(),
       updatedAt: goal.updatedAt.toISOString()
     };
@@ -3009,11 +3065,11 @@ export class GoalsService {
       id: report.id,
       goalId: report.goalId,
       goalTitle: "goal" in report ? report.goal.title : undefined,
-      reasonAnalysis: report.reasonAnalysis,
+      reasonAnalysis: this.fields.decrypt(report.reasonAnalysis),
       brokenStreakTimeline: this.jsonArray(report.brokenStreakTimeline),
       lowScoreTasks: this.jsonArray(report.lowScoreTasks),
       keyDeviationNodes: this.jsonArray(report.keyDeviationNodes),
-      suggestion: report.suggestion,
+      suggestion: this.fields.decrypt(report.suggestion),
       restartGoalDraft: this.jsonObject(report.restartGoalDraft),
       createdAt: report.createdAt.toISOString(),
       updatedAt: report.updatedAt.toISOString()

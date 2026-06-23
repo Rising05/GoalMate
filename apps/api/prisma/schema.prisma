@@ -72,13 +72,20 @@ enum AiJobStatus {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  email        String     @unique
-  passwordHash String
-  displayName  String?
-  status       UserStatus @default(ACTIVE)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id                      String     @id @default(cuid())
+  email                   String     @unique
+  passwordHash            String
+  displayName             String?
+  status                  UserStatus @default(ACTIVE)
+  termsVersion            String?
+  termsAcceptedAt         DateTime?
+  privacyVersion          String?
+  privacyAcceptedAt       DateTime?
+  aiDisclosureVersion     String?
+  aiDisclosureAcceptedAt  DateTime?
+  requiresTermsAcceptance Boolean    @default(false)
+  createdAt               DateTime   @default(now())
+  updatedAt               DateTime   @updatedAt
 
   membership             Membership?
   goals                  Goal[]
@@ -92,8 +99,8 @@ model User {
   auditLogs              AuditLog[]
   paymentOrders          PaymentOrder[]
   paymentEvents          PaymentEvent[]
-  membershipAudits       MembershipAudit[] @relation("MembershipAuditUser")
-  membershipAuditActions MembershipAudit[] @relation("MembershipAuditActor")
+  membershipAudits       MembershipAudit[]       @relation("MembershipAuditUser")
+  membershipAuditActions MembershipAudit[]       @relation("MembershipAuditActor")
   entitlements           Entitlement[]
   usageRecords           UsageRecord[]
   quotaBuckets           QuotaBucket[]
@@ -117,14 +124,15 @@ model AdminUser {
 }
 
 model AuditLog {
-  id          String   @id @default(cuid())
-  actorUserId String
-  action      String
-  targetType  String
-  targetId    String?
-  reason      String?  @db.Text
-  metadata    Json
-  createdAt   DateTime @default(now())
+  id               String   @id @default(cuid())
+  actorUserId      String
+  action           String
+  targetType       String
+  targetId         String?
+  reason           String?  @db.Text
+  reasonKeyVersion String?
+  metadata         Json
+  createdAt        DateTime @default(now())
 
   actor User @relation(fields: [actorUserId], references: [id], onDelete: Cascade)
 
@@ -146,17 +154,17 @@ model SystemConfig {
 }
 
 model NotificationPreference {
-  id            String   @id @default(cuid())
-  userId        String   @unique
-  enabled       Boolean  @default(true)
-  reminderTime  String   @default("09:00")
-  reminderTypes Json
-  channels      Json?
-  timezone      String   @default("Asia/Shanghai")
-  silentDays    Json?
-  examSprintDays Int     @default(14)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  enabled        Boolean  @default(true)
+  reminderTime   String   @default("09:00")
+  reminderTypes  Json
+  channels       Json?
+  timezone       String   @default("Asia/Shanghai")
+  silentDays     Json?
+  examSprintDays Int      @default(14)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -164,29 +172,29 @@ model NotificationPreference {
 }
 
 model EmailLog {
-  id             String    @id @default(cuid())
-  traceId        String?
-  userId         String
-  goalId         String?
-  channel        String    @default("EMAIL")
-  type           String
-  recipientEmail String
-  subject        String
-  content        String    @db.Text
-  status         String    @default("QUEUED")
-  attempts       Int       @default(0)
-  provider       String?
+  id                String    @id @default(cuid())
+  traceId           String?
+  userId            String
+  goalId            String?
+  channel           String    @default("EMAIL")
+  type              String
+  recipientEmail    String
+  subject           String
+  content           String    @db.Text
+  status            String    @default("QUEUED")
+  attempts          Int       @default(0)
+  provider          String?
   providerMessageId String?
-  errorCode      String?
-  error          String?   @db.Text
-  source         String    @default("MANUAL")
-  schedulerRunId String?
-  dedupeKey      String?   @unique
-  skipReason     String?   @db.Text
-  scheduledFor   DateTime?
-  sentAt         DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  errorCode         String?
+  error             String?   @db.Text
+  source            String    @default("MANUAL")
+  schedulerRunId    String?
+  dedupeKey         String?   @unique
+  skipReason        String?   @db.Text
+  scheduledFor      DateTime?
+  sentAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -200,16 +208,20 @@ model EmailLog {
 }
 
 model WechatBinding {
-  id        String    @id @default(cuid())
-  userId    String    @unique
-  openId    String    @unique
-  unionId   String?   @unique
-  nickname  String?
-  avatarUrl String?   @db.Text
-  status    String    @default("ACTIVE")
-  boundAt   DateTime  @default(now())
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  openId            String
+  openIdHash        String?  @unique
+  openIdKeyVersion  String?
+  unionId           String?
+  unionIdHash       String?  @unique
+  unionIdKeyVersion String?
+  nickname          String?
+  avatarUrl         String?  @db.Text
+  status            String   @default("ACTIVE")
+  boundAt           DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -218,37 +230,37 @@ model WechatBinding {
 }
 
 model UploadAsset {
-  id              String   @id @default(cuid())
-  userId          String
-  goalId          String?
-  source          String   @default("WEB")
-  purpose         String   @default("CHECKIN_EVIDENCE")
-  fileName        String
-  mimeType        String
-  sizeBytes       Int
-  checksumSha256  String?
-  storageProvider String   @default("LOCAL_PLACEHOLDER")
-  objectKey       String   @unique
-  publicUrl       String?  @db.Text
-  status          String   @default("READY")
-  scanStatus      String   @default("NOT_REQUIRED")
-  scanResult      String?  @db.Text
-  verifiedMimeType String?
-  verifiedSizeBytes Int?
-  uploadExpiresAt DateTime?
-  scanAttempts    Int      @default(0)
-  scanStartedAt   DateTime?
-  scanCompletedAt DateTime?
-  deleteAttempts  Int      @default(0)
-  deleteError     String?  @db.Text
+  id                  String    @id @default(cuid())
+  userId              String
+  goalId              String?
+  source              String    @default("WEB")
+  purpose             String    @default("CHECKIN_EVIDENCE")
+  fileName            String
+  mimeType            String
+  sizeBytes           Int
+  checksumSha256      String?
+  storageProvider     String    @default("LOCAL_PLACEHOLDER")
+  objectKey           String    @unique
+  publicUrl           String?   @db.Text
+  status              String    @default("READY")
+  scanStatus          String    @default("NOT_REQUIRED")
+  scanResult          String?   @db.Text
+  verifiedMimeType    String?
+  verifiedSizeBytes   Int?
+  uploadExpiresAt     DateTime?
+  scanAttempts        Int       @default(0)
+  scanStartedAt       DateTime?
+  scanCompletedAt     DateTime?
+  deleteAttempts      Int       @default(0)
+  deleteError         String?   @db.Text
   lastDeleteAttemptAt DateTime?
-  uploadedAt      DateTime?
-  deletedAt       DateTime?
-  metadata        Json?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  uploadedAt          DateTime?
+  deletedAt           DateTime?
+  metadata            Json?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   goal Goal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
@@ -261,17 +273,17 @@ model UploadAsset {
 }
 
 model ObjectDeletionJob {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   storageProvider String
-  objectKey       String?  @db.Text
+  objectKey       String?   @db.Text
   objectKeyHash   String
   sourceType      String
   sourceId        String?
-  status          String   @default("QUEUED")
-  attempts        Int      @default(0)
-  error           String?  @db.Text
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  status          String    @default("QUEUED")
+  attempts        Int       @default(0)
+  error           String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
   completedAt     DateTime?
 
   @@unique([storageProvider, objectKeyHash])
@@ -294,16 +306,16 @@ model Membership {
 }
 
 model Entitlement {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   userId     String
   capability String
   limitValue Int?
-  source     String   @default("ADMIN")
-  validFrom  DateTime @default(now())
+  source     String    @default("ADMIN")
+  validFrom  DateTime  @default(now())
   validUntil DateTime?
   metadata   Json?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -312,17 +324,17 @@ model Entitlement {
 }
 
 model UsageRecord {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   userId         String
   capability     String
-  quantity       Int      @default(1)
+  quantity       Int       @default(1)
   periodKey      String
-  idempotencyKey String   @unique
+  idempotencyKey String    @unique
   resourceType   String?
   resourceId     String?
   metadata       Json?
   releasedAt     DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -332,15 +344,15 @@ model UsageRecord {
 }
 
 model QuotaBucket {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   userId     String
   capability String
   periodKey  String
-  used       Int      @default(0)
+  used       Int       @default(0)
   limitValue Int
   resetAt    DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -350,22 +362,22 @@ model QuotaBucket {
 }
 
 model PaymentOrder {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   userId          String
   provider        String
   plan            String
   durationDays    Int
   amountCents     Int
-  currency        String   @default("CNY")
-  status          String   @default("PENDING")
-  providerOrderId String?  @unique
-  checkoutUrl     String?  @db.Text
+  currency        String    @default("CNY")
+  status          String    @default("PENDING")
+  providerOrderId String?   @unique
+  checkoutUrl     String?   @db.Text
   paidAt          DateTime?
   expiresAt       DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   events PaymentEvent[]
   audits MembershipAudit[]
 
@@ -375,15 +387,15 @@ model PaymentOrder {
 }
 
 model PaymentEvent {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   orderId         String?
   userId          String
   provider        String
-  providerEventId String   @unique
+  providerEventId String    @unique
   type            String
   payload         Json
   processedAt     DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
 
   order PaymentOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
   user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -394,19 +406,20 @@ model PaymentEvent {
 }
 
 model MembershipAudit {
-  id          String   @id @default(cuid())
-  userId      String
-  actorUserId String?
-  orderId     String?
-  action      String
-  fromPlan    String?
-  toPlan      String
-  fromStatus  String?
-  toStatus    String
-  expiresAt   DateTime?
-  reason      String?  @db.Text
-  metadata    Json
-  createdAt   DateTime @default(now())
+  id               String    @id @default(cuid())
+  userId           String
+  actorUserId      String?
+  orderId          String?
+  action           String
+  fromPlan         String?
+  toPlan           String
+  fromStatus       String?
+  toStatus         String
+  expiresAt        DateTime?
+  reason           String?   @db.Text
+  reasonKeyVersion String?
+  metadata         Json
+  createdAt        DateTime  @default(now())
 
   user  User          @relation("MembershipAuditUser", fields: [userId], references: [id], onDelete: Cascade)
   actor User?         @relation("MembershipAuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
@@ -418,34 +431,38 @@ model MembershipAudit {
 }
 
 model Goal {
-  id                     String       @id @default(cuid())
-  userId                 String
-  title                  String
-  description            String       @db.Text
-  category               GoalCategory @default(CUSTOM)
-  status                 GoalStatus   @default(DRAFT)
-  startDate              DateTime
-  endDate                DateTime
-  timezone               String       @default("Asia/Shanghai")
-  toleranceDaysAllowed   Int          @default(0)
-  toleranceDaysUsed      Int          @default(0)
-  dailyTimeBudgetMinutes Int?
-  examName               String?
-  targetScore            String?
-  currentScore           String?
-  examDate               DateTime?
-  subjects               Json?
-  materials              Json?
-  chapters               Json?
-  weaknesses             Json?
-  studyDaysPerWeek       Int?
-  dailyStudyMinutes      Int?
-  mockExamFrequency      String?
-  currentBaseline        String?      @db.Text
-  constraints            String?      @db.Text
-  finalReward            String?      @db.Text
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
+  id                        String       @id @default(cuid())
+  userId                    String
+  title                     String
+  description               String       @db.Text
+  descriptionKeyVersion     String?
+  category                  GoalCategory @default(CUSTOM)
+  status                    GoalStatus   @default(DRAFT)
+  startDate                 DateTime
+  endDate                   DateTime
+  timezone                  String       @default("Asia/Shanghai")
+  toleranceDaysAllowed      Int          @default(0)
+  toleranceDaysUsed         Int          @default(0)
+  dailyTimeBudgetMinutes    Int?
+  examName                  String?
+  targetScore               String?
+  currentScore              String?
+  examDate                  DateTime?
+  subjects                  Json?
+  materials                 Json?
+  chapters                  Json?
+  weaknesses                Json?
+  studyDaysPerWeek          Int?
+  dailyStudyMinutes         Int?
+  mockExamFrequency         String?
+  currentBaseline           String?      @db.Text
+  currentBaselineKeyVersion String?
+  constraints               String?      @db.Text
+  constraintsKeyVersion     String?
+  finalReward               String?      @db.Text
+  finalRewardKeyVersion     String?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
 
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   plan            Plan?
@@ -466,16 +483,18 @@ model Goal {
 }
 
 model FailureReport {
-  id                   String   @id @default(cuid())
-  goalId               String   @unique
-  reasonAnalysis       String   @db.Text
-  brokenStreakTimeline Json
-  lowScoreTasks        Json
-  keyDeviationNodes    Json
-  suggestion           String   @db.Text
-  restartGoalDraft     Json
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                       String   @id @default(cuid())
+  goalId                   String   @unique
+  reasonAnalysis           String   @db.Text
+  reasonAnalysisKeyVersion String?
+  brokenStreakTimeline     Json
+  lowScoreTasks            Json
+  keyDeviationNodes        Json
+  suggestion               String   @db.Text
+  suggestionKeyVersion     String?
+  restartGoalDraft         Json
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
 
@@ -483,18 +502,19 @@ model FailureReport {
 }
 
 model RewardCard {
-  id          String   @id @default(cuid())
-  goalId      String
-  title       String
-  description String?  @db.Text
-  cardType    String   @default("TEXT")
-  sourceType  String   @default("CUSTOM")
-  sourceRefId String?
-  imageUrl    String?  @db.Text
-  linkUrl     String?  @db.Text
-  sortOrder   Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  goalId                String
+  title                 String
+  description           String?  @db.Text
+  descriptionKeyVersion String?
+  cardType              String   @default("TEXT")
+  sourceType            String   @default("CUSTOM")
+  sourceRefId           String?
+  imageUrl              String?  @db.Text
+  linkUrl               String?  @db.Text
+  sortOrder             Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
 
@@ -665,24 +685,27 @@ model ReportArtifact {
 }
 
 model Checkin {
-  id                   String        @id @default(cuid())
-  userId               String
-  goalId               String
-  dailyTaskId          String?
-  status               CheckinStatus @default(SUBMITTED)
-  content              String        @db.Text
-  investedMinutes      Int?
-  completedSubtasks    Json?
-  actualQuestionCount  Int?
-  correctQuestionCount Int?
-  accuracy             Int?
-  evidenceFiles        Json?
-  evidenceLinks        Json?
-  studyMood            String?
-  difficultyLevel      String?
-  submittedAt          DateTime      @default(now())
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  id                        String        @id @default(cuid())
+  userId                    String
+  goalId                    String
+  dailyTaskId               String?
+  status                    CheckinStatus @default(SUBMITTED)
+  content                   String        @db.Text
+  contentKeyVersion         String?
+  investedMinutes           Int?
+  completedSubtasks         Json?
+  actualQuestionCount       Int?
+  correctQuestionCount      Int?
+  accuracy                  Int?
+  evidenceFiles             Json?
+  evidenceLinks             Json?
+  studyMood                 String?
+  studyMoodKeyVersion       String?
+  difficultyLevel           String?
+  difficultyLevelKeyVersion String?
+  submittedAt               DateTime      @default(now())
+  createdAt                 DateTime      @default(now())
+  updatedAt                 DateTime      @updatedAt
 
   goal         Goal          @relation(fields: [goalId], references: [id], onDelete: Cascade)
   dailyTask    DailyTask?    @relation(fields: [dailyTaskId], references: [id], onDelete: SetNull)
@@ -694,17 +717,19 @@ model Checkin {
 }
 
 model ScoreAppeal {
-  id            String   @id @default(cuid())
-  userId        String
-  checkinId     String
-  reason        String   @db.Text
-  addedFacts    String   @db.Text
-  status        String   @default("PENDING")
-  originalScore Int
-  newScore      Int?
-  evidence      Json
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  userId               String
+  checkinId            String
+  reason               String   @db.Text
+  reasonKeyVersion     String?
+  addedFacts           String   @db.Text
+  addedFactsKeyVersion String?
+  status               String   @default("PENDING")
+  originalScore        Int
+  newScore             Int?
+  evidence             Json
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   checkin Checkin @relation(fields: [checkinId], references: [id], onDelete: Cascade)
@@ -744,8 +769,8 @@ model AiJob {
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
-  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  goal Goal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal       Goal?       @relation(fields: [goalId], references: [id], onDelete: SetNull)
   aiCallLogs AiCallLog[]
 
   @@index([status, type])

@@ -15,13 +15,17 @@ import { AiModule } from "./ai/ai.module";
 import { ObservabilityModule } from "./observability/observability.module";
 import { RequestTracingMiddleware } from "./observability/request-tracing.middleware";
 import { ObjectLifecycleModule } from "./object-lifecycle/object-lifecycle.module";
+import { SecurityModule } from "./security/security.module";
+import { LegalModule } from "./legal/legal.module";
 
 @Module({
   imports: [
     PrismaModule,
+    SecurityModule,
     AiModule,
     ObservabilityModule,
     ObjectLifecycleModule,
+    LegalModule,
     AuthModule,
     GoalsModule,
     DailyTasksModule,

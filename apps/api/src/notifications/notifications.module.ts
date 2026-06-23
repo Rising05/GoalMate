@@ -12,9 +12,10 @@ import { NotificationsWorker } from "./notifications.worker";
 import { ResendMailProvider } from "./resend-mail.provider";
 import { WECHAT_PROVIDER } from "./wechat-provider";
 import { WechatSubscribeProvider } from "./wechat-subscribe.provider";
+import { SecurityModule } from "../security/security.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule, QueueModule],
+  imports: [AuthModule, PrismaModule, QueueModule, SecurityModule],
   controllers: [NotificationsController],
   providers: [
     NotificationsService,

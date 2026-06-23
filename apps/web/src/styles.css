@@ -726,6 +726,28 @@ textarea:focus {
   line-height: 1.55;
 }
 
+.auth-legal {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.auth-legal p,
+.auth-legal ul {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.auth-legal ul {
+  padding-left: 18px;
+}
+
 .summary-strip {
   display: flex;
   flex-wrap: wrap;

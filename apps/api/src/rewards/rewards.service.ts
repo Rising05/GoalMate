@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { Goal, Milestone, RewardCard } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { QuotaService } from "../quota/quota.service";
+import { FieldEncryptionService } from "../security/field-encryption.service";
 
 type RewardGoal = Goal & {
   milestones: Milestone[];
@@ -37,7 +38,10 @@ export class RewardsService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Optional()
     @Inject(QuotaService)
-    private readonly quotaService: QuotaService = new QuotaService(prisma)
+    private readonly quotaService: QuotaService = new QuotaService(prisma),
+    @Optional()
+    @Inject(FieldEncryptionService)
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
   ) {}
 
   async getRewardBoard(userId: string, goalId: string) {
@@ -57,6 +61,7 @@ export class RewardsService {
         where: { goalId }
       }));
     const cardId = randomUUID();
+    const description = this.fields.encryptNullable(payload.description);
     const card = await this.quotaService.runWithQuota(
       userId,
       "REWARD_CARD",
@@ -69,7 +74,8 @@ export class RewardsService {
         id: cardId,
         goalId,
         title: payload.title,
-        description: payload.description,
+        description: description.ciphertext,
+        descriptionKeyVersion: description.ciphertext ? description.keyVersion : undefined,
         cardType: payload.cardType,
         sourceType: CUSTOM_SOURCE_TYPE,
         imageUrl: payload.imageUrl,
@@ -109,7 +115,10 @@ export class RewardsService {
     }
 
     if (payload.description !== undefined) {
-      data.description = payload.description;
+      const description = this.fields.encryptNullable(payload.description);
+      data.description = description.ciphertext;
+      (data as { descriptionKeyVersion?: string | null }).descriptionKeyVersion =
+        description.ciphertext ? description.keyVersion : null;
     }
 
     if (payload.cardType) {
@@ -226,14 +235,15 @@ export class RewardsService {
   private async syncAnchorCards(goal: RewardGoal) {
     const operations: Promise<unknown>[] = [];
 
-    if (goal.finalReward?.trim()) {
+    const finalReward = this.fields.decryptNullable(goal.finalReward);
+    if (finalReward?.trim()) {
       operations.push(
         this.upsertAnchorCard({
           goalId: goal.id,
           sourceType: FINAL_SOURCE_TYPE,
           sourceRefId: goal.id,
           title: "最终奖励",
-          description: goal.finalReward.trim(),
+          description: finalReward.trim(),
           sortOrder: 0
         })
       );
@@ -276,23 +286,27 @@ export class RewardsService {
     });
 
     if (existing) {
+      const description = this.fields.encrypt(input.description);
       return this.prisma.rewardCard.update({
         where: { id: existing.id },
         data: {
           title: input.title,
-          description: input.description,
+          description: description.ciphertext,
+          descriptionKeyVersion: description.keyVersion,
           sortOrder: input.sortOrder
         }
       });
     }
 
+    const description = this.fields.encrypt(input.description);
     return this.prisma.rewardCard.create({
       data: {
         goalId: input.goalId,
         sourceType: input.sourceType,
         sourceRefId: input.sourceRefId,
         title: input.title,
-        description: input.description,
+        description: description.ciphertext,
+        descriptionKeyVersion: description.keyVersion,
         cardType: "TEXT",
         sortOrder: input.sortOrder
       }
@@ -385,7 +399,7 @@ export class RewardsService {
     return {
       goalId: goal.id,
       goalTitle: goal.title,
-      finalReward: goal.finalReward,
+      finalReward: this.fields.decryptNullable(goal.finalReward),
       cards: goal.rewardCards.map((card) => this.serializeRewardCard(card)),
       limits: {
         freeCustomCards: FREE_CUSTOM_CARD_LIMIT,
@@ -399,7 +413,7 @@ export class RewardsService {
       id: card.id,
       goalId: card.goalId,
       title: card.title,
-      description: card.description,
+      description: this.fields.decryptNullable(card.description),
       cardType: card.cardType,
       sourceType: card.sourceType,
       sourceRefId: card.sourceRefId,

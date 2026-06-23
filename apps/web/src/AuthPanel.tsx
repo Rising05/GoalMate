@@ -105,8 +105,31 @@ export function AuthPanel({ onAuthenticated }: AuthPanelProps) {
         </button>
       </form>
 
+      {mode === "register" ? (
+        <div className="auth-legal">
+          <p>
+            创建账号即表示你已阅读并同意 GoalMate 服务条款、隐私政策和 AI
+            使用说明。
+          </p>
+          <ul>
+            <li>
+              服务条款：<code>terms-2026-06-23</code>
+            </li>
+            <li>
+              隐私政策：<code>privacy-2026-06-23</code>
+            </li>
+            <li>
+              AI 使用说明：<code>ai-disclosure-2026-06-23</code>
+            </li>
+          </ul>
+          <p>
+            敏感原文会进行应用层加密；AI 请求只发送当前能力所需字段，不发送邮箱、
+            昵称、密码或支付密钥。
+          </p>
+        </div>
+      ) : null}
+
       <p className="auth-message">{message}</p>
     </section>
   );
 }
-

@@ -21,6 +21,7 @@ import { PLAN_PROVIDER, PlanProvider } from "./plan-provider";
 import { QuotaService } from "../quota/quota.service";
 import { TraceContextService } from "../observability/trace-context.service";
 import { randomUUID } from "node:crypto";
+import { FieldEncryptionService } from "../security/field-encryption.service";
 
 const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
 const GOAL_PLAN_REPLAN = "GOAL_PLAN_REPLAN";
@@ -48,7 +49,10 @@ export class AiJobsService {
     private readonly quotaService: QuotaService = new QuotaService(prisma),
     @Optional()
     @Inject(TraceContextService)
-    private readonly traces: TraceContextService = new TraceContextService()
+    private readonly traces: TraceContextService = new TraceContextService(),
+    @Optional()
+    @Inject(FieldEncryptionService)
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
   ) {}
 
   async generateGoalPlan(userId: string, goalId: string) {
@@ -85,22 +89,15 @@ export class AiJobsService {
         status: "QUEUED",
         payload: {
           goalId,
-            title: goal.title,
-            description: goal.description,
+          provider: this.planProvider.name,
+          inputSummary: {
+            hasDescription: Boolean(goal.description),
             category: goal.category,
-            examName: goal.examName,
-            targetScore: goal.targetScore,
-            currentScore: goal.currentScore,
-            examDate: goal.examDate?.toISOString() ?? null,
-            subjects: goal.subjects,
-            materials: goal.materials,
-            chapters: goal.chapters,
-            weaknesses: goal.weaknesses,
-            studyDaysPerWeek: goal.studyDaysPerWeek,
-            dailyStudyMinutes: goal.dailyStudyMinutes,
-            mockExamFrequency: goal.mockExamFrequency,
-            provider: this.planProvider.name
+            hasExamDate: Boolean(goal.examDate),
+            subjectCount: this.jsonArray(goal.subjects).length,
+            materialCount: this.jsonArray(goal.materials).length
           }
+        }
       } })
     );
     const job = await this.attachQueueMetadata(createdJob);
@@ -177,6 +174,8 @@ export class AiJobsService {
       where: { goalId },
       select: { version: true }
     });
+    const encryptedConstraints = this.fields.encryptNullable(payload.constraints);
+    const encryptedCurrentBaseline = this.fields.encryptNullable(payload.currentBaseline);
     const nextVersion = (currentPlan?.version ?? 0) + 1;
     const jobId = randomUUID();
     const { updatedGoal, createdJob } = await this.quotaService.runWithQuota(
@@ -194,8 +193,18 @@ export class AiJobsService {
             status: "REPLANNING",
             dailyTimeBudgetMinutes:
               payload.dailyTimeBudgetMinutes ?? goal.dailyTimeBudgetMinutes,
-            constraints: payload.constraints ?? goal.constraints,
-            currentBaseline: payload.currentBaseline ?? goal.currentBaseline
+            constraints: payload.constraints !== undefined
+              ? encryptedConstraints.ciphertext
+              : goal.constraints,
+            constraintsKeyVersion: payload.constraints !== undefined
+              ? (encryptedConstraints.ciphertext ? encryptedConstraints.keyVersion : null)
+              : goal.constraintsKeyVersion,
+            currentBaseline: payload.currentBaseline !== undefined
+              ? encryptedCurrentBaseline.ciphertext
+              : goal.currentBaseline,
+            currentBaselineKeyVersion: payload.currentBaseline !== undefined
+              ? (encryptedCurrentBaseline.ciphertext ? encryptedCurrentBaseline.keyVersion : null)
+              : goal.currentBaselineKeyVersion
           }
         });
         const createdJob = await tx.aiJob.create({
@@ -211,9 +220,9 @@ export class AiJobsService {
               previousStatus: goal.status,
               previousPlanVersion: currentPlan?.version ?? null,
               nextPlanVersion: nextVersion,
-              adjustmentReason: payload.adjustmentReason,
-              constraints: payload.constraints,
-              currentBaseline: payload.currentBaseline,
+              adjustmentReasonLength: payload.adjustmentReason.length,
+              constraintsUpdated: payload.constraints !== undefined,
+              currentBaselineUpdated: payload.currentBaseline !== undefined,
               dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
               provider: this.planProvider.name
             }
@@ -692,7 +701,7 @@ export class AiJobsService {
       });
 
       try {
-        return await this.planProvider.generate(goal, {
+        return await this.planProvider.generate(this.decryptGoal(goal), {
           userId: goal.userId,
           goalId: goal.id,
           aiJobId: jobId,
@@ -865,10 +874,11 @@ export class AiJobsService {
   }
 
   private serializeGoal(goal: Goal) {
+    const plainGoal = this.decryptGoal(goal);
     return {
       id: goal.id,
       title: goal.title,
-      description: goal.description,
+      description: plainGoal.description,
       category: goal.category,
       status: goal.status,
       startDate: goal.startDate.toISOString(),
@@ -888,11 +898,21 @@ export class AiJobsService {
       studyDaysPerWeek: goal.studyDaysPerWeek,
       dailyStudyMinutes: goal.dailyStudyMinutes,
       mockExamFrequency: goal.mockExamFrequency,
-      currentBaseline: goal.currentBaseline,
-      constraints: goal.constraints,
-      finalReward: goal.finalReward,
+      currentBaseline: plainGoal.currentBaseline,
+      constraints: plainGoal.constraints,
+      finalReward: plainGoal.finalReward,
       createdAt: goal.createdAt.toISOString(),
       updatedAt: goal.updatedAt.toISOString()
+    };
+  }
+
+  private decryptGoal<T extends Goal>(goal: T): T {
+    return {
+      ...goal,
+      description: this.fields.decrypt(goal.description),
+      currentBaseline: this.fields.decryptNullable(goal.currentBaseline),
+      constraints: this.fields.decryptNullable(goal.constraints),
+      finalReward: this.fields.decryptNullable(goal.finalReward)
     };
   }
 

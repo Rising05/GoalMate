@@ -11,6 +11,7 @@ import { DeepSeekPlanProvider } from "./deepseek-plan.provider";
 import { MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER } from "./plan-provider";
 import { QuotaModule } from "../quota/quota.module";
+import { SecurityModule } from "../security/security.module";
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { QuotaModule } from "../quota/quota.module";
     QueueModule,
     DailyTasksModule,
     QuotaModule,
+    SecurityModule,
     forwardRef(() => GoalsModule)
   ],
   controllers: [AiJobsController],

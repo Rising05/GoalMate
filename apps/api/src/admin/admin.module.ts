@@ -6,9 +6,10 @@ import { NotificationsModule } from "../notifications/notifications.module";
 import { AdminController } from "./admin.controller";
 import { AdminService } from "./admin.service";
 import { UploadsModule } from "../uploads/uploads.module";
+import { SecurityModule } from "../security/security.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule, QueueModule, NotificationsModule, UploadsModule],
+  imports: [AuthModule, PrismaModule, QueueModule, NotificationsModule, UploadsModule, SecurityModule],
   controllers: [AdminController],
   providers: [AdminService]
 })

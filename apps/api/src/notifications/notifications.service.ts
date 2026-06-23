@@ -14,6 +14,7 @@ import { MAIL_PROVIDER, MailProvider } from "./mail-provider";
 import { MockMailProvider } from "./mock-mail.provider";
 import { MockWechatProvider } from "./mock-wechat.provider";
 import { WECHAT_PROVIDER, WechatProvider } from "./wechat-provider";
+import { FieldEncryptionService } from "../security/field-encryption.service";
 
 const DEFAULT_REMINDER_TYPES = [
   "DAILY_TASK",
@@ -65,7 +66,10 @@ export class NotificationsService {
     private readonly wechatProvider: WechatProvider = new MockWechatProvider(),
     @Optional()
     @Inject(TraceContextService)
-    private readonly traces: TraceContextService = new TraceContextService()
+    private readonly traces: TraceContextService = new TraceContextService(),
+    @Optional()
+    @Inject(FieldEncryptionService)
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
   ) {}
 
   async getPreference(userId: string) {
@@ -125,19 +129,45 @@ export class NotificationsService {
 
   async bindWechat(userId: string, input: unknown) {
     const payload = this.parseWechatBindingPayload(input);
+    const openIdHash = this.fields.blindIndex(payload.openId);
+    const unionIdHash = this.fields.blindIndex(payload.unionId);
+    const existing = await this.prisma.wechatBinding.findFirst({
+      where: {
+        OR: [
+          { openIdHash },
+          ...(unionIdHash ? [{ unionIdHash }] : [])
+        ],
+        NOT: { userId }
+      }
+    });
+
+    if (existing) {
+      throw new BadRequestException("该微信账号已绑定其他用户");
+    }
+
+    const openId = this.fields.encrypt(payload.openId);
+    const unionId = this.fields.encryptNullable(payload.unionId);
     const binding = await this.prisma.wechatBinding.upsert({
       where: { userId },
       create: {
         userId,
-        openId: payload.openId,
-        unionId: payload.unionId,
+        openId: openId.ciphertext,
+        openIdHash,
+        openIdKeyVersion: openId.keyVersion,
+        unionId: unionId.ciphertext,
+        unionIdHash,
+        unionIdKeyVersion: unionId.ciphertext ? unionId.keyVersion : undefined,
         nickname: payload.nickname,
         avatarUrl: payload.avatarUrl,
         status: "ACTIVE"
       },
       update: {
-        openId: payload.openId,
-        unionId: payload.unionId,
+        openId: openId.ciphertext,
+        openIdHash,
+        openIdKeyVersion: openId.keyVersion,
+        unionId: unionId.ciphertext,
+        unionIdHash,
+        unionIdKeyVersion: unionId.ciphertext ? unionId.keyVersion : null,
         nickname: payload.nickname,
         avatarUrl: payload.avatarUrl,
         status: "ACTIVE",
@@ -1159,7 +1189,7 @@ export class NotificationsService {
     }
 
     if (channel === "WECHAT" && user.wechatBinding?.status === "ACTIVE") {
-      return user.wechatBinding.openId;
+      return this.fields.decrypt(user.wechatBinding.openId);
     }
 
     return null;
@@ -1318,8 +1348,8 @@ export class NotificationsService {
     return {
       id: binding.id,
       userId: binding.userId,
-      openId: binding.openId,
-      unionId: binding.unionId,
+      openId: this.fields.decrypt(binding.openId),
+      unionId: this.fields.decryptNullable(binding.unionId),
       nickname: binding.nickname,
       avatarUrl: binding.avatarUrl,
       status: binding.status,

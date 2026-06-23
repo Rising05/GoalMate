@@ -26,6 +26,7 @@ import { AI_PROMPTS } from "../ai/ai-prompts";
 import { objectValue, scoreValue, stringValue } from "../ai/ai-validators";
 import { TraceContextService } from "../observability/trace-context.service";
 import { randomUUID } from "node:crypto";
+import { FieldEncryptionService } from "../security/field-encryption.service";
 
 type TaskWithGoalAndCheckins = DailyTask & {
   goal: Goal;
@@ -142,7 +143,10 @@ export class DailyTasksService {
     private readonly aiCallService?: AiCallService,
     @Optional()
     @Inject(TraceContextService)
-    private readonly traces: TraceContextService = new TraceContextService()
+    private readonly traces: TraceContextService = new TraceContextService(),
+    @Optional()
+    @Inject(FieldEncryptionService)
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
   ) {}
 
   async getTodayTasks(userId: string, goalId?: string) {
@@ -437,6 +441,7 @@ export class DailyTasksService {
     await this.assertEvidenceUploadsOwned(userId, payload.evidenceFiles);
 
     const investedMinutes = payload.investedMinutes ?? task.plannedMinutes ?? 0;
+    const encryptedCheckin = this.encryptCheckinPayload(payload);
 
     if (this.shouldQueueCheckinScoring()) {
       const { completedTask, checkin, job } = await this.prisma.$transaction(
@@ -452,7 +457,8 @@ export class DailyTasksService {
               goalId: task.goalId,
               dailyTaskId: task.id,
               status: "SCORING",
-              content: payload.content,
+              content: encryptedCheckin.content.ciphertext,
+              contentKeyVersion: encryptedCheckin.content.keyVersion,
               investedMinutes,
               completedSubtasks: payload.completedSubtasks.length
                 ? this.toJson(payload.completedSubtasks)
@@ -466,8 +472,10 @@ export class DailyTasksService {
               evidenceLinks: payload.evidenceLinks.length
                 ? this.toJson(payload.evidenceLinks)
                 : undefined,
-              studyMood: payload.studyMood,
-              difficultyLevel: payload.difficultyLevel
+              studyMood: encryptedCheckin.studyMood.ciphertext,
+              studyMoodKeyVersion: encryptedCheckin.studyMood.ciphertext ? encryptedCheckin.studyMood.keyVersion : undefined,
+              difficultyLevel: encryptedCheckin.difficultyLevel.ciphertext,
+              difficultyLevelKeyVersion: encryptedCheckin.difficultyLevel.ciphertext ? encryptedCheckin.difficultyLevel.keyVersion : undefined
             }
           });
 
@@ -552,7 +560,8 @@ export class DailyTasksService {
           goalId: task.goalId,
           dailyTaskId: task.id,
           status: "SCORED",
-          content: payload.content,
+          content: encryptedCheckin.content.ciphertext,
+          contentKeyVersion: encryptedCheckin.content.keyVersion,
           investedMinutes,
           completedSubtasks: payload.completedSubtasks.length
             ? this.toJson(payload.completedSubtasks)
@@ -566,8 +575,10 @@ export class DailyTasksService {
           evidenceLinks: payload.evidenceLinks.length
             ? this.toJson(payload.evidenceLinks)
             : undefined,
-          studyMood: payload.studyMood,
-          difficultyLevel: payload.difficultyLevel
+          studyMood: encryptedCheckin.studyMood.ciphertext,
+          studyMoodKeyVersion: encryptedCheckin.studyMood.ciphertext ? encryptedCheckin.studyMood.keyVersion : undefined,
+          difficultyLevel: encryptedCheckin.difficultyLevel.ciphertext,
+          difficultyLevelKeyVersion: encryptedCheckin.difficultyLevel.ciphertext ? encryptedCheckin.difficultyLevel.keyVersion : undefined
         }
       });
 
@@ -742,7 +753,7 @@ export class DailyTasksService {
 
     try {
       const score = await this.scoringProvider.score({
-        content: checkin.content,
+        content: this.fields.decrypt(checkin.content),
         investedMinutes: checkin.investedMinutes ?? checkin.dailyTask.plannedMinutes ?? 0,
         evidence: {
           completedSubtasks: this.normalizeStringArray(checkin.completedSubtasks),
@@ -751,8 +762,8 @@ export class DailyTasksService {
           accuracy: checkin.accuracy ?? undefined,
           evidenceFiles: this.normalizeEvidenceFiles(checkin.evidenceFiles),
           evidenceLinks: this.normalizeStringArray(checkin.evidenceLinks),
-          studyMood: checkin.studyMood ?? undefined,
-          difficultyLevel: checkin.difficultyLevel ?? undefined
+          studyMood: this.fields.decryptNullable(checkin.studyMood) ?? undefined,
+          difficultyLevel: this.fields.decryptNullable(checkin.difficultyLevel) ?? undefined
         },
         task: checkin.dailyTask
       }, { userId: job.userId, goalId: job.goalId ?? undefined, aiJobId: job.id, attempt: runningJob.attempts });
@@ -877,12 +888,15 @@ export class DailyTasksService {
 
     if (this.shouldQueueScoreAppeal()) {
       const { appeal, job } = await this.prisma.$transaction(async (tx) => {
+        const encryptedAppeal = this.encryptScoreAppealPayload(payload);
         const createdAppeal = await tx.scoreAppeal.create({
           data: {
             userId,
             checkinId: checkin.id,
-            reason: payload.reason,
-            addedFacts: payload.addedFacts,
+            reason: encryptedAppeal.reason.ciphertext,
+            reasonKeyVersion: encryptedAppeal.reason.keyVersion,
+            addedFacts: encryptedAppeal.addedFacts.ciphertext,
+            addedFactsKeyVersion: encryptedAppeal.addedFacts.keyVersion,
             status: "PENDING",
             originalScore: checkin.aiScore!.totalScore,
             newScore: checkin.aiScore!.totalScore,
@@ -937,15 +951,18 @@ export class DailyTasksService {
       payload,
       checkin.aiScore.totalScore,
       { userId, goalId: checkin.goalId },
-      { task: checkin.dailyTask!, checkin: { content: checkin.content, investedMinutes: checkin.investedMinutes, completedSubtasks: checkin.completedSubtasks, evidenceLinks: checkin.evidenceLinks } }
+      { task: checkin.dailyTask!, checkin: { content: this.fields.decrypt(checkin.content), investedMinutes: checkin.investedMinutes, completedSubtasks: checkin.completedSubtasks, evidenceLinks: checkin.evidenceLinks } }
     );
     const { appeal, updatedCheckin, job } = await this.prisma.$transaction(async (tx) => {
+      const encryptedAppeal = this.encryptScoreAppealPayload(payload);
       const createdAppeal = await tx.scoreAppeal.create({
         data: {
           userId,
           checkinId: checkin.id,
-          reason: payload.reason,
-          addedFacts: payload.addedFacts,
+          reason: encryptedAppeal.reason.ciphertext,
+          reasonKeyVersion: encryptedAppeal.reason.keyVersion,
+          addedFacts: encryptedAppeal.addedFacts.ciphertext,
+          addedFactsKeyVersion: encryptedAppeal.addedFacts.keyVersion,
           status: appealResult.accepted ? "RESCORED" : "APPEAL_REJECTED",
           originalScore: checkin.aiScore!.totalScore,
           newScore: appealResult.newScore,
@@ -1125,12 +1142,12 @@ export class DailyTasksService {
     try {
       const appealResult = await this.getAppealResult(
         {
-          reason: appeal.reason,
-          addedFacts: appeal.addedFacts
+          reason: this.fields.decrypt(appeal.reason),
+          addedFacts: this.fields.decrypt(appeal.addedFacts)
         },
         checkin.aiScore.totalScore,
         { userId: job.userId, goalId: job.goalId ?? undefined, aiJobId: job.id, attempt: runningJob.attempts },
-        { task: checkin.dailyTask!, checkin: { content: checkin.content, investedMinutes: checkin.investedMinutes, completedSubtasks: checkin.completedSubtasks, evidenceLinks: checkin.evidenceLinks } }
+        { task: checkin.dailyTask!, checkin: { content: this.fields.decrypt(checkin.content), investedMinutes: checkin.investedMinutes, completedSubtasks: checkin.completedSubtasks, evidenceLinks: checkin.evidenceLinks } }
       );
       const { changedAppeal, changedCheckin, succeededJob } =
         await this.prisma.$transaction(async (tx) => {
@@ -1779,6 +1796,30 @@ export class DailyTasksService {
     return { start, end };
   }
 
+  private encryptCheckinPayload(payload: CompleteTaskPayload) {
+    return {
+      content: this.fields.encrypt(payload.content),
+      studyMood: this.fields.encryptNullable(payload.studyMood),
+      difficultyLevel: this.fields.encryptNullable(payload.difficultyLevel)
+    };
+  }
+
+  private encryptScoreAppealPayload(payload: ScoreAppealPayload) {
+    return {
+      reason: this.fields.encrypt(payload.reason),
+      addedFacts: this.fields.encrypt(payload.addedFacts)
+    };
+  }
+
+  private decryptCheckin<T extends Checkin>(checkin: T): T {
+    return {
+      ...checkin,
+      content: this.fields.decrypt(checkin.content),
+      studyMood: this.fields.decryptNullable(checkin.studyMood),
+      difficultyLevel: this.fields.decryptNullable(checkin.difficultyLevel)
+    };
+  }
+
   private toDateKey(date: Date) {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: TIMEZONE,
@@ -1837,6 +1878,7 @@ export class DailyTasksService {
     hasDetailedAiAnalysis = false
   ) {
     const latestCheckin = task.checkins[0] ?? null;
+    const plainCheckin = latestCheckin ? this.decryptCheckin(latestCheckin) : null;
 
     return {
       id: task.id,
@@ -1863,7 +1905,7 @@ export class DailyTasksService {
       aiScore: hasDetailedAiAnalysis
         ? latestCheckin?.aiScore?.totalScore ?? null
         : null,
-      reflection: latestCheckin?.content ?? null,
+      reflection: plainCheckin?.content ?? null,
       completedAt: latestCheckin?.submittedAt.toISOString() ?? null
     };
   }
@@ -1872,10 +1914,11 @@ export class DailyTasksService {
     checkin: Checkin & { aiScore: AiScore | null },
     hasDetailedAiAnalysis = false
   ) {
+    const plainCheckin = this.decryptCheckin(checkin);
     return {
       id: checkin.id,
       dailyTaskId: checkin.dailyTaskId,
-      content: checkin.content,
+      content: plainCheckin.content,
       investedMinutes: checkin.investedMinutes,
       completedSubtasks: this.normalizeStringArray(checkin.completedSubtasks),
       actualQuestionCount: checkin.actualQuestionCount,
@@ -1883,8 +1926,8 @@ export class DailyTasksService {
       accuracy: checkin.accuracy,
       evidenceFiles: this.normalizeEvidenceFiles(checkin.evidenceFiles),
       evidenceLinks: this.normalizeStringArray(checkin.evidenceLinks),
-      studyMood: checkin.studyMood,
-      difficultyLevel: checkin.difficultyLevel,
+      studyMood: plainCheckin.studyMood,
+      difficultyLevel: plainCheckin.difficultyLevel,
       submittedAt: checkin.submittedAt.toISOString(),
       aiScore: checkin.aiScore
         ? {
@@ -1917,8 +1960,8 @@ export class DailyTasksService {
       id: appeal.id,
       userId: appeal.userId,
       checkinId: appeal.checkinId,
-      reason: appeal.reason,
-      addedFacts: appeal.addedFacts,
+      reason: this.fields.decrypt(appeal.reason),
+      addedFacts: this.fields.decrypt(appeal.addedFacts),
       status: appeal.status,
       originalScore: appeal.originalScore,
       newScore: appeal.newScore,

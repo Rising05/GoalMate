@@ -8,9 +8,10 @@ import { MockScoringProvider } from "./mock-scoring.provider";
 import { SCORING_PROVIDER } from "./scoring-provider";
 import { QuotaModule } from "../quota/quota.module";
 import { DeepSeekScoringProvider } from "./deepseek-scoring.provider";
+import { SecurityModule } from "../security/security.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule, QueueModule, QuotaModule],
+  imports: [AuthModule, PrismaModule, QueueModule, QuotaModule, SecurityModule],
   controllers: [DailyTasksController],
   providers: [
     DailyTasksService,
