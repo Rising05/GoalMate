@@ -254,11 +254,21 @@ describe("AdminService integration", () => {
       status: "MANUAL",
       reason: "用户线下付费后手动开通"
     });
-    const auditLogs = await adminService.listAuditLogs(admin.id);
+    const [auditLogs, entitlementCount] = await Promise.all([
+      adminService.listAuditLogs(admin.id),
+      prisma.entitlement.count({
+        where: {
+          userId: member.id,
+          source: `ADMIN:MEMBERSHIP:${member.id}`,
+          OR: [{ validUntil: null }, { validUntil: { gt: new Date() } }]
+        }
+      })
+    ]);
 
     assert.equal(result.membership.userId, member.id);
     assert.equal(result.membership.plan, "PRO");
     assert.equal(result.membership.status, "MANUAL");
+    assert.equal(entitlementCount, 8);
     assert.ok(
       auditLogs.logs.some(
         (log) =>

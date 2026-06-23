@@ -227,10 +227,26 @@ export interface BillingOrder {
   id: string;
   provider: "MOCK" | "STRIPE" | "WECHAT_PAY" | string;
   plan: string;
+  planCode: string | null;
+  planName: string | null;
   durationDays: number;
   amountCents: number;
   currency: string;
   status: string;
+  providerOrderId: string | null;
+  subscriptionId: string | null;
+  subscription: {
+    status: string;
+    currentPeriodEnd: string;
+    cancelAtPeriodEnd: boolean;
+  } | null;
+  payments: Array<{
+    type: string;
+    status: string;
+    amountCents: number;
+    refundedCents: number;
+    createdAt: string;
+  }>;
   checkoutUrl: string | null;
   paidAt: string | null;
   expiresAt: string | null;
@@ -729,6 +745,8 @@ export type DataExportScope =
   | "wechatBinding"
   | "uploadAssets"
   | "paymentOrders"
+  | "subscriptions"
+  | "payments"
   | "paymentEvents"
   | "membershipAudits"
   | "entitlements"

@@ -29,6 +29,8 @@ import { NotificationsService } from "../notifications/notifications.service";
 import { QueueReconciliationService } from "../observability/queue-reconciliation.service";
 import { UploadsService } from "../uploads/uploads.service";
 import { FieldEncryptionService } from "../security/field-encryption.service";
+import { BILLING_PRO_ENTITLEMENT_LIMITS, BillingService } from "../billing/billing.service";
+import { QUOTA_CAPABILITIES } from "../quota/quota.service";
 
 type AdminRole = "OPERATOR" | "SUPER_ADMIN";
 
@@ -91,6 +93,9 @@ export class AdminService {
     @Optional()
     @Inject(UploadsService)
     private readonly uploadsService?: UploadsService,
+    @Optional()
+    @Inject(BillingService)
+    private readonly billingService?: BillingService,
     @Optional()
     @Inject(FieldEncryptionService)
     private readonly fields: FieldEncryptionService = new FieldEncryptionService()
@@ -574,6 +579,22 @@ export class AdminService {
     };
   }
 
+  async refundPaymentOrder(actorUserId: string, orderId: string, input: unknown) {
+    await this.assertAdmin(actorUserId, "SUPER_ADMIN");
+    if (!this.billingService) throw new BadRequestException("支付服务未配置");
+    const result = await this.billingService.adminRefundOrder(actorUserId, orderId, input);
+    await this.createAuditLog(actorUserId, {
+      action: "PAYMENT_ORDER_REFUND",
+      targetType: "PAYMENT_ORDER",
+      targetId: orderId,
+      reason: input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>).reason as string | undefined
+        : undefined,
+      metadata: result as unknown as Prisma.InputJsonValue
+    });
+    return result;
+  }
+
   async listMembershipAudits(actorUserId: string, input: unknown = {}) {
     await this.assertAdmin(actorUserId);
     const pagination = this.parsePagination(input);
@@ -650,6 +671,42 @@ export class AdminService {
         expiresAt: payload.expiresAt
       }
     });
+    const now = new Date();
+    const adminEntitlementSource = `ADMIN:MEMBERSHIP:${targetUserId}`;
+    if (
+      membership.plan === "PRO" &&
+      ["ACTIVE", "MANUAL"].includes(membership.status) &&
+      (!membership.expiresAt || membership.expiresAt > now)
+    ) {
+      await this.prisma.entitlement.updateMany({
+        where: {
+          userId: targetUserId,
+          source: adminEntitlementSource,
+          OR: [{ validUntil: null }, { validUntil: { gt: now } }]
+        },
+        data: { validUntil: now }
+      });
+      await this.prisma.entitlement.createMany({
+        data: QUOTA_CAPABILITIES.map((capability) => ({
+          userId: targetUserId,
+          capability,
+          limitValue: BILLING_PRO_ENTITLEMENT_LIMITS[capability],
+          source: adminEntitlementSource,
+          validFrom: now,
+          validUntil: membership.expiresAt,
+          metadata: { actorUserId, membershipId: membership.id, hasReason: Boolean(payload.reason) }
+        }))
+      });
+    } else {
+      await this.prisma.entitlement.updateMany({
+        where: {
+          userId: targetUserId,
+          source: adminEntitlementSource,
+          OR: [{ validUntil: null }, { validUntil: { gt: now } }]
+        },
+        data: { validUntil: now }
+      });
+    }
 
     await this.createAuditLog(actorUserId, {
       action: "MEMBERSHIP_UPDATE",

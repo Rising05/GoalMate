@@ -99,6 +99,8 @@ model User {
   auditLogs              AuditLog[]
   paymentOrders          PaymentOrder[]
   paymentEvents          PaymentEvent[]
+  subscriptions          Subscription[]
+  payments               PaymentTransaction[]
   membershipAudits       MembershipAudit[]       @relation("MembershipAuditUser")
   membershipAuditActions MembershipAudit[]       @relation("MembershipAuditActor")
   entitlements           Entitlement[]
@@ -361,9 +363,55 @@ model QuotaBucket {
   @@map("quota_buckets")
 }
 
+model BillingPlan {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  plan         String   @default("PRO")
+  durationDays Int
+  amountCents  Int
+  currency     String   @default("CNY")
+  status       String   @default("ACTIVE")
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orders PaymentOrder[]
+
+  @@index([status, plan])
+  @@map("billing_plans")
+}
+
+model Subscription {
+  id                     String    @id @default(cuid())
+  userId                 String
+  provider               String
+  providerSubscriptionId String?   @unique
+  billingPlanId          String?
+  plan                   String
+  status                 String    @default("ACTIVE")
+  currentPeriodStart     DateTime
+  currentPeriodEnd       DateTime
+  cancelAtPeriodEnd      Boolean   @default(false)
+  canceledAt             DateTime?
+  sourceOrderId          String?
+  metadata               Json?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders PaymentOrder[]
+
+  @@index([userId, status, currentPeriodEnd])
+  @@index([provider, status])
+  @@map("subscriptions")
+}
+
 model PaymentOrder {
   id              String    @id @default(cuid())
   userId          String
+  billingPlanId   String?
+  subscriptionId  String?
   provider        String
   plan            String
   durationDays    Int
@@ -377,12 +425,16 @@ model PaymentOrder {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  events PaymentEvent[]
-  audits MembershipAudit[]
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  billingPlan  BillingPlan?         @relation(fields: [billingPlanId], references: [id], onDelete: SetNull)
+  subscription Subscription?        @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  events       PaymentEvent[]
+  payments     PaymentTransaction[]
+  audits       MembershipAudit[]
 
   @@index([userId, createdAt])
   @@index([provider, status])
+  @@index([subscriptionId, createdAt])
   @@map("payment_orders")
 }
 
@@ -403,6 +455,31 @@ model PaymentEvent {
   @@index([provider, createdAt])
   @@index([orderId, createdAt])
   @@map("payment_events")
+}
+
+model PaymentTransaction {
+  id                String   @id @default(cuid())
+  orderId           String?
+  userId            String
+  provider          String
+  providerPaymentId String?  @unique
+  type              String
+  status            String
+  amountCents       Int
+  refundedCents     Int      @default(0)
+  currency          String   @default("CNY")
+  reason            String?  @db.Text
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  order PaymentOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([provider, type, status])
+  @@index([orderId, createdAt])
+  @@map("payments")
 }
 
 model MembershipAudit {

@@ -95,6 +95,11 @@ export class AdminController {
     return this.adminService.listPaymentEvents(request.user!.id, query);
   }
 
+  @Post("payment-orders/:orderId/refund")
+  refundPaymentOrder(@Req() request: AuthenticatedRequest, @Param("orderId") orderId: string, @Body() body: unknown) {
+    return this.adminService.refundPaymentOrder(request.user!.id, orderId, body);
+  }
+
   @Get("membership-audits")
   listMembershipAudits(@Req() request: AuthenticatedRequest, @Query() query: Record<string, unknown>) {
     return this.adminService.listMembershipAudits(request.user!.id, query);

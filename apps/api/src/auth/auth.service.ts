@@ -43,6 +43,8 @@ const EXPORT_SCOPES = [
   "wechatBinding",
   "uploadAssets",
   "paymentOrders",
+  "subscriptions",
+  "payments",
   "paymentEvents",
   "membershipAudits",
   "entitlements",
@@ -469,6 +471,20 @@ export class AuthService {
 
     if (scopeSet.has("paymentOrders")) {
       data.paymentOrders = await this.prisma.paymentOrder.findMany({
+        where: { userId },
+        orderBy: { createdAt: "asc" }
+      });
+    }
+
+    if (scopeSet.has("subscriptions")) {
+      data.subscriptions = await this.prisma.subscription.findMany({
+        where: { userId },
+        orderBy: { createdAt: "asc" }
+      });
+    }
+
+    if (scopeSet.has("payments")) {
+      data.payments = await this.prisma.paymentTransaction.findMany({
         where: { userId },
         orderBy: { createdAt: "asc" }
       });

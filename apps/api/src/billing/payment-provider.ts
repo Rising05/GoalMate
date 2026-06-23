@@ -13,9 +13,13 @@ export interface PaymentCheckoutInput {
 export interface ParsedPaymentEvent {
   eventId: string;
   orderId: string;
-  status: "PAID" | "FAILED";
+  status: "PAID" | "FAILED" | "REFUNDED" | "DISPUTED" | "CANCELED";
   type: string;
   payload: Record<string, unknown>;
+  amountCents?: number;
+  providerPaymentId?: string | null;
+  providerSubscriptionId?: string | null;
+  reason?: string | null;
 }
 
 export interface PaymentProvider {
@@ -57,15 +61,33 @@ abstract class HmacPaymentProvider implements PaymentProvider {
     const eventId = clean(payload.eventId);
     const orderId = clean(payload.orderId);
     const status = clean(payload.status).toUpperCase();
-    if (!eventId || !orderId || !["PAID", "FAILED"].includes(status)) {
+    const allowedStatuses = ["PAID", "FAILED", "REFUNDED", "DISPUTED", "CANCELED"];
+    if (!eventId || !orderId || !allowedStatuses.includes(status)) {
       throw new BadRequestException("支付回调参数不正确");
     }
+    const amountCents = parseOptionalInteger(payload.amountCents);
+    const providerPaymentId = clean(payload.providerPaymentId) || null;
+    const providerSubscriptionId = clean(payload.providerSubscriptionId) || null;
+    const reason = clean(payload.reason) || null;
     return {
       eventId: `${this.name}:${eventId}`,
       orderId,
-      status: status as "PAID" | "FAILED",
+      status: status as ParsedPaymentEvent["status"],
       type: clean(payload.type) || `PAYMENT_${status}`,
-      payload
+      amountCents,
+      providerPaymentId,
+      providerSubscriptionId,
+      reason,
+      payload: {
+        eventId,
+        orderId,
+        status,
+        type: clean(payload.type) || `PAYMENT_${status}`,
+        amountCents: amountCents ?? null,
+        providerPaymentId,
+        providerSubscriptionId,
+        hasReason: reason !== null
+      }
     };
   }
 }
@@ -96,4 +118,13 @@ export class WechatPayProvider extends HmacPaymentProvider {
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim().slice(0, 200) : "";
+}
+
+function parseOptionalInteger(value: unknown) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const numberValue = Number(value);
+  return Number.isInteger(numberValue) && numberValue >= 0 ? numberValue : undefined;
 }

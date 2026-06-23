@@ -232,6 +232,8 @@ const dataExportScopeOptions: Array<{
   { code: "wechatBinding", label: "微信绑定" },
   { code: "uploadAssets", label: "上传证据" },
   { code: "paymentOrders", label: "支付订单" },
+  { code: "subscriptions", label: "订阅记录" },
+  { code: "payments", label: "支付明细" },
   { code: "paymentEvents", label: "支付事件" },
   { code: "membershipAudits", label: "会员变更" },
   { code: "entitlements", label: "会员权益" },

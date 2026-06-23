@@ -4,9 +4,10 @@ import { PrismaModule } from "../prisma/prisma.module";
 import { BillingController, BillingWebhookController } from "./billing.controller";
 import { BillingService } from "./billing.service";
 import { MockPaymentProvider, PAYMENT_PROVIDERS, StripePaymentProvider, WechatPayProvider } from "./payment-provider";
+import { SecurityModule } from "../security/security.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule],
+  imports: [AuthModule, PrismaModule, SecurityModule],
   controllers: [BillingController, BillingWebhookController],
   providers: [
     BillingService, MockPaymentProvider, StripePaymentProvider, WechatPayProvider,

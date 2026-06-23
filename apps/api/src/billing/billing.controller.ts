@@ -6,6 +6,7 @@ import { BillingService } from "./billing.service";
 @UseGuards(AuthGuard)
 export class BillingController {
   constructor(@Inject(BillingService) private readonly billing: BillingService) {}
+  @Get("plans") listPlans() { return this.billing.listPlans(); }
   @Post("orders") createOrder(@Req() req: AuthenticatedRequest, @Body() body: unknown) { return this.billing.createOrder(req.user!.id, body); }
   @Get("orders") listOrders(@Req() req: AuthenticatedRequest) { return this.billing.listOrders(req.user!.id); }
 }

@@ -7,9 +7,10 @@ import { AdminController } from "./admin.controller";
 import { AdminService } from "./admin.service";
 import { UploadsModule } from "../uploads/uploads.module";
 import { SecurityModule } from "../security/security.module";
+import { BillingModule } from "../billing/billing.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule, QueueModule, NotificationsModule, UploadsModule, SecurityModule],
+  imports: [AuthModule, PrismaModule, QueueModule, NotificationsModule, UploadsModule, SecurityModule, BillingModule],
   controllers: [AdminController],
   providers: [AdminService]
 })
