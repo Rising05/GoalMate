@@ -468,7 +468,7 @@
 
 ### P2-1 Stripe 正式支付
 
-**状态：** `NOT_STARTED`
+**状态：** `IN_PROGRESS`（官方 SDK Checkout、原始体签名验签和本地自动化验收已完成，待 Stripe Test Mode 凭据、真实 Webhook 转发和账单门户联调）
 
 #### 功能需求
 
@@ -486,6 +486,32 @@
 - 使用 Stripe Test Mode。
 - 覆盖乱序、重复、延迟、签名错误和金额不一致事件。
 - 覆盖退款后权益策略。
+
+#### 当前进度
+
+- [x] 引入 Stripe 官方 Node SDK。
+- [x] 使用 Stripe Checkout Session 创建支付链接。
+- [x] Checkout Session 的商品名称、金额、币种和本地订单 metadata 均由服务端套餐生成。
+- [x] 本地订单 `providerOrderId` 绑定 Stripe Checkout Session ID。
+- [x] Webhook 入口支持 `stripe-signature`，并通过 Nest raw body 保留原始请求体验签。
+- [x] 使用 Stripe SDK `constructEvent` 验证 Webhook 签名。
+- [x] 支持 `checkout.session.completed`、`payment_intent`、`invoice`、退款、争议、订阅取消等事件映射到统一支付状态。
+- [x] Stripe 成功事件进入 P2-3 统一订单、支付明细、订阅和 entitlement 事务链路。
+- [x] Stripe 重复事件按 Stripe event ID 幂等，不重复延长会员。
+- [x] Stripe 金额不一致、签名错误、非原始体请求不会授予权益。
+- [x] 增加不依赖真实 Stripe 网络的 SDK 签名验收测试。
+- [ ] 使用真实 Stripe Test Mode Key 创建 Checkout Session 并完成端到端支付。
+- [ ] 使用 Stripe CLI 转发真实 Webhook，验证签名、重复、延迟和退款事件。
+- [ ] 接入 Stripe Billing Portal，支持用户跳转账单管理页面。
+- [ ] 补充 Stripe 订阅续费真实事件和本地订单续期策略的联调记录。
+
+#### 本轮验收记录
+
+- `npm run typecheck`：通过。
+- `npm run build`：通过。
+- `npm run test:integration`：通过，134/134。
+- `npm run test:e2e`：通过，9/9。
+- `git diff --check`：通过。
 
 ---
 

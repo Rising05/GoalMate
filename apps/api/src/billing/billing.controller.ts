@@ -17,6 +17,13 @@ export class BillingWebhookController {
   @Post(":provider") process(
     @Param("provider") provider: string,
     @Headers("x-payment-signature") signature: string | undefined,
+    @Headers("stripe-signature") stripeSignature: string | undefined,
+    @Req() request: { rawBody?: Buffer | string },
     @Body() body: unknown
-  ) { return this.billing.processWebhook(provider, body, signature); }
+  ) {
+    const normalizedProvider = provider.trim().toUpperCase();
+    const webhookBody = normalizedProvider === "STRIPE" ? request.rawBody ?? body : body;
+    const webhookSignature = normalizedProvider === "STRIPE" ? stripeSignature : signature;
+    return this.billing.processWebhook(provider, webhookBody, webhookSignature);
+  }
 }

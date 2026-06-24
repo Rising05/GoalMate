@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import { BadRequestException } from "@nestjs/common";
+import Stripe from "stripe";
 import { loadEnv } from "../config/load-env";
 import { PrismaService } from "../prisma/prisma.service";
 import { BillingService } from "./billing.service";
@@ -182,11 +183,146 @@ describe("BillingService integration", () => {
     assert.equal(result.order.status, "REFUNDED");
     assert.equal(membership?.status, "EXPIRED");
   });
+
+  it("creates a Stripe Checkout Session with server-owned plan pricing", async () => {
+    const user = await createUser("stripe-checkout");
+    const captured: Stripe.Checkout.SessionCreateParams[] = [];
+    const stripeBilling = createStripeBilling(captured);
+
+    const created = await stripeBilling.createOrder(user.id, {
+      provider: "STRIPE",
+      planCode: "PRO_365D",
+      amountCents: 1
+    });
+    const session = captured[0];
+
+    assert.equal(created.order.provider, "STRIPE");
+    assert.equal(created.order.planCode, "PRO_365D");
+    assert.equal(created.order.amountCents, 16800);
+    assert.match(created.order.providerOrderId ?? "", /^cs_test_/);
+    assert.match(created.order.checkoutUrl ?? "", /^https:\/\/checkout\.stripe\.com\/c\/pay\/cs_test_/);
+    assert.equal(session.mode, "payment");
+    assert.equal(session.client_reference_id, created.order.id);
+    assert.equal(session.metadata?.orderId, created.order.id);
+    assert.equal(session.payment_intent_data?.metadata?.orderId, created.order.id);
+    assert.equal(session.line_items?.[0]?.price_data?.unit_amount, 16800);
+    assert.equal(session.line_items?.[0]?.price_data?.currency, "cny");
+  });
+
+  it("verifies Stripe raw webhook signatures and activates paid orders once", async () => {
+    const user = await createUser("stripe-webhook");
+    const stripeBilling = createStripeBilling();
+    const created = await stripeBilling.createOrder(user.id, { provider: "STRIPE", durationDays: 30 });
+    const event = stripeCheckoutEvent(created.order.id, created.order.amountCents);
+    const raw = JSON.stringify(event);
+    const signature = signStripe(raw);
+
+    const first = await stripeBilling.processWebhook("STRIPE", raw, signature);
+    const replay = await stripeBilling.processWebhook("STRIPE", raw, signature);
+
+    await assert.rejects(
+      () => stripeBilling.processWebhook("STRIPE", JSON.parse(raw), signature),
+      BadRequestException
+    );
+    await assert.rejects(
+      () => stripeBilling.processWebhook("STRIPE", raw, "t=123,v1=bad"),
+      BadRequestException
+    );
+
+    const [membership, payment, entitlements] = await Promise.all([
+      prisma.membership.findUnique({ where: { userId: user.id } }),
+      prisma.paymentTransaction.findFirst({ where: { orderId: created.order.id, provider: "STRIPE" } }),
+      prisma.entitlement.count({ where: { userId: user.id, source: `PAYMENT:STRIPE:${created.order.id}` } })
+    ]);
+
+    assert.equal("activated" in first ? first.activated : false, true);
+    assert.equal(replay.duplicate, true);
+    assert.equal(membership?.plan, "PRO");
+    assert.equal(payment?.providerPaymentId, "pi_test_unit");
+    assert.equal(entitlements, 8);
+  });
+
+  it("rejects Stripe amount mismatches before recording payment events", async () => {
+    const user = await createUser("stripe-mismatch");
+    const stripeBilling = createStripeBilling();
+    const created = await stripeBilling.createOrder(user.id, { provider: "STRIPE", durationDays: 30 });
+    const raw = JSON.stringify(stripeCheckoutEvent(created.order.id, created.order.amountCents + 1));
+
+    await assert.rejects(
+      () => stripeBilling.processWebhook("STRIPE", raw, signStripe(raw)),
+      BadRequestException
+    );
+
+    const [events, membership, entitlements] = await Promise.all([
+      prisma.paymentEvent.count({ where: { orderId: created.order.id } }),
+      prisma.membership.findUnique({ where: { userId: user.id } }),
+      prisma.entitlement.count({ where: { userId: user.id } })
+    ]);
+
+    assert.equal(events, 0);
+    assert.equal(membership, null);
+    assert.equal(entitlements, 0);
+  });
 });
 
 function sign(payload: Record<string, unknown>) {
   return createHmac("sha256", process.env.MOCK_PAYMENT_WEBHOOK_SECRET || "goalmate-mock-payment")
     .update(JSON.stringify(payload)).digest("hex");
+}
+function createStripeBilling(captured: Stripe.Checkout.SessionCreateParams[] = []) {
+  const stripe = new Stripe("sk_test_unit");
+  const stripeProvider = new StripePaymentProvider({
+    checkout: {
+      sessions: {
+        create: async (params: Stripe.Checkout.SessionCreateParams) => {
+          captured.push(params);
+          const sessionId = `cs_test_${String(params.client_reference_id ?? "unit").replace(/[^a-zA-Z0-9_]/g, "_")}`;
+          return {
+            id: sessionId,
+            url: `https://checkout.stripe.com/c/pay/${sessionId}`
+          };
+        }
+      }
+    },
+    webhooks: stripe.webhooks
+  } as unknown as Pick<Stripe, "checkout" | "webhooks">, {
+    secretKey: "sk_test_unit",
+    webhookSecret: "whsec_unit",
+    successUrl: "https://goalmate.test/billing/success?session_id={CHECKOUT_SESSION_ID}",
+    cancelUrl: "https://goalmate.test/billing/cancel"
+  });
+  return new BillingService(prisma, [
+    new MockPaymentProvider(),
+    stripeProvider,
+    new WechatPayProvider()
+  ]);
+}
+function stripeCheckoutEvent(orderId: string, amountCents: number) {
+  return {
+    id: `evt_stripe_${orderId}`,
+    object: "event",
+    livemode: false,
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: "cs_test_unit",
+        object: "checkout.session",
+        client_reference_id: orderId,
+        amount_total: amountCents,
+        currency: "cny",
+        payment_intent: "pi_test_unit",
+        metadata: {
+          orderId
+        }
+      }
+    }
+  };
+}
+function signStripe(raw: string) {
+  return new Stripe("sk_test_unit").webhooks.generateTestHeaderString({
+    payload: raw,
+    secret: "whsec_unit"
+  });
 }
 async function createUser(name: string) {
   return prisma.user.create({ data: { email: `${PREFIX}${name}-${Date.now()}@example.com`, passwordHash: "hash" } });
