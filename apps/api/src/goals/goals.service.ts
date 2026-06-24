@@ -14,6 +14,7 @@ import {
   FailureReport,
   Goal,
   GoalCategory,
+  GoalIntakeDraft,
   GoalStatus,
   HealthSnapshot,
   Prisma,
@@ -66,6 +67,41 @@ interface RestartGoalPayload {
   endDate?: Date;
   dailyTimeBudgetMinutes?: number;
   toleranceDaysAllowed?: number;
+}
+
+interface GoalIntakeFormDraft {
+  title: string;
+  description: string;
+  category: GoalCategory;
+  startDate: string;
+  endDate: string;
+  dailyTimeBudgetMinutes: number | null;
+  toleranceDaysAllowed: number;
+  examName?: string | null;
+  targetScore?: string | null;
+  currentScore?: string | null;
+  examDate?: string | null;
+  subjects?: string[];
+  materials?: string[];
+  currentBaseline?: string | null;
+  constraints?: string | null;
+  finalReward?: string | null;
+}
+
+interface GoalIntakeAnalysisResult {
+  provider: string;
+  structuredFields: Record<string, unknown>;
+  feasible: boolean;
+  riskLevel: string;
+  feasibilityScore: number;
+  reasons: string[];
+  assumptions: string[];
+  suggestedChanges: string[];
+  questions: string[];
+  confidence: Record<string, number>;
+  missingFields: string[];
+  fieldSources: Record<string, "ai" | "user" | "fallback">;
+  aiError?: string | null;
 }
 
 const CATEGORY_MAP: Record<string, GoalCategory> = {
@@ -277,6 +313,114 @@ export class GoalsService {
       }
     });
     return { provider: "deepseek", ...result };
+  }
+
+  async createGoalIntakeDraft(userId: string, input: unknown) {
+    const body = this.inputObject(input);
+    const naturalLanguage = this.cleanText(
+      body.naturalLanguage ?? body.prompt ?? body.description,
+      2000
+    );
+
+    if (naturalLanguage.length < 6) {
+      throw new BadRequestException("请输入至少 6 个字符的目标描述");
+    }
+
+    const analysis = await this.analyzeGoalIntakeSafely(userId, body, naturalLanguage);
+    const formDraft = this.buildGoalIntakeFormDraft(naturalLanguage, analysis, body.formDraft);
+    const encryptedNaturalLanguage = this.fields.encrypt(naturalLanguage);
+    const encryptedAnalysis = this.encryptJson(analysis);
+    const encryptedFormDraft = this.encryptJson(formDraft);
+    const encryptedAnswers = this.encryptJson([]);
+    const draft = await this.prisma.goalIntakeDraft.create({
+      data: {
+        userId,
+        naturalLanguage: encryptedNaturalLanguage.ciphertext,
+        naturalLanguageKeyVersion: encryptedNaturalLanguage.keyVersion,
+        status: "ANALYZED",
+        provider: analysis.provider,
+        analysis: encryptedAnalysis.ciphertext,
+        analysisKeyVersion: encryptedAnalysis.keyVersion,
+        formDraft: encryptedFormDraft.ciphertext,
+        formDraftKeyVersion: encryptedFormDraft.keyVersion,
+        answers: encryptedAnswers.ciphertext,
+        answersKeyVersion: encryptedAnswers.keyVersion,
+        acceptedFields: this.toJson([])
+      }
+    });
+
+    return { draft: this.serializeGoalIntakeDraft(draft) };
+  }
+
+  async getLatestGoalIntakeDraft(userId: string) {
+    const draft = await this.prisma.goalIntakeDraft.findFirst({
+      where: { userId },
+      orderBy: { updatedAt: "desc" }
+    });
+
+    return { draft: draft ? this.serializeGoalIntakeDraft(draft) : null };
+  }
+
+  async getGoalIntakeDraft(userId: string, id: string) {
+    const draft = await this.getOwnedGoalIntakeDraft(userId, id);
+    return { draft: this.serializeGoalIntakeDraft(draft) };
+  }
+
+  async updateGoalIntakeDraft(userId: string, id: string, input: unknown) {
+    const current = await this.getOwnedGoalIntakeDraft(userId, id);
+    const body = this.inputObject(input);
+    const currentForm = this.decryptJsonNullable<GoalIntakeFormDraft>(current.formDraft) ?? this.buildGoalIntakeFormDraft(
+      this.fields.decrypt(current.naturalLanguage),
+      this.decryptJsonNullable<GoalIntakeAnalysisResult>(current.analysis) ?? this.fallbackGoalIntakeAnalysis(this.fields.decrypt(current.naturalLanguage), null),
+      {}
+    );
+    const currentAnswers = this.decryptJsonNullable<unknown[]>(current.answers) ?? [];
+    const nextForm = this.mergeGoalIntakeFormDraft(currentForm, body.formDraft);
+    const nextAnswers = Array.isArray(body.answers) ? body.answers.slice(0, 20) : currentAnswers;
+    const acceptedFields = Array.isArray(body.acceptedFields)
+      ? body.acceptedFields.filter((field): field is string => typeof field === "string").slice(0, 50)
+      : this.jsonArray(current.acceptedFields);
+    const status = this.cleanText(body.status, 40) || current.status;
+    const encryptedForm = this.encryptJson(nextForm);
+    const encryptedAnswers = this.encryptJson(nextAnswers);
+    const updated = await this.prisma.goalIntakeDraft.update({
+      where: { id: current.id },
+      data: {
+        status,
+        formDraft: encryptedForm.ciphertext,
+        formDraftKeyVersion: encryptedForm.keyVersion,
+        answers: encryptedAnswers.ciphertext,
+        answersKeyVersion: encryptedAnswers.keyVersion,
+        acceptedFields: this.toJson(acceptedFields)
+      }
+    });
+
+    return { draft: this.serializeGoalIntakeDraft(updated) };
+  }
+
+  async createGoalFromIntakeDraft(userId: string, id: string, input: unknown = {}) {
+    const draft = await this.getOwnedGoalIntakeDraft(userId, id);
+    const body = this.inputObject(input);
+    const formDraft = this.decryptJsonNullable<GoalIntakeFormDraft>(draft.formDraft);
+
+    if (!formDraft) {
+      throw new BadRequestException("目标助手草稿缺少可保存的表单字段");
+    }
+
+    const payload = this.mergeGoalIntakeFormDraft(formDraft, body.overrides);
+    const created = await this.createGoal(userId, payload);
+    const updated = await this.prisma.goalIntakeDraft.update({
+      where: { id: draft.id },
+      data: {
+        status: "GOAL_CREATED",
+        completedGoalId: created.goal.id
+      }
+    });
+
+    return {
+      goal: created.goal,
+      draft: this.serializeGoalIntakeDraft(updated)
+    };
   }
 
   async getDeviationSummary(userId: string, id: string) {
@@ -2554,6 +2698,198 @@ export class GoalsService {
 
   private useDeepSeek() {
     return process.env.AI_PROVIDER === "deepseek" && Boolean(this.aiCallService?.isConfigured());
+  }
+
+  private async analyzeGoalIntakeSafely(
+    userId: string,
+    body: Record<string, unknown>,
+    naturalLanguage: string
+  ): Promise<GoalIntakeAnalysisResult> {
+    try {
+      const result = await this.analyzeGoal(userId, {
+        ...body,
+        title: this.cleanText(body.title, 120) || this.deriveTitle(naturalLanguage),
+        description: naturalLanguage
+      }) as Omit<GoalIntakeAnalysisResult, "confidence" | "missingFields" | "fieldSources">;
+      return this.enrichGoalIntakeAnalysis(result, null);
+    } catch (error) {
+      return this.fallbackGoalIntakeAnalysis(
+        naturalLanguage,
+        error instanceof Error ? error.message : "AI 目标解析失败"
+      );
+    }
+  }
+
+  private enrichGoalIntakeAnalysis(
+    result: Omit<GoalIntakeAnalysisResult, "confidence" | "missingFields" | "fieldSources">,
+    aiError: string | null
+  ): GoalIntakeAnalysisResult {
+    const structured = this.jsonObject(result.structuredFields);
+    const fieldNames = ["title", "category", "targetDate", "dailyTimeBudgetMinutes", "examName", "targetScore", "currentScore", "subjects", "materials"];
+    const confidence: Record<string, number> = {};
+    const fieldSources: Record<string, "ai" | "user" | "fallback"> = {};
+
+    for (const field of fieldNames) {
+      const value = structured[field];
+      const hasValue = Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
+      confidence[field] = hasValue ? 0.72 : 0.35;
+      fieldSources[field] = hasValue ? "ai" : "fallback";
+    }
+
+    const missingFields = [
+      !structured.targetDate ? "targetDate" : null,
+      !structured.dailyTimeBudgetMinutes ? "dailyTimeBudgetMinutes" : null,
+      !structured.targetScore && !structured.examName ? "successCriteria" : null
+    ].filter((field): field is string => Boolean(field));
+
+    return {
+      ...result,
+      structuredFields: structured,
+      confidence,
+      missingFields,
+      fieldSources,
+      aiError
+    };
+  }
+
+  private fallbackGoalIntakeAnalysis(naturalLanguage: string, aiError: string | null): GoalIntakeAnalysisResult {
+    const structuredFields = {
+      title: this.deriveTitle(naturalLanguage),
+      category: "custom",
+      targetDate: null,
+      subjects: [],
+      materials: []
+    };
+
+    return this.enrichGoalIntakeAnalysis({
+      provider: "fallback",
+      structuredFields,
+      feasible: true,
+      riskLevel: "warning",
+      feasibilityScore: 60,
+      reasons: ["目标描述已保留，但仍需要补充时间、投入和验收标准。"],
+      assumptions: ["暂按普通目标处理，用户后续可以逐字段覆盖。"],
+      suggestedChanges: ["补充截止日期、每日可投入时间和可量化完成标准。"],
+      questions: [
+        "你希望在什么日期前完成？",
+        "你每天能稳定投入多少分钟？",
+        "什么结果代表这个目标达成？"
+      ]
+    }, aiError);
+  }
+
+  private buildGoalIntakeFormDraft(
+    naturalLanguage: string,
+    analysis: GoalIntakeAnalysisResult,
+    overrides: unknown
+  ): GoalIntakeFormDraft {
+    const structured = analysis.structuredFields;
+    const today = new Date();
+    const fallbackEnd = new Date(today);
+    fallbackEnd.setUTCDate(fallbackEnd.getUTCDate() + 90);
+    const targetDate = this.cleanText(structured.targetDate, 40);
+    const base: GoalIntakeFormDraft = {
+      title: this.cleanText(structured.title, 80) || this.deriveTitle(naturalLanguage),
+      description: naturalLanguage,
+      category: this.parseCategory(structured.category),
+      startDate: this.toDateKey(today),
+      endDate: this.isDateKey(targetDate) ? targetDate : this.toDateKey(fallbackEnd),
+      dailyTimeBudgetMinutes: this.intValue(structured.dailyTimeBudgetMinutes) ?? null,
+      toleranceDaysAllowed: 3,
+      examName: this.cleanText(structured.examName, 120) || null,
+      targetScore: this.cleanText(structured.targetScore, 80) || null,
+      currentScore: this.cleanText(structured.currentScore, 80) || null,
+      examDate: this.isDateKey(this.cleanText(structured.examDate ?? structured.targetDate, 40))
+        ? this.cleanText(structured.examDate ?? structured.targetDate, 40)
+        : null,
+      subjects: this.stringListValue(structured.subjects),
+      materials: this.stringListValue(structured.materials),
+      currentBaseline: this.cleanText(structured.currentBaseline, 1000) || null,
+      constraints: this.cleanText(structured.constraints, 1000) || null,
+      finalReward: this.cleanText(structured.finalReward, 1000) || null
+    };
+
+    return this.mergeGoalIntakeFormDraft(base, overrides);
+  }
+
+  private mergeGoalIntakeFormDraft(current: GoalIntakeFormDraft, overrides: unknown): GoalIntakeFormDraft {
+    const body = this.inputObject(overrides);
+    const next = { ...current };
+    const textFields = ["title", "description", "examName", "targetScore", "currentScore", "currentBaseline", "constraints", "finalReward"] as const;
+
+    for (const field of textFields) {
+      if (body[field] !== undefined) {
+        const maxLength = field === "description" ? 2000 : field === "currentBaseline" || field === "constraints" || field === "finalReward" ? 1000 : 120;
+        next[field] = this.cleanText(body[field], maxLength) as never;
+      }
+    }
+
+    if (body.category !== undefined) next.category = this.parseCategory(body.category);
+    if (body.startDate !== undefined && this.isDateKey(this.cleanText(body.startDate, 40))) next.startDate = this.cleanText(body.startDate, 40);
+    if (body.endDate !== undefined && this.isDateKey(this.cleanText(body.endDate, 40))) next.endDate = this.cleanText(body.endDate, 40);
+    if (body.examDate !== undefined) {
+      const examDate = this.cleanText(body.examDate, 40);
+      next.examDate = this.isDateKey(examDate) ? examDate : null;
+    }
+    if (body.dailyTimeBudgetMinutes !== undefined) next.dailyTimeBudgetMinutes = this.intValue(body.dailyTimeBudgetMinutes) ?? null;
+    if (body.toleranceDaysAllowed !== undefined) next.toleranceDaysAllowed = this.intValue(body.toleranceDaysAllowed) ?? next.toleranceDaysAllowed;
+    if (body.subjects !== undefined) next.subjects = this.stringListValue(body.subjects);
+    if (body.materials !== undefined) next.materials = this.stringListValue(body.materials);
+
+    return next;
+  }
+
+  private async getOwnedGoalIntakeDraft(userId: string, id: string) {
+    const draft = await this.prisma.goalIntakeDraft.findFirst({ where: { id, userId } });
+    if (!draft) throw new NotFoundException("目标助手草稿不存在");
+    return draft;
+  }
+
+  private serializeGoalIntakeDraft(draft: GoalIntakeDraft) {
+    return {
+      id: draft.id,
+      status: draft.status,
+      provider: draft.provider,
+      naturalLanguage: this.fields.decrypt(draft.naturalLanguage),
+      analysis: this.decryptJsonNullable<GoalIntakeAnalysisResult>(draft.analysis),
+      formDraft: this.decryptJsonNullable<GoalIntakeFormDraft>(draft.formDraft),
+      answers: this.decryptJsonNullable<unknown[]>(draft.answers) ?? [],
+      acceptedFields: this.jsonArray(draft.acceptedFields),
+      completedGoalId: draft.completedGoalId,
+      createdAt: draft.createdAt.toISOString(),
+      updatedAt: draft.updatedAt.toISOString()
+    };
+  }
+
+  private encryptJson(value: unknown) {
+    return this.fields.encrypt(JSON.stringify(value));
+  }
+
+  private decryptJsonNullable<T>(value: string | null) {
+    const plain = this.fields.decryptNullable(value);
+    if (!plain) return null;
+    try {
+      return JSON.parse(plain) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private isDateKey(value: string) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00.000+08:00`).getTime());
+  }
+
+  private intValue(value: unknown) {
+    const numberValue = Number(value);
+    return Number.isInteger(numberValue) && numberValue >= 0 ? numberValue : undefined;
+  }
+
+  private stringListValue(value: unknown) {
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean).slice(0, 20)
+      : typeof value === "string"
+        ? value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean).slice(0, 20)
+        : [];
   }
 
   private buildGoalAnalysisAiInput(item: Record<string, unknown>) {

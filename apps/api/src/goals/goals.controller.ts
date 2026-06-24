@@ -5,6 +5,7 @@ import {
   Get,
   Inject,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards
@@ -31,6 +32,42 @@ export class GoalsController {
   @Post("analyze")
   analyze(@Req() request: AuthenticatedRequest, @Body() body: unknown) {
     return this.goalsService.analyzeGoal(request.user!.id, body);
+  }
+
+  @Post("intake-drafts")
+  createIntakeDraft(@Req() request: AuthenticatedRequest, @Body() body: unknown) {
+    return this.goalsService.createGoalIntakeDraft(request.user!.id, body);
+  }
+
+  @Get("intake-drafts/latest")
+  getLatestIntakeDraft(@Req() request: AuthenticatedRequest) {
+    return this.goalsService.getLatestGoalIntakeDraft(request.user!.id);
+  }
+
+  @Get("intake-drafts/:draftId")
+  getIntakeDraft(
+    @Req() request: AuthenticatedRequest,
+    @Param("draftId") draftId: string
+  ) {
+    return this.goalsService.getGoalIntakeDraft(request.user!.id, draftId);
+  }
+
+  @Patch("intake-drafts/:draftId")
+  updateIntakeDraft(
+    @Req() request: AuthenticatedRequest,
+    @Param("draftId") draftId: string,
+    @Body() body: unknown
+  ) {
+    return this.goalsService.updateGoalIntakeDraft(request.user!.id, draftId, body);
+  }
+
+  @Post("intake-drafts/:draftId/create-goal")
+  createGoalFromIntakeDraft(
+    @Req() request: AuthenticatedRequest,
+    @Param("draftId") draftId: string,
+    @Body() body: unknown
+  ) {
+    return this.goalsService.createGoalFromIntakeDraft(request.user!.id, draftId, body);
   }
 
   @Get()

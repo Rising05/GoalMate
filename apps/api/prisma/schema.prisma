@@ -89,6 +89,7 @@ model User {
 
   membership             Membership?
   goals                  Goal[]
+  goalIntakeDrafts       GoalIntakeDraft[]
   aiJobs                 AiJob[]
   notificationPreference NotificationPreference?
   emailLogs              EmailLog[]
@@ -554,9 +555,36 @@ model Goal {
   failureReport   FailureReport?
   aiCallLogs      AiCallLog[]
   uploadAssets    UploadAsset[]
+  intakeDraft     GoalIntakeDraft?
 
   @@index([userId, status])
   @@map("goals")
+}
+
+model GoalIntakeDraft {
+  id                        String   @id @default(cuid())
+  userId                    String
+  naturalLanguage           String   @db.Text
+  naturalLanguageKeyVersion String?
+  status                    String   @default("ANALYZED")
+  provider                  String   @default("rule")
+  analysis                  String?  @db.Text
+  analysisKeyVersion        String?
+  formDraft                 String?  @db.Text
+  formDraftKeyVersion       String?
+  answers                   String?  @db.Text
+  answersKeyVersion         String?
+  acceptedFields            Json?
+  completedGoalId           String?  @unique
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  user          User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedGoal Goal? @relation(fields: [completedGoalId], references: [id], onDelete: SetNull)
+
+  @@index([userId, updatedAt])
+  @@index([userId, status])
+  @@map("goal_intake_drafts")
 }
 
 model FailureReport {
