@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { QUOTA_CAPABILITIES, QuotaCapability } from "../quota/quota.service";
 import { FieldEncryptionService } from "../security/field-encryption.service";
-import { PAYMENT_PROVIDERS, ParsedPaymentEvent, PaymentProvider } from "./payment-provider";
+import { PAYMENT_PROVIDERS, ParsedPaymentEvent, PaymentProvider, PaymentWebhookHeaders } from "./payment-provider";
 
 const DEFAULT_PLAN_CODE_BY_DAYS: Record<number, string> = {
   30: "PRO_30D",
@@ -88,7 +88,7 @@ export class BillingService {
     return { orders: orders.map((order) => this.serializeOrder(order)) };
   }
 
-  async processWebhook(providerName: string, input: unknown, signature?: string) {
+  async processWebhook(providerName: string, input: unknown, signature?: string | PaymentWebhookHeaders) {
     const provider = this.getProvider(providerName);
     const event = provider.parseWebhook(input, signature);
     const existing = await this.prisma.paymentEvent.findUnique({

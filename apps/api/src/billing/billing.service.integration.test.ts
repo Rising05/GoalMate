@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
+import { createCipheriv, createHmac, createSign, createVerify, generateKeyPairSync, randomBytes } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import { BadRequestException } from "@nestjs/common";
 import Stripe from "stripe";
@@ -15,6 +15,13 @@ const billing = new BillingService(prisma, [
   new MockPaymentProvider(), new StripePaymentProvider(), new WechatPayProvider()
 ]);
 const PREFIX = "billing-integration-";
+const WECHAT_API_V3_KEY = "12345678901234567890123456789012";
+const wechatMerchantKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const wechatPlatformKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const WECHAT_MERCHANT_PRIVATE_KEY = wechatMerchantKeys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+const WECHAT_MERCHANT_PUBLIC_KEY = wechatMerchantKeys.publicKey.export({ type: "spki", format: "pem" }).toString();
+const WECHAT_PLATFORM_PRIVATE_KEY = wechatPlatformKeys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+const WECHAT_PLATFORM_PUBLIC_KEY = wechatPlatformKeys.publicKey.export({ type: "spki", format: "pem" }).toString();
 
 describe("BillingService integration", () => {
   before(cleanup);
@@ -263,6 +270,117 @@ describe("BillingService integration", () => {
     assert.equal(membership, null);
     assert.equal(entitlements, 0);
   });
+
+  it("creates a WeChat Pay Native order with signed server-owned pricing", async () => {
+    const user = await createUser("wechat-checkout");
+    const captured: Array<{ url: string; init: { headers: Record<string, string>; body?: string } }> = [];
+    const wechatBilling = createWechatBilling(captured);
+
+    const created = await wechatBilling.createOrder(user.id, {
+      provider: "WECHAT_PAY",
+      planCode: "PRO_90D",
+      amountCents: 1
+    });
+    const request = captured[0];
+    const body = JSON.parse(request.init.body ?? "{}") as {
+      out_trade_no: string;
+      amount: { total: number; currency: string };
+      mchid: string;
+      appid: string;
+      notify_url: string;
+    };
+
+    assert.equal(created.order.provider, "WECHAT_PAY");
+    assert.equal(created.order.planCode, "PRO_90D");
+    assert.equal(created.order.amountCents, 4900);
+    assert.match(created.order.checkoutUrl ?? "", /^weixin:\/\/wxpay\/bizpayurl/);
+    assert.equal(request.url, "https://api.mch.weixin.qq.com/v3/pay/transactions/native");
+    assert.equal(body.out_trade_no, created.order.id);
+    assert.equal(body.amount.total, 4900);
+    assert.equal(body.amount.currency, "CNY");
+    assert.equal(body.mchid, "1900000001");
+    assert.equal(body.appid, "wx-test-app");
+    assert.equal(body.notify_url, "https://goalmate.test/billing/webhooks/wechat_pay");
+    assert.equal(verifyWechatAuthorization(request.init.headers.Authorization, request.init.body ?? ""), true);
+  });
+
+  it("verifies and decrypts WeChat Pay notifications before activating access", async () => {
+    const user = await createUser("wechat-webhook");
+    const wechatBilling = createWechatBilling();
+    const created = await wechatBilling.createOrder(user.id, { provider: "WECHAT_PAY", durationDays: 30 });
+    const notify = signWechatNotification(wechatTransactionResource(created.order.id, created.order.amountCents));
+
+    const first = await wechatBilling.processWebhook("WECHAT_PAY", notify.raw, notify.headers);
+    const replay = await wechatBilling.processWebhook("WECHAT_PAY", notify.raw, notify.headers);
+    await assert.rejects(
+      () => wechatBilling.processWebhook("WECHAT_PAY", notify.raw, { ...notify.headers, signature: "bad" }),
+      BadRequestException
+    );
+
+    const [membership, payment, entitlements] = await Promise.all([
+      prisma.membership.findUnique({ where: { userId: user.id } }),
+      prisma.paymentTransaction.findFirst({ where: { orderId: created.order.id, provider: "WECHAT_PAY" } }),
+      prisma.entitlement.count({ where: { userId: user.id, source: `PAYMENT:WECHAT_PAY:${created.order.id}` } })
+    ]);
+
+    assert.equal("activated" in first ? first.activated : false, true);
+    assert.equal(replay.duplicate, true);
+    assert.equal(membership?.plan, "PRO");
+    assert.equal(payment?.providerPaymentId, "4200000000000000001");
+    assert.equal(entitlements, 8);
+  });
+
+  it("rejects WeChat Pay amount mismatches before recording payment events", async () => {
+    const user = await createUser("wechat-mismatch");
+    const wechatBilling = createWechatBilling();
+    const created = await wechatBilling.createOrder(user.id, { provider: "WECHAT_PAY", durationDays: 30 });
+    const notify = signWechatNotification(wechatTransactionResource(created.order.id, created.order.amountCents + 1));
+
+    await assert.rejects(
+      () => wechatBilling.processWebhook("WECHAT_PAY", notify.raw, notify.headers),
+      BadRequestException
+    );
+
+    const [events, membership, entitlements] = await Promise.all([
+      prisma.paymentEvent.count({ where: { orderId: created.order.id } }),
+      prisma.membership.findUnique({ where: { userId: user.id } }),
+      prisma.entitlement.count({ where: { userId: user.id } })
+    ]);
+
+    assert.equal(events, 0);
+    assert.equal(membership, null);
+    assert.equal(entitlements, 0);
+  });
+
+  it("handles WeChat Pay refund notifications through the unified entitlement model", async () => {
+    const user = await createUser("wechat-refund");
+    const wechatBilling = createWechatBilling();
+    const created = await wechatBilling.createOrder(user.id, { provider: "WECHAT_PAY", durationDays: 30 });
+    const paidNotify = signWechatNotification(wechatTransactionResource(created.order.id, created.order.amountCents));
+    await wechatBilling.processWebhook("WECHAT_PAY", paidNotify.raw, paidNotify.headers);
+
+    const refundNotify = signWechatNotification(
+      wechatRefundResource(created.order.id, created.order.amountCents),
+      "REFUND.SUCCESS"
+    );
+    const refund = await wechatBilling.processWebhook("WECHAT_PAY", refundNotify.raw, refundNotify.headers);
+    const [membership, activeEntitlements, refundPayment] = await Promise.all([
+      prisma.membership.findUnique({ where: { userId: user.id } }),
+      prisma.entitlement.count({
+        where: {
+          userId: user.id,
+          source: `PAYMENT:WECHAT_PAY:${created.order.id}`,
+          OR: [{ validUntil: null }, { validUntil: { gt: new Date() } }]
+        }
+      }),
+      prisma.paymentTransaction.findFirst({ where: { orderId: created.order.id, type: "REFUND", provider: "WECHAT_PAY" } })
+    ]);
+
+    assert.equal("revoked" in refund ? refund.revoked : 0, 8);
+    assert.equal(membership?.status, "EXPIRED");
+    assert.equal(activeEntitlements, 0);
+    assert.equal(refundPayment?.refundedCents, created.order.amountCents);
+  });
 });
 
 function sign(payload: Record<string, unknown>) {
@@ -323,6 +441,115 @@ function signStripe(raw: string) {
     payload: raw,
     secret: "whsec_unit"
   });
+}
+function createWechatBilling(captured: Array<{ url: string; init: { headers: Record<string, string>; body?: string } }> = []) {
+  const provider = new WechatPayProvider(async (url, init) => {
+    captured.push({ url, init });
+    const body = JSON.parse(init.body ?? "{}") as { out_trade_no?: string };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ code_url: `weixin://wxpay/bizpayurl?pr=${body.out_trade_no ?? "unit"}` }),
+      text: async () => ""
+    };
+  }, {
+    mchId: "1900000001",
+    appId: "wx-test-app",
+    merchantSerialNo: "wechat-merchant-serial",
+    merchantPrivateKey: WECHAT_MERCHANT_PRIVATE_KEY,
+    apiV3Key: WECHAT_API_V3_KEY,
+    notifyUrl: "https://goalmate.test/billing/webhooks/wechat_pay",
+    apiBaseUrl: "https://api.mch.weixin.qq.com",
+    tradeType: "NATIVE",
+    platformPublicKey: WECHAT_PLATFORM_PUBLIC_KEY
+  });
+  return new BillingService(prisma, [
+    new MockPaymentProvider(),
+    new StripePaymentProvider(),
+    provider
+  ]);
+}
+function verifyWechatAuthorization(header: string, body: string) {
+  const parsed = Object.fromEntries(
+    Array.from(header.matchAll(/([a-z_]+)="([^"]+)"/g)).map((match) => [match[1], match[2]])
+  );
+  const message = `POST\n/v3/pay/transactions/native\n${parsed.timestamp}\n${parsed.nonce_str}\n${body}\n`;
+  assert.equal(parsed.mchid, "1900000001");
+  assert.equal(parsed.serial_no, "wechat-merchant-serial");
+  return createVerify("RSA-SHA256")
+    .update(message)
+    .verify(WECHAT_MERCHANT_PUBLIC_KEY, parsed.signature, "base64");
+}
+function wechatTransactionResource(orderId: string, amountCents: number) {
+  return {
+    appid: "wx-test-app",
+    mchid: "1900000001",
+    out_trade_no: orderId,
+    transaction_id: "4200000000000000001",
+    trade_state: "SUCCESS",
+    trade_state_desc: "支付成功",
+    amount: {
+      total: amountCents,
+      currency: "CNY"
+    }
+  };
+}
+function wechatRefundResource(orderId: string, amountCents: number) {
+  return {
+    mchid: "1900000001",
+    out_trade_no: orderId,
+    refund_id: "5030000000000000001",
+    refund_status: "SUCCESS",
+    amount: {
+      total: amountCents,
+      refund: amountCents,
+      currency: "CNY"
+    }
+  };
+}
+function signWechatNotification(resource: Record<string, unknown>, eventType = "TRANSACTION.SUCCESS") {
+  const body = {
+    id: `wechat_evt_${String(resource.out_trade_no)}_${eventType}`,
+    create_time: "2026-06-24T00:00:00+08:00",
+    event_type: eventType,
+    resource_type: "encrypt-resource",
+    resource: encryptWechatResource(resource),
+    summary: eventType
+  };
+  const raw = JSON.stringify(body);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = randomBytes(12).toString("hex");
+  const signature = createSign("RSA-SHA256")
+    .update(`${timestamp}\n${nonce}\n${raw}\n`)
+    .sign(WECHAT_PLATFORM_PRIVATE_KEY, "base64");
+
+  return {
+    raw,
+    headers: {
+      signature,
+      timestamp,
+      nonce,
+      serial: "wechat-platform-serial"
+    }
+  };
+}
+function encryptWechatResource(resource: Record<string, unknown>) {
+  const nonce = randomBytes(12).toString("base64url").slice(0, 12);
+  const associatedData = "transaction";
+  const cipher = createCipheriv("aes-256-gcm", Buffer.from(WECHAT_API_V3_KEY, "utf8"), Buffer.from(nonce, "utf8"));
+  cipher.setAAD(Buffer.from(associatedData, "utf8"));
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(resource), "utf8"),
+    cipher.final(),
+    cipher.getAuthTag()
+  ]).toString("base64");
+
+  return {
+    algorithm: "AEAD_AES_256_GCM",
+    ciphertext,
+    associated_data: associatedData,
+    nonce
+  };
 }
 async function createUser(name: string) {
   return prisma.user.create({ data: { email: `${PREFIX}${name}-${Date.now()}@example.com`, passwordHash: "hash" } });
