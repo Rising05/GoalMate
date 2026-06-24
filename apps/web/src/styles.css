@@ -628,6 +628,116 @@ p {
   gap: 12px;
 }
 
+.goal-assistant-card {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.assistant-card-header,
+.assistant-field-row,
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.assistant-card-header h2 {
+  margin: 4px 0 0;
+  font-size: 1.15rem;
+}
+
+.assistant-status,
+.assistant-field-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.assistant-status {
+  padding: 5px 9px;
+  color: #365c47;
+  background: rgba(109, 151, 120, 0.16);
+}
+
+.assistant-result-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.assistant-summary-card,
+.assistant-note-list,
+.assistant-questions,
+.assistant-field-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.assistant-summary-card span,
+.assistant-field-row > span:first-child {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.assistant-summary-card strong {
+  font-size: 1.4rem;
+}
+
+.assistant-summary-card p,
+.assistant-note-list p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.assistant-field-list {
+  gap: 7px;
+}
+
+.assistant-field-row {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.assistant-field-row:last-child {
+  border-bottom: 0;
+}
+
+.assistant-field-row .ghost-button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.assistant-field-badge {
+  padding: 3px 8px;
+  color: #5f4a10;
+  background: #fff4ce;
+}
+
+.assistant-field-badge.accepted {
+  color: #25583c;
+  background: #dff4e7;
+}
+
+.assistant-field-badge.user {
+  color: #5b4b8a;
+  background: #ede7ff;
+}
+
 label {
   display: grid;
   gap: 6px;

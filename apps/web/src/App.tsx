@@ -52,6 +52,8 @@ import {
   FailureReport,
   Goal,
   GoalHealth,
+  GoalIntakeDraft,
+  GoalIntakeFormDraft,
   GoalPlan,
   NotificationChannel,
   NotificationPreference,
@@ -75,6 +77,9 @@ import {
   createRewardCard,
   createGoal,
   createBillingOrder,
+  type CreateGoalInput,
+  createGoalFromIntakeDraft,
+  createGoalIntakeDraft,
   deleteCurrentAccount,
   deleteGoal,
   deleteRewardCard,
@@ -97,6 +102,7 @@ import {
   fetchEmailLogs,
   fetchFailureReport,
   fetchBillingOrders,
+  fetchLatestGoalIntakeDraft,
   fetchGoalPlan,
   fetchGoalHealth,
   fetchGoalReportArtifacts,
@@ -119,6 +125,7 @@ import {
   retryFailedEmailLogs,
   settleGoal,
   unbindWechat,
+  updateGoalIntakeDraft,
   updateAdminMembership,
   updateNotificationPreference,
   updateRewardCard,
@@ -658,6 +665,60 @@ const categoryExamples: Record<
   }
 };
 
+type GoalAssistantAnswer = {
+  question: string;
+  answer: string;
+};
+
+const assistantFieldLabels: Record<string, string> = {
+  title: "标题",
+  description: "描述",
+  category: "类型",
+  startDate: "开始日期",
+  endDate: "结束日期",
+  targetDate: "截止日期",
+  dailyTimeBudgetMinutes: "每日投入",
+  toleranceDaysAllowed: "容错次数",
+  currentBaseline: "当前基础",
+  constraints: "主要限制",
+  finalReward: "完成奖励",
+  successCriteria: "验收标准"
+};
+
+const draftCategoryToFormValue: Record<string, string> = {
+  STUDY: "study",
+  CAREER: "career",
+  FITNESS: "fitness",
+  HABIT: "habit",
+  CUSTOM: "custom",
+  POSTGRAD_EXAM: "study",
+  CET_4_6: "study"
+};
+
+function normalizeDraftCategory(category: string | null | undefined) {
+  if (!category) {
+    return "custom";
+  }
+
+  return draftCategoryToFormValue[category] ?? category.toLowerCase();
+}
+
+function normalizeGoalAssistantAnswers(value: unknown[]): GoalAssistantAnswer[] {
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const question = typeof record.question === "string" ? record.question : "";
+      const answer = typeof record.answer === "string" ? record.answer : "";
+
+      return question ? { question, answer } : null;
+    })
+    .filter((item): item is GoalAssistantAnswer => Boolean(item));
+}
+
 export function App() {
   const [activePage, setActivePage] = useState<PageId>("create");
   const [isLabelNavCollapsed, setIsLabelNavCollapsed] = useState(false);
@@ -682,6 +743,14 @@ export function App() {
     constraints: "",
     finalReward: ""
   });
+  const [goalAssistantPrompt, setGoalAssistantPrompt] = useState("");
+  const [goalIntakeDraft, setGoalIntakeDraft] = useState<GoalIntakeDraft | null>(
+    null
+  );
+  const [goalAcceptedFields, setGoalAcceptedFields] = useState<string[]>([]);
+  const [goalAssistantAnswers, setGoalAssistantAnswers] = useState<
+    GoalAssistantAnswer[]
+  >([]);
   const [replanForm, setReplanForm] = useState({
     adjustmentReason: "",
     dailyTimeBudgetMinutes: "",
@@ -691,6 +760,8 @@ export function App() {
   const [goalMessage, setGoalMessage] = useState("登录后可保存目标草稿。");
   const [planMessage, setPlanMessage] = useState("保存目标后可生成 AI 计划。");
   const [isCreatingGoal, setIsCreatingGoal] = useState(false);
+  const [isAnalyzingGoal, setIsAnalyzingGoal] = useState(false);
+  const [isSavingGoalAssistant, setIsSavingGoalAssistant] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [isConfirmingPlan, setIsConfirmingPlan] = useState(false);
   const [isRequestingReplan, setIsRequestingReplan] = useState(false);
@@ -1081,6 +1152,10 @@ export function App() {
     if (!session) {
       setGoals([]);
       setSelectedGoalId(null);
+      setGoalIntakeDraft(null);
+      setGoalAssistantPrompt("");
+      setGoalAcceptedFields([]);
+      setGoalAssistantAnswers([]);
       setTodayTasks([]);
       setActivityDays([]);
       setTimelineDays([]);
@@ -1117,6 +1192,7 @@ export function App() {
     }
 
     void refreshGoals(session.token);
+    void loadLatestGoalIntakeDraft(session.token, false);
   }, [session]);
 
   useEffect(() => {
@@ -2079,6 +2155,344 @@ export function App() {
     }
   }
 
+  function buildGoalCreatePayload(): CreateGoalInput {
+    return {
+      title: goalForm.title || undefined,
+      description: goalForm.description,
+      category: goalForm.category,
+      startDate: goalForm.startDate,
+      endDate: goalForm.endDate,
+      dailyTimeBudgetMinutes: goalForm.dailyTimeBudgetMinutes
+        ? Number(goalForm.dailyTimeBudgetMinutes)
+        : undefined,
+      toleranceDaysAllowed: goalForm.toleranceDaysAllowed
+        ? Number(goalForm.toleranceDaysAllowed)
+        : undefined,
+      currentBaseline: goalForm.currentBaseline || undefined,
+      constraints: goalForm.constraints || undefined,
+      finalReward: goalForm.finalReward || undefined
+    };
+  }
+
+  function buildGoalIntakeFormDraftFromForm(
+    includeEmptyFields = true
+  ): Partial<GoalIntakeFormDraft> {
+    if (!includeEmptyFields) {
+      const draft: Partial<GoalIntakeFormDraft> = {};
+
+      if (goalForm.title.trim()) draft.title = goalForm.title;
+      if (goalForm.description.trim()) draft.description = goalForm.description;
+      if (goalForm.startDate) draft.startDate = goalForm.startDate;
+      if (goalForm.endDate) draft.endDate = goalForm.endDate;
+      if (goalForm.dailyTimeBudgetMinutes) {
+        draft.dailyTimeBudgetMinutes = Number(goalForm.dailyTimeBudgetMinutes);
+      }
+      if (goalForm.currentBaseline.trim()) {
+        draft.currentBaseline = goalForm.currentBaseline;
+      }
+      if (goalForm.constraints.trim()) draft.constraints = goalForm.constraints;
+      if (goalForm.finalReward.trim()) draft.finalReward = goalForm.finalReward;
+
+      return draft;
+    }
+
+    return {
+      title: goalForm.title,
+      description: goalForm.description,
+      category: goalForm.category,
+      startDate: goalForm.startDate,
+      endDate: goalForm.endDate,
+      dailyTimeBudgetMinutes: goalForm.dailyTimeBudgetMinutes
+        ? Number(goalForm.dailyTimeBudgetMinutes)
+        : null,
+      toleranceDaysAllowed: goalForm.toleranceDaysAllowed
+        ? Number(goalForm.toleranceDaysAllowed)
+        : 3,
+      currentBaseline: goalForm.currentBaseline || null,
+      constraints: goalForm.constraints || null,
+      finalReward: goalForm.finalReward || null
+    };
+  }
+
+  function getGoalFormFieldValue(field: string) {
+    const value = goalForm[field as keyof typeof goalForm];
+    return value ?? "";
+  }
+
+  function getDraftFormFieldValue(field: string) {
+    const value = goalIntakeDraft?.formDraft?.[
+      field as keyof GoalIntakeFormDraft
+    ];
+
+    if (value === undefined || value === null) {
+      return "";
+    }
+
+    if (field === "category") {
+      return normalizeDraftCategory(String(value));
+    }
+
+    return String(value);
+  }
+
+  function isGoalAssistantFieldOverridden(field: string) {
+    const draftValue = getDraftFormFieldValue(field);
+
+    if (!draftValue) {
+      return false;
+    }
+
+    return getGoalFormFieldValue(field) !== draftValue;
+  }
+
+  function applyGoalIntakeDraftToForm(draft: GoalIntakeDraft) {
+    const formDraft = draft.formDraft;
+
+    if (!formDraft) {
+      return;
+    }
+
+    setGoalForm((current) => ({
+      ...current,
+      title: formDraft.title || current.title,
+      description: formDraft.description || current.description,
+      category: normalizeDraftCategory(formDraft.category),
+      startDate: formDraft.startDate || current.startDate,
+      endDate: formDraft.endDate || current.endDate,
+      dailyTimeBudgetMinutes:
+        formDraft.dailyTimeBudgetMinutes === null
+          ? current.dailyTimeBudgetMinutes
+          : String(formDraft.dailyTimeBudgetMinutes),
+      toleranceDaysAllowed: String(formDraft.toleranceDaysAllowed ?? 3),
+      currentBaseline: formDraft.currentBaseline ?? current.currentBaseline,
+      constraints: formDraft.constraints ?? current.constraints,
+      finalReward: formDraft.finalReward ?? current.finalReward
+    }));
+  }
+
+  function setGoalAssistantDraftState(draft: GoalIntakeDraft) {
+    const savedAnswers = normalizeGoalAssistantAnswers(draft.answers);
+    const questionAnswers = (draft.analysis?.questions ?? []).map((question) => {
+      const saved = savedAnswers.find((answer) => answer.question === question);
+      return saved ?? { question, answer: "" };
+    });
+    const extraAnswers = savedAnswers.filter(
+      (answer) => !questionAnswers.some((item) => item.question === answer.question)
+    );
+
+    setGoalIntakeDraft(draft);
+    setGoalAssistantPrompt(draft.naturalLanguage);
+    setGoalAcceptedFields(draft.acceptedFields);
+    setGoalAssistantAnswers([...questionAnswers, ...extraAnswers]);
+    applyGoalIntakeDraftToForm(draft);
+  }
+
+  async function loadLatestGoalIntakeDraft(
+    token = session?.token,
+    showEmptyMessage = true
+  ) {
+    if (!token) {
+      if (showEmptyMessage) {
+        setGoalMessage("请先登录，再恢复目标助手草稿。");
+      }
+      return;
+    }
+
+    try {
+      const response = await fetchLatestGoalIntakeDraft(token);
+
+      if (!response.draft) {
+        if (showEmptyMessage) {
+          setGoalMessage("还没有可恢复的目标助手草稿。");
+        }
+        return;
+      }
+
+      setGoalAssistantDraftState(response.draft);
+
+      if (showEmptyMessage) {
+        setGoalMessage("已恢复最近一次目标助手草稿，可继续编辑或保存目标。");
+      }
+    } catch (error) {
+      if (showEmptyMessage) {
+        setGoalMessage(
+          error instanceof Error ? error.message : "目标助手草稿恢复失败"
+        );
+      }
+    }
+  }
+
+  async function handleAnalyzeGoalIntake() {
+    if (!session) {
+      setGoalMessage("请先注册或登录，再使用目标助手。");
+      setActivePage("account");
+      return;
+    }
+
+    const naturalLanguage = goalAssistantPrompt.trim();
+
+    if (naturalLanguage.length < 6) {
+      setGoalMessage("请先用至少 6 个字符描述你的目标。");
+      return;
+    }
+
+    setIsAnalyzingGoal(true);
+    setGoalMessage("目标助手正在解析描述...");
+
+    try {
+      const response = await createGoalIntakeDraft(session.token, {
+        naturalLanguage,
+        formDraft: buildGoalIntakeFormDraftFromForm(false)
+      });
+
+      setGoalAssistantDraftState(response.draft);
+
+      if (response.draft.analysis?.aiError) {
+        setGoalMessage("AI 解析失败，已保留描述并生成可手动编辑的普通表单草稿。");
+      } else {
+        setGoalMessage("目标助手已生成表单草稿，请逐字段确认或覆盖。");
+      }
+    } catch (error) {
+      setGoalMessage(error instanceof Error ? error.message : "目标助手解析失败");
+    } finally {
+      setIsAnalyzingGoal(false);
+    }
+  }
+
+  function updateGoalAssistantAnswer(index: number, answer: string) {
+    setGoalAssistantAnswers((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, answer } : item
+      )
+    );
+  }
+
+  async function saveGoalAssistantState(
+    acceptedFields = goalAcceptedFields,
+    status = goalIntakeDraft?.status
+  ) {
+    if (!session || !goalIntakeDraft) {
+      setGoalMessage("请先生成或恢复目标助手草稿。");
+      return null;
+    }
+
+    const response = await updateGoalIntakeDraft(session.token, goalIntakeDraft.id, {
+      status,
+      formDraft: buildGoalIntakeFormDraftFromForm(),
+      answers: goalAssistantAnswers,
+      acceptedFields
+    });
+
+    setGoalAssistantDraftState(response.draft);
+    return response.draft;
+  }
+
+  async function handleSaveGoalAssistantState() {
+    setIsSavingGoalAssistant(true);
+    setGoalMessage("正在保存目标助手草稿状态...");
+
+    try {
+      await saveGoalAssistantState(goalAcceptedFields, "EDITING");
+      setGoalMessage("目标助手草稿已保存，刷新后会自动恢复最近草稿。");
+    } catch (error) {
+      setGoalMessage(
+        error instanceof Error ? error.message : "目标助手草稿保存失败"
+      );
+    } finally {
+      setIsSavingGoalAssistant(false);
+    }
+  }
+
+  async function handleAcceptGoalAssistantField(field: string) {
+    const nextAcceptedFields = Array.from(new Set([...goalAcceptedFields, field]));
+    setGoalAcceptedFields(nextAcceptedFields);
+
+    try {
+      await saveGoalAssistantState(nextAcceptedFields, "EDITING");
+      setGoalMessage(`已接受“${assistantFieldLabels[field] ?? field}”字段建议。`);
+    } catch (error) {
+      setGoalMessage(
+        error instanceof Error ? error.message : "目标助手字段状态保存失败"
+      );
+    }
+  }
+
+  async function handleCreateGoalFromAssistant() {
+    if (!session) {
+      setGoalMessage("请先注册或登录，再创建目标。");
+      setActivePage("account");
+      return;
+    }
+
+    if (!goalIntakeDraft) {
+      setGoalMessage("请先生成或恢复目标助手草稿，也可以直接使用普通表单保存。");
+      return;
+    }
+
+    setIsCreatingGoal(true);
+    setGoalMessage("正在用目标助手草稿创建目标...");
+
+    try {
+      await saveGoalAssistantState(goalAcceptedFields, "READY_TO_CREATE");
+      const response = await createGoalFromIntakeDraft(
+        session.token,
+        goalIntakeDraft.id,
+        { overrides: buildGoalCreatePayload() }
+      );
+
+      setGoalAssistantDraftState(response.draft);
+      setCreatedGoal(response.goal);
+      setSelectedGoalId(response.goal.id);
+      setGeneratedPlan(null);
+      setGoalMessage(`目标已从助手草稿保存：${response.goal.title}`);
+      setPlanMessage("草稿已就绪，可以生成 AI 计划。");
+      await refreshGoals(session.token, response.goal.id);
+      setActivePage("goals");
+    } catch (error) {
+      setGoalMessage(
+        error instanceof Error ? error.message : "目标助手创建目标失败"
+      );
+    } finally {
+      setIsCreatingGoal(false);
+    }
+  }
+
+  function renderAssistantFieldHint(field: string) {
+    if (!goalIntakeDraft?.formDraft) {
+      return null;
+    }
+
+    const confidence = goalIntakeDraft.analysis?.confidence[field];
+    const source = goalIntakeDraft.analysis?.fieldSources[field];
+    const isAccepted = goalAcceptedFields.includes(field);
+    const isOverridden = isGoalAssistantFieldOverridden(field);
+
+    if (!source && !isAccepted && !isOverridden) {
+      return null;
+    }
+
+    const label = isOverridden
+      ? "用户覆盖"
+      : isAccepted
+        ? "已接受"
+        : source === "fallback"
+          ? "回退建议"
+          : "AI 填充";
+    const confidenceLabel =
+      typeof confidence === "number" ? ` ${Math.round(confidence * 100)}%` : "";
+
+    return (
+      <span
+        className={`assistant-field-badge ${
+          isOverridden ? "user" : isAccepted ? "accepted" : ""
+        }`}
+      >
+        {label}
+        {confidenceLabel}
+      </span>
+    );
+  }
+
   function updateGoalField(field: keyof typeof goalForm, value: string) {
     setGoalForm((current) => ({
       ...current,
@@ -2106,22 +2520,7 @@ export function App() {
     setGoalMessage("正在保存目标草稿...");
 
     try {
-      const response = await createGoal(session.token, {
-        title: goalForm.title || undefined,
-        description: goalForm.description,
-        category: goalForm.category,
-        startDate: goalForm.startDate,
-        endDate: goalForm.endDate,
-        dailyTimeBudgetMinutes: goalForm.dailyTimeBudgetMinutes
-          ? Number(goalForm.dailyTimeBudgetMinutes)
-          : undefined,
-        toleranceDaysAllowed: goalForm.toleranceDaysAllowed
-          ? Number(goalForm.toleranceDaysAllowed)
-          : undefined,
-        currentBaseline: goalForm.currentBaseline || undefined,
-        constraints: goalForm.constraints || undefined,
-        finalReward: goalForm.finalReward || undefined
-      });
+      const response = await createGoal(session.token, buildGoalCreatePayload());
 
       setCreatedGoal(response.goal);
       setSelectedGoalId(response.goal.id);
@@ -3157,9 +3556,168 @@ export function App() {
                 <h1 id="goal-title">创建目标</h1>
               </div>
 
+              <section className="goal-assistant-card" aria-label="目标助手">
+                <div className="assistant-card-header">
+                  <div>
+                    <p className="eyebrow">AI goal assistant</p>
+                    <h2>用一句话生成可编辑草稿</h2>
+                  </div>
+                  {goalIntakeDraft ? (
+                    <span className="assistant-status">
+                      {goalIntakeDraft.status} · {goalIntakeDraft.provider}
+                    </span>
+                  ) : null}
+                </div>
+
+                <label>
+                  <span>目标自然语言描述</span>
+                  <textarea
+                    value={goalAssistantPrompt}
+                    onChange={(event) =>
+                      setGoalAssistantPrompt(event.target.value)
+                    }
+                    placeholder="例如：我想 90 天内系统复习考研英语，每天 90 分钟，目标从 55 分提升到 75 分。"
+                    rows={4}
+                  />
+                </label>
+
+                <div className="form-actions">
+                  <button
+                    className="primary-button"
+                    disabled={isAnalyzingGoal || !goalAssistantPrompt.trim()}
+                    onClick={handleAnalyzeGoalIntake}
+                    type="button"
+                  >
+                    {isAnalyzingGoal ? "解析中" : "AI 解析目标"}
+                    <Sparkles size={16} aria-hidden="true" />
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => void loadLatestGoalIntakeDraft()}
+                    type="button"
+                  >
+                    恢复最新草稿
+                  </button>
+                </div>
+
+                {goalIntakeDraft?.analysis ? (
+                  <div className="assistant-result-grid">
+                    <div className="assistant-summary-card">
+                      <span>可行性</span>
+                      <strong>{goalIntakeDraft.analysis.feasibilityScore}/100</strong>
+                      <p>
+                        风险：{goalIntakeDraft.analysis.riskLevel}
+                        {goalIntakeDraft.analysis.aiError
+                          ? "。AI 解析失败，已回退到普通表单草稿。"
+                          : ""}
+                      </p>
+                    </div>
+                    <div className="assistant-summary-card">
+                      <span>缺失字段</span>
+                      <strong>
+                        {goalIntakeDraft.analysis.missingFields.length || 0}
+                      </strong>
+                      <p>
+                        {goalIntakeDraft.analysis.missingFields.length
+                          ? goalIntakeDraft.analysis.missingFields
+                              .map((field) => assistantFieldLabels[field] ?? field)
+                              .join("、")
+                          : "关键字段已具备，可继续确认。"}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {goalIntakeDraft?.analysis?.reasons.length ? (
+                  <div className="assistant-note-list">
+                    <strong>判断依据</strong>
+                    {goalIntakeDraft.analysis.reasons.map((reason) => (
+                      <p key={reason}>{reason}</p>
+                    ))}
+                  </div>
+                ) : null}
+
+                {goalIntakeDraft?.analysis?.suggestedChanges.length ? (
+                  <div className="assistant-note-list">
+                    <strong>建议调整</strong>
+                    {goalIntakeDraft.analysis.suggestedChanges.map((change) => (
+                      <p key={change}>{change}</p>
+                    ))}
+                  </div>
+                ) : null}
+
+                {goalAssistantAnswers.length ? (
+                  <div className="assistant-questions">
+                    <strong>待确认问题</strong>
+                    {goalAssistantAnswers.map((item, index) => (
+                      <label key={item.question}>
+                        <span>{item.question}</span>
+                        <input
+                          value={item.answer}
+                          onChange={(event) =>
+                            updateGoalAssistantAnswer(index, event.target.value)
+                          }
+                          placeholder="补充你的答案，保存后刷新不会丢失"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+
+                {goalIntakeDraft?.formDraft ? (
+                  <div className="assistant-field-list">
+                    {[
+                      "title",
+                      "category",
+                      "endDate",
+                      "dailyTimeBudgetMinutes",
+                      "currentBaseline",
+                      "constraints",
+                      "finalReward"
+                    ].map((field) => (
+                      <div className="assistant-field-row" key={field}>
+                        <span>{assistantFieldLabels[field] ?? field}</span>
+                        {renderAssistantFieldHint(field)}
+                        <button
+                          className="ghost-button"
+                          disabled={goalAcceptedFields.includes(field)}
+                          onClick={() => void handleAcceptGoalAssistantField(field)}
+                          type="button"
+                        >
+                          {goalAcceptedFields.includes(field) ? "已接受" : "接受"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="form-actions">
+                  <button
+                    className="ghost-button"
+                    disabled={!goalIntakeDraft || isSavingGoalAssistant}
+                    onClick={handleSaveGoalAssistantState}
+                    type="button"
+                  >
+                    {isSavingGoalAssistant ? "保存中" : "保存助手状态"}
+                  </button>
+                  <button
+                    className="primary-button"
+                    disabled={!goalIntakeDraft || isCreatingGoal}
+                    onClick={handleCreateGoalFromAssistant}
+                    type="button"
+                  >
+                    用助手草稿保存目标
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                </div>
+              </section>
+
               <form className="goal-form" onSubmit={handleCreateGoal}>
                 <label>
-                  <span>目标标题</span>
+                  <span className="field-label-row">
+                    <span>目标标题</span>
+                    {renderAssistantFieldHint("title")}
+                  </span>
                   <input
                     value={goalForm.title}
                     onChange={(event) =>
@@ -3170,7 +3728,10 @@ export function App() {
                 </label>
 
                 <label>
-                  <span>目标描述</span>
+                  <span className="field-label-row">
+                    <span>目标描述</span>
+                    {renderAssistantFieldHint("description")}
+                  </span>
                   <textarea
                     value={goalForm.description}
                     onChange={(event) =>
@@ -3184,7 +3745,10 @@ export function App() {
 
                 <div className="form-row">
                   <label>
-                    <span>类型</span>
+                    <span className="field-label-row">
+                      <span>类型</span>
+                      {renderAssistantFieldHint("category")}
+                    </span>
                     <select
                       value={goalForm.category}
                       onChange={(event) =>
@@ -3199,7 +3763,10 @@ export function App() {
                     </select>
                   </label>
                   <label>
-                    <span>每日投入分钟</span>
+                    <span className="field-label-row">
+                      <span>每日投入分钟</span>
+                      {renderAssistantFieldHint("dailyTimeBudgetMinutes")}
+                    </span>
                     <input
                       value={goalForm.dailyTimeBudgetMinutes}
                       onChange={(event) =>
@@ -3214,7 +3781,10 @@ export function App() {
 
                 <div className="form-row">
                   <label>
-                    <span>开始日期</span>
+                    <span className="field-label-row">
+                      <span>开始日期</span>
+                      {renderAssistantFieldHint("startDate")}
+                    </span>
                     <input
                       value={goalForm.startDate}
                       onChange={(event) =>
@@ -3225,7 +3795,10 @@ export function App() {
                     />
                   </label>
                   <label>
-                    <span>结束日期</span>
+                    <span className="field-label-row">
+                      <span>结束日期</span>
+                      {renderAssistantFieldHint("endDate")}
+                    </span>
                     <input
                       value={goalForm.endDate}
                       onChange={(event) =>
@@ -3239,7 +3812,10 @@ export function App() {
 
                 <div className="form-row">
                   <label>
-                    <span>容错次数</span>
+                    <span className="field-label-row">
+                      <span>容错次数</span>
+                      {renderAssistantFieldHint("toleranceDaysAllowed")}
+                    </span>
                     <input
                       value={goalForm.toleranceDaysAllowed}
                       onChange={(event) =>
@@ -3250,7 +3826,10 @@ export function App() {
                     />
                   </label>
                   <label>
-                    <span>当前基础</span>
+                    <span className="field-label-row">
+                      <span>当前基础</span>
+                      {renderAssistantFieldHint("currentBaseline")}
+                    </span>
                     <input
                       value={goalForm.currentBaseline}
                       onChange={(event) =>
@@ -3262,7 +3841,10 @@ export function App() {
                 </div>
 
                 <label>
-                  <span>主要限制</span>
+                  <span className="field-label-row">
+                    <span>主要限制</span>
+                    {renderAssistantFieldHint("constraints")}
+                  </span>
                   <input
                     value={goalForm.constraints}
                     onChange={(event) =>
@@ -3273,7 +3855,10 @@ export function App() {
                 </label>
 
                 <label>
-                  <span>完成奖励</span>
+                  <span className="field-label-row">
+                    <span>完成奖励</span>
+                    {renderAssistantFieldHint("finalReward")}
+                  </span>
                   <input
                     value={goalForm.finalReward}
                     onChange={(event) =>

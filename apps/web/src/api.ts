@@ -1,4 +1,14 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3000";
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+const API_BASE_URL = configuredApiBaseUrl || "/api";
+
+function apiUrl(path: string) {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE_URL.replace(/\/$/, "")}${normalizedPath}`;
+}
+
+function apiSearchUrl(path: string) {
+  return new URL(apiUrl(path), window.location.origin);
+}
 
 export interface AuthUser {
   id: string;
@@ -1018,6 +1028,55 @@ export interface CreateGoalInput {
   finalReward?: string;
 }
 
+export interface GoalIntakeFormDraft {
+  title: string;
+  description: string;
+  category: string;
+  startDate: string;
+  endDate: string;
+  dailyTimeBudgetMinutes: number | null;
+  toleranceDaysAllowed: number;
+  examName?: string | null;
+  targetScore?: string | null;
+  currentScore?: string | null;
+  examDate?: string | null;
+  subjects?: string[];
+  materials?: string[];
+  currentBaseline?: string | null;
+  constraints?: string | null;
+  finalReward?: string | null;
+}
+
+export interface GoalIntakeAnalysis {
+  provider: string;
+  structuredFields: Record<string, unknown>;
+  feasible: boolean;
+  riskLevel: string;
+  feasibilityScore: number;
+  reasons: string[];
+  assumptions: string[];
+  suggestedChanges: string[];
+  questions: string[];
+  confidence: Record<string, number>;
+  missingFields: string[];
+  fieldSources: Record<string, string>;
+  aiError?: string | null;
+}
+
+export interface GoalIntakeDraft {
+  id: string;
+  status: string;
+  provider: string;
+  naturalLanguage: string;
+  analysis: GoalIntakeAnalysis | null;
+  formDraft: GoalIntakeFormDraft | null;
+  answers: unknown[];
+  acceptedFields: string[];
+  completedGoalId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export async function authenticate(
   mode: "login" | "register",
   payload: {
@@ -1026,7 +1085,7 @@ export async function authenticate(
     displayName?: string;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/auth/${mode}`, {
+  const response = await fetch(apiUrl(`/auth/${mode}`), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -1044,7 +1103,7 @@ export async function authenticate(
 }
 
 export async function fetchCurrentUser(token: string) {
-  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+  const response = await fetch(apiUrl("/auth/me"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1060,7 +1119,7 @@ export async function fetchCurrentUser(token: string) {
 }
 
 export async function deleteCurrentAccount(token: string) {
-  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+  const response = await fetch(apiUrl("/auth/me"), {
     method: "DELETE",
     headers: {
       Authorization: `Bearer ${token}`
@@ -1084,7 +1143,7 @@ export async function exportCurrentAccountData(
     scopes: DataExportScope[];
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/auth/export`, {
+  const response = await fetch(apiUrl("/auth/export"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1115,7 +1174,7 @@ export async function createEvidenceUpload(
     metadata?: Record<string, unknown>;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/uploads/evidence`, {
+  const response = await fetch(apiUrl("/uploads/evidence"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1134,7 +1193,7 @@ export async function createEvidenceUpload(
 }
 
 export async function getEvidenceUpload(token: string, uploadId: string) {
-  const response = await fetch(`${API_BASE_URL}/uploads/evidence/${uploadId}`, {
+  const response = await fetch(apiUrl(`/uploads/evidence/${uploadId}`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1171,7 +1230,7 @@ export async function uploadEvidenceFile(
 
   onProgress?.("uploading");
   const direct = /^https?:\/\//i.test(registered.upload.url);
-  const response = await fetch(direct ? registered.upload.url : `${API_BASE_URL}${registered.upload.url}`, {
+  const response = await fetch(direct ? registered.upload.url : apiUrl(registered.upload.url), {
     method: "PUT",
     headers: {
       ...registered.upload.headers,
@@ -1200,7 +1259,7 @@ export async function uploadEvidenceFile(
 }
 
 export async function completeEvidenceUpload(token: string, uploadId: string) {
-  const response = await fetch(`${API_BASE_URL}/uploads/evidence/${uploadId}/complete`, {
+  const response = await fetch(apiUrl(`/uploads/evidence/${uploadId}/complete`), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` }
   });
@@ -1218,7 +1277,7 @@ export async function createBillingOrder(
   token: string,
   payload: { provider: "MOCK" | "STRIPE" | "WECHAT_PAY"; durationDays: 30 | 90 | 365 }
 ) {
-  const response = await fetch(`${API_BASE_URL}/billing/orders`, {
+  const response = await fetch(apiUrl("/billing/orders"), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -1229,7 +1288,7 @@ export async function createBillingOrder(
 }
 
 export async function fetchBillingOrders(token: string) {
-  const response = await fetch(`${API_BASE_URL}/billing/orders`, {
+  const response = await fetch(apiUrl("/billing/orders"), {
     headers: { Authorization: `Bearer ${token}` }
   });
   const data = await parseJson<{ orders: BillingOrder[] }>(response);
@@ -1238,7 +1297,7 @@ export async function fetchBillingOrders(token: string) {
 }
 
 export async function createGoal(token: string, payload: CreateGoalInput) {
-  const response = await fetch(`${API_BASE_URL}/goals`, {
+  const response = await fetch(apiUrl("/goals"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1256,8 +1315,100 @@ export async function createGoal(token: string, payload: CreateGoalInput) {
   return data as { goal: Goal };
 }
 
+export async function createGoalIntakeDraft(
+  token: string,
+  payload: {
+    naturalLanguage: string;
+    formDraft?: Partial<GoalIntakeFormDraft>;
+  }
+) {
+  const response = await fetch(apiUrl("/goals/intake-drafts"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ draft: GoalIntakeDraft }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标助手解析失败"));
+  }
+
+  return data as { draft: GoalIntakeDraft };
+}
+
+export async function fetchLatestGoalIntakeDraft(token: string) {
+  const response = await fetch(apiUrl("/goals/intake-drafts/latest"), {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const data = await parseJson<{ draft: GoalIntakeDraft | null }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标助手草稿加载失败"));
+  }
+
+  return data as { draft: GoalIntakeDraft | null };
+}
+
+export async function updateGoalIntakeDraft(
+  token: string,
+  draftId: string,
+  payload: {
+    status?: string;
+    formDraft?: Partial<GoalIntakeFormDraft>;
+    answers?: unknown[];
+    acceptedFields?: string[];
+  }
+) {
+  const response = await fetch(apiUrl(`/goals/intake-drafts/${draftId}`), {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ draft: GoalIntakeDraft }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标助手草稿保存失败"));
+  }
+
+  return data as { draft: GoalIntakeDraft };
+}
+
+export async function createGoalFromIntakeDraft(
+  token: string,
+  draftId: string,
+  payload: { overrides?: Partial<CreateGoalInput> } = {}
+) {
+  const response = await fetch(apiUrl(`/goals/intake-drafts/${draftId}/create-goal`), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await parseJson<{ goal: Goal; draft: GoalIntakeDraft }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "目标助手创建目标失败"));
+  }
+
+  return data as { goal: Goal; draft: GoalIntakeDraft };
+}
+
 export async function listGoals(token: string) {
-  const response = await fetch(`${API_BASE_URL}/goals`, {
+  const response = await fetch(apiUrl("/goals"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1273,7 +1424,7 @@ export async function listGoals(token: string) {
 }
 
 export async function deleteGoal(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}`), {
     method: "DELETE",
     headers: {
       Authorization: `Bearer ${token}`
@@ -1290,7 +1441,7 @@ export async function deleteGoal(token: string, goalId: string) {
 }
 
 export async function generateGoalPlan(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/generate-plan`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/generate-plan`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`
@@ -1318,7 +1469,7 @@ export async function requestGoalReplan(
     dailyTimeBudgetMinutes?: number;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/request-replan`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/request-replan`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1339,7 +1490,7 @@ export async function requestGoalReplan(
 }
 
 export async function confirmGoalPlan(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/confirm-plan`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/confirm-plan`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`
@@ -1356,7 +1507,7 @@ export async function confirmGoalPlan(token: string, goalId: string) {
 }
 
 export async function fetchGoalPlan(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/plan`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/plan`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1372,7 +1523,7 @@ export async function fetchGoalPlan(token: string, goalId: string) {
 }
 
 export async function fetchGoalHealth(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/health`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/health`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1388,7 +1539,7 @@ export async function fetchGoalHealth(token: string, goalId: string) {
 }
 
 export async function fetchGoalHealthSnapshots(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/health-snapshots`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/health-snapshots`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1422,7 +1573,7 @@ export async function enqueueGoalReport(
   payload: { type: GoalReportType; reportDate?: string | null }
 ) {
   const response = await fetch(
-    `${API_BASE_URL}/goals/${goalId}/reports/enqueue`,
+    apiUrl(`/goals/${goalId}/reports/enqueue`),
     {
       method: "POST",
       headers: {
@@ -1450,7 +1601,7 @@ export async function fetchGoalHealthTrend(
     reportDate?: string | null;
   } = {}
 ) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/health-trends`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/health-trends`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1476,7 +1627,7 @@ export async function generateGoalReportArtifact(
     reportDate?: string | null;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/report-artifacts`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/report-artifacts`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1497,7 +1648,7 @@ export async function generateGoalReportArtifact(
 }
 
 export async function fetchGoalReportArtifacts(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/report-artifacts`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/report-artifacts`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1519,7 +1670,7 @@ export async function downloadGoalReportArtifact(
   artifactId: string
 ) {
   const response = await fetch(
-    `${API_BASE_URL}/goals/${goalId}/report-artifacts/${artifactId}/download`,
+    apiUrl(`/goals/${goalId}/report-artifacts/${artifactId}/download`),
     {
       headers: {
         Authorization: `Bearer ${token}`
@@ -1552,7 +1703,7 @@ export async function downloadGoalReportArtifact(
 }
 
 export async function fetchAiJob(token: string, jobId: string) {
-  const response = await fetch(`${API_BASE_URL}/ai-jobs/${jobId}`, {
+  const response = await fetch(apiUrl(`/ai-jobs/${jobId}`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1572,7 +1723,7 @@ export async function cancelAiJob(
   jobId: string,
   payload: { reason?: string } = {}
 ) {
-  const response = await fetch(`${API_BASE_URL}/ai-jobs/${jobId}/cancel`, {
+  const response = await fetch(apiUrl(`/ai-jobs/${jobId}/cancel`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1595,7 +1746,7 @@ export async function cancelAiJob(
 }
 
 export async function settleGoal(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/settle`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/settle`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`
@@ -1612,7 +1763,7 @@ export async function settleGoal(token: string, goalId: string) {
 }
 
 export async function fetchFailureReport(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/failure-report`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/failure-report`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1632,7 +1783,7 @@ export async function restartGoal(
   goalId: string,
   payload: Partial<CreateGoalInput> = {}
 ) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/restart`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/restart`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1651,7 +1802,7 @@ export async function restartGoal(
 }
 
 export async function fetchNotificationPreference(token: string) {
-  const response = await fetch(`${API_BASE_URL}/notifications/preferences`, {
+  const response = await fetch(apiUrl("/notifications/preferences"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1678,7 +1829,7 @@ export async function updateNotificationPreference(
     examSprintDays?: number;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/notifications/preferences`, {
+  const response = await fetch(apiUrl("/notifications/preferences"), {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1697,7 +1848,7 @@ export async function updateNotificationPreference(
 }
 
 export async function fetchWechatBinding(token: string) {
-  const response = await fetch(`${API_BASE_URL}/notifications/wechat-binding`, {
+  const response = await fetch(apiUrl("/notifications/wechat-binding"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1721,7 +1872,7 @@ export async function bindWechat(
     avatarUrl?: string;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/notifications/wechat-binding`, {
+  const response = await fetch(apiUrl("/notifications/wechat-binding"), {
     method: "PUT",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1740,7 +1891,7 @@ export async function bindWechat(
 }
 
 export async function unbindWechat(token: string) {
-  const response = await fetch(`${API_BASE_URL}/notifications/wechat-binding`, {
+  const response = await fetch(apiUrl("/notifications/wechat-binding"), {
     method: "DELETE",
     headers: {
       Authorization: `Bearer ${token}`
@@ -1757,7 +1908,7 @@ export async function unbindWechat(token: string) {
 }
 
 export async function fetchEmailLogs(token: string) {
-  const response = await fetch(`${API_BASE_URL}/notifications/email-logs`, {
+  const response = await fetch(apiUrl("/notifications/email-logs"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1779,7 +1930,7 @@ export async function createPreviewEmailLog(
     goalId?: string | null;
   } = {}
 ) {
-  const response = await fetch(`${API_BASE_URL}/notifications/email-logs/preview`, {
+  const response = await fetch(apiUrl("/notifications/email-logs/preview"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1798,7 +1949,7 @@ export async function createPreviewEmailLog(
 }
 
 export async function enqueueDueEmailLogs(token: string) {
-  const response = await fetch(`${API_BASE_URL}/notifications/email-logs/enqueue-due`, {
+  const response = await fetch(apiUrl("/notifications/email-logs/enqueue-due"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1818,7 +1969,7 @@ export async function enqueueDueEmailLogs(token: string) {
 
 export async function processQueuedEmailLogs(token: string) {
   const response = await fetch(
-    `${API_BASE_URL}/notifications/email-logs/process-queue`,
+    apiUrl("/notifications/email-logs/process-queue"),
     {
       method: "POST",
       headers: {
@@ -1843,7 +1994,7 @@ export async function processQueuedEmailLogs(token: string) {
 }
 
 export async function retryFailedEmailLogs(token: string) {
-  const response = await fetch(`${API_BASE_URL}/notifications/email-logs/retry-failed`, {
+  const response = await fetch(apiUrl("/notifications/email-logs/retry-failed"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1864,7 +2015,7 @@ export async function retryFailedEmailLogs(token: string) {
 }
 
 export async function fetchAdminOverview(token: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/overview`, {
+  const response = await fetch(apiUrl("/admin/overview"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -1883,7 +2034,7 @@ export async function fetchAdminUsers(
   token: string,
   filters: AdminUserFilters = {}
 ) {
-  const url = new URL(`${API_BASE_URL}/admin/users`);
+  const url = apiSearchUrl("/admin/users");
 
   Object.entries(filters).forEach(([key, value]) => {
     if (value) {
@@ -1918,7 +2069,7 @@ export async function fetchAdminGoals(
   token: string,
   filters: AdminGoalFilters = {}
 ) {
-  const url = new URL(`${API_BASE_URL}/admin/goals`);
+  const url = apiSearchUrl("/admin/goals");
 
   Object.entries(filters).forEach(([key, value]) => {
     if (value) {
@@ -1953,7 +2104,7 @@ export async function fetchAdminAiJobs(
   token: string,
   filters: AdminAiJobFilters = {}
 ) {
-  const url = new URL(`${API_BASE_URL}/admin/ai-jobs`);
+  const url = apiSearchUrl("/admin/ai-jobs");
 
   Object.entries(filters).forEach(([key, value]) => {
     if (value) {
@@ -1989,7 +2140,7 @@ export async function retryAdminAiJob(
   jobId: string,
   payload: { reason: string }
 ) {
-  const response = await fetch(`${API_BASE_URL}/admin/ai-jobs/${jobId}/retry`, {
+  const response = await fetch(apiUrl(`/admin/ai-jobs/${jobId}/retry`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -2011,7 +2162,7 @@ export async function fetchAdminEmailLogs(
   token: string,
   filters: AdminEmailLogFilters = {}
 ) {
-  const url = new URL(`${API_BASE_URL}/admin/email-logs`);
+  const url = apiSearchUrl("/admin/email-logs");
 
   Object.entries(filters).forEach(([key, value]) => {
     if (value) {
@@ -2055,7 +2206,7 @@ export async function fetchAdminMembershipAudits(token: string) {
 }
 
 export async function retryAdminEmailLog(token: string, logId: string, reason: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/email-logs/${logId}/retry`, {
+  const response = await fetch(apiUrl(`/admin/email-logs/${logId}/retry`), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ reason })
@@ -2069,7 +2220,7 @@ export async function runAdminNotificationScheduler(
   token: string,
   payload: { now?: string; reason: string }
 ) {
-  const response = await fetch(`${API_BASE_URL}/admin/notifications/scheduler/run`, {
+  const response = await fetch(apiUrl("/admin/notifications/scheduler/run"), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -2090,7 +2241,7 @@ export async function runAdminNotificationScheduler(
 }
 
 async function fetchAdminCollection<T>(token: string, path: string, fallback: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/${path}`, {
+  const response = await fetch(apiUrl(`/admin/${path}`), {
     headers: { Authorization: `Bearer ${token}` }
   });
   const data = await parseJson<T>(response);
@@ -2108,7 +2259,7 @@ export async function updateAdminMembership(
     reason?: string;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/admin/users/${userId}/membership`, {
+  const response = await fetch(apiUrl(`/admin/users/${userId}/membership`), {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -2131,7 +2282,7 @@ export async function fetchAdminRawContent(
   userId: string,
   reason: string
 ) {
-  const url = new URL(`${API_BASE_URL}/admin/users/${userId}/raw-content`);
+  const url = apiSearchUrl(`/admin/users/${userId}/raw-content`);
   url.searchParams.set("reason", reason);
   const response = await fetch(url.toString(), {
     headers: {
@@ -2149,7 +2300,7 @@ export async function fetchAdminRawContent(
 }
 
 export async function fetchAdminAuditLogs(token: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/audit-logs`, {
+  const response = await fetch(apiUrl("/admin/audit-logs"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -2165,7 +2316,7 @@ export async function fetchAdminAuditLogs(token: string) {
 }
 
 export async function fetchAdminSystemConfigs(token: string) {
-  const response = await fetch(`${API_BASE_URL}/admin/system-configs`, {
+  const response = await fetch(apiUrl("/admin/system-configs"), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -2189,7 +2340,7 @@ export async function upsertAdminSystemConfig(
     reason?: string;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/admin/system-configs`, {
+  const response = await fetch(apiUrl("/admin/system-configs"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -2208,7 +2359,7 @@ export async function upsertAdminSystemConfig(
 }
 
 export async function generateRescueTask(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/rescue-task`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/rescue-task`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`
@@ -2237,7 +2388,7 @@ export async function generateRescueTask(token: string, goalId: string) {
 }
 
 export async function fetchRewardBoard(token: string, goalId: string) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/rewards`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/rewards`), {
     headers: {
       Authorization: `Bearer ${token}`
     }
@@ -2257,7 +2408,7 @@ export async function createRewardCard(
   goalId: string,
   payload: RewardCardInput
 ) {
-  const response = await fetch(`${API_BASE_URL}/goals/${goalId}/rewards`, {
+  const response = await fetch(apiUrl(`/goals/${goalId}/rewards`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -2282,7 +2433,7 @@ export async function updateRewardCard(
   payload: RewardCardInput
 ) {
   const response = await fetch(
-    `${API_BASE_URL}/goals/${goalId}/rewards/${cardId}`,
+    apiUrl(`/goals/${goalId}/rewards/${cardId}`),
     {
       method: "PATCH",
       headers: {
@@ -2308,7 +2459,7 @@ export async function deleteRewardCard(
   cardId: string
 ) {
   const response = await fetch(
-    `${API_BASE_URL}/goals/${goalId}/rewards/${cardId}`,
+    apiUrl(`/goals/${goalId}/rewards/${cardId}`),
     {
       method: "DELETE",
       headers: {
@@ -2327,7 +2478,7 @@ export async function deleteRewardCard(
 }
 
 export async function fetchTodayTasks(token: string, goalId?: string) {
-  const url = new URL(`${API_BASE_URL}/daily-tasks/today`);
+  const url = apiSearchUrl("/daily-tasks/today");
 
   if (goalId) {
     url.searchParams.set("goalId", goalId);
@@ -2364,7 +2515,7 @@ export async function completeDailyTask(
     difficultyLevel?: string;
   }
 ) {
-  const response = await fetch(`${API_BASE_URL}/daily-tasks/${taskId}/complete`, {
+  const response = await fetch(apiUrl(`/daily-tasks/${taskId}/complete`), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -2395,7 +2546,7 @@ export async function appealCheckinScore(
   }
 ) {
   const response = await fetch(
-    `${API_BASE_URL}/daily-tasks/checkins/${checkinId}/appeal`,
+    apiUrl(`/daily-tasks/checkins/${checkinId}/appeal`),
     {
       method: "POST",
       headers: {
@@ -2424,7 +2575,7 @@ export async function fetchTaskActivity(
   year: number,
   goalId?: string
 ) {
-  const url = new URL(`${API_BASE_URL}/daily-tasks/activity`);
+  const url = apiSearchUrl("/daily-tasks/activity");
   url.searchParams.set("year", String(year));
 
   if (goalId) {
@@ -2447,7 +2598,7 @@ export async function fetchTaskActivity(
 }
 
 export async function fetchTaskTimeline(token: string, goalId?: string) {
-  const url = new URL(`${API_BASE_URL}/daily-tasks/timeline`);
+  const url = apiSearchUrl("/daily-tasks/timeline");
 
   if (goalId) {
     url.searchParams.set("goalId", goalId);
