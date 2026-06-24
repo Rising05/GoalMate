@@ -22,6 +22,7 @@ import { QuotaService } from "../quota/quota.service";
 import { TraceContextService } from "../observability/trace-context.service";
 import { randomUUID } from "node:crypto";
 import { FieldEncryptionService } from "../security/field-encryption.service";
+import { GrowthEventsService } from "../growth-events/growth-events.service";
 
 const GOAL_PLAN_GENERATION = "GOAL_PLAN_GENERATION";
 const GOAL_PLAN_REPLAN = "GOAL_PLAN_REPLAN";
@@ -52,7 +53,10 @@ export class AiJobsService {
     private readonly traces: TraceContextService = new TraceContextService(),
     @Optional()
     @Inject(FieldEncryptionService)
-    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService(),
+    @Optional()
+    @Inject(GrowthEventsService)
+    private readonly growthEvents: GrowthEventsService = new GrowthEventsService(prisma)
   ) {}
 
   async generateGoalPlan(userId: string, goalId: string) {
@@ -80,25 +84,44 @@ export class AiJobsService {
         resourceType: "AI_JOB",
         resourceId: jobId
       },
-      (tx) => tx.aiJob.create({ data: {
-        id: jobId,
-        traceId: this.traces.getTraceId(),
-        userId,
-        goalId,
-        type: GOAL_PLAN_GENERATION,
-        status: "QUEUED",
-        payload: {
+      async (tx) => {
+        const created = await tx.aiJob.create({ data: {
+          id: jobId,
+          traceId: this.traces.getTraceId(),
+          userId,
           goalId,
-          provider: this.planProvider.name,
-          inputSummary: {
-            hasDescription: Boolean(goal.description),
-            category: goal.category,
-            hasExamDate: Boolean(goal.examDate),
-            subjectCount: this.jsonArray(goal.subjects).length,
-            materialCount: this.jsonArray(goal.materials).length
+          type: GOAL_PLAN_GENERATION,
+          status: "QUEUED",
+          payload: {
+            goalId,
+            provider: this.planProvider.name,
+            inputSummary: {
+              hasDescription: Boolean(goal.description),
+              category: goal.category,
+              hasExamDate: Boolean(goal.examDate),
+              subjectCount: this.jsonArray(goal.subjects).length,
+              materialCount: this.jsonArray(goal.materials).length
+            }
           }
-        }
-      } })
+        } });
+        await this.growthEvents.record(
+          {
+            userId,
+            goalId,
+            type: "PLAN_GENERATION_STARTED",
+            sourceResourceType: "AI_JOB",
+            sourceResourceId: created.id,
+            occurredAt: created.createdAt,
+            metadata: {
+              jobType: created.type,
+              provider: this.planProvider.name,
+              goalStatus: goal.status
+            }
+          },
+          tx
+        );
+        return created;
+      }
     );
     const job = await this.attachQueueMetadata(createdJob);
 
@@ -228,6 +251,24 @@ export class AiJobsService {
             }
           }
         });
+        await this.growthEvents.record(
+          {
+            userId,
+            goalId,
+            type: "REPLAN_REQUESTED",
+            sourceResourceType: "AI_JOB",
+            sourceResourceId: createdJob.id,
+            occurredAt: createdJob.createdAt,
+            metadata: {
+              previousStatus: goal.status,
+              previousPlanVersion: currentPlan?.version ?? null,
+              nextPlanVersion: nextVersion,
+              provider: this.planProvider.name,
+              dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes ?? null
+            }
+          },
+          tx
+        );
 
         return { updatedGoal, createdJob };
       }
@@ -320,6 +361,40 @@ export class AiJobsService {
           confirmedAt: new Date()
         }
       });
+      await this.growthEvents.record(
+        {
+          userId,
+          goalId,
+          type: "PLAN_CONFIRMED",
+          sourceResourceType: "PLAN",
+          sourceResourceId: plan.id,
+          metadata: {
+            planVersion: plan.version,
+            weeklyPlanCount: plan.weeklyPlans.length,
+            dailyTaskCount: plan.weeklyPlans.reduce(
+              (count, weeklyPlan) => count + weeklyPlan.dailyTasks.length,
+              0
+            )
+          }
+        },
+        tx
+      );
+
+      if (plan.version > 1) {
+        await this.growthEvents.record(
+          {
+            userId,
+            goalId,
+            type: "REPLAN_CONFIRMED",
+            sourceResourceType: "PLAN",
+            sourceResourceId: plan.id,
+            metadata: {
+              planVersion: plan.version
+            }
+          },
+          tx
+        );
+      }
 
       return tx.plan.findUniqueOrThrow({
         where: { id: plan.id },

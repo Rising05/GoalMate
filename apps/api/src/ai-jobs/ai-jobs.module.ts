@@ -12,6 +12,7 @@ import { MockPlanProvider } from "./mock-plan.provider";
 import { PLAN_PROVIDER } from "./plan-provider";
 import { QuotaModule } from "../quota/quota.module";
 import { SecurityModule } from "../security/security.module";
+import { GrowthEventsModule } from "../growth-events/growth-events.module";
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { SecurityModule } from "../security/security.module";
     DailyTasksModule,
     QuotaModule,
     SecurityModule,
+    GrowthEventsModule,
     forwardRef(() => GoalsModule)
   ],
   controllers: [AiJobsController],

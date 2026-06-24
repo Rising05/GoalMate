@@ -35,6 +35,7 @@ import { AI_PROMPTS } from "../ai/ai-prompts";
 import { objectValue, scoreValue, stringArray, stringValue } from "../ai/ai-validators";
 import { TraceContextService } from "../observability/trace-context.service";
 import { FieldEncryptionService } from "../security/field-encryption.service";
+import { GrowthEventsService } from "../growth-events/growth-events.service";
 
 interface CreateGoalPayload {
   title: string;
@@ -258,7 +259,10 @@ export class GoalsService {
     private readonly traces: TraceContextService = new TraceContextService(),
     @Optional()
     @Inject(FieldEncryptionService)
-    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService(),
+    @Optional()
+    @Inject(GrowthEventsService)
+    private readonly growthEvents: GrowthEventsService = new GrowthEventsService(prisma)
   ) {}
 
   async analyzeGoal(userId: string, input: unknown) {
@@ -450,36 +454,57 @@ export class GoalsService {
     const currentBaseline = this.fields.encryptNullable(payload.currentBaseline);
     const constraints = this.fields.encryptNullable(payload.constraints);
     const finalReward = this.fields.encryptNullable(payload.finalReward);
-    const goal = await this.prisma.goal.create({
-      data: {
-        userId,
-        title: payload.title,
-        description: description.ciphertext,
-        descriptionKeyVersion: description.keyVersion,
-        category: payload.category,
-        status: "DRAFT",
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-        dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
-        examName: payload.examName,
-        targetScore: payload.targetScore,
-        currentScore: payload.currentScore,
-        examDate: payload.examDate,
-        subjects: payload.subjects ? this.toJson(payload.subjects) : undefined,
-        materials: payload.materials ? this.toJson(payload.materials) : undefined,
-        chapters: payload.chapters ? this.toJson(payload.chapters) : undefined,
-        weaknesses: payload.weaknesses ? this.toJson(payload.weaknesses) : undefined,
-        studyDaysPerWeek: payload.studyDaysPerWeek,
-        dailyStudyMinutes: payload.dailyStudyMinutes,
-        mockExamFrequency: payload.mockExamFrequency,
-        toleranceDaysAllowed: payload.toleranceDaysAllowed,
-        currentBaseline: currentBaseline.ciphertext,
-        currentBaselineKeyVersion: currentBaseline.ciphertext ? currentBaseline.keyVersion : undefined,
-        constraints: constraints.ciphertext,
-        constraintsKeyVersion: constraints.ciphertext ? constraints.keyVersion : undefined,
-        finalReward: finalReward.ciphertext,
-        finalRewardKeyVersion: finalReward.ciphertext ? finalReward.keyVersion : undefined
-      }
+    const goal = await this.prisma.$transaction(async (tx) => {
+      const createdGoal = await tx.goal.create({
+        data: {
+          userId,
+          title: payload.title,
+          description: description.ciphertext,
+          descriptionKeyVersion: description.keyVersion,
+          category: payload.category,
+          status: "DRAFT",
+          startDate: payload.startDate,
+          endDate: payload.endDate,
+          dailyTimeBudgetMinutes: payload.dailyTimeBudgetMinutes,
+          examName: payload.examName,
+          targetScore: payload.targetScore,
+          currentScore: payload.currentScore,
+          examDate: payload.examDate,
+          subjects: payload.subjects ? this.toJson(payload.subjects) : undefined,
+          materials: payload.materials ? this.toJson(payload.materials) : undefined,
+          chapters: payload.chapters ? this.toJson(payload.chapters) : undefined,
+          weaknesses: payload.weaknesses ? this.toJson(payload.weaknesses) : undefined,
+          studyDaysPerWeek: payload.studyDaysPerWeek,
+          dailyStudyMinutes: payload.dailyStudyMinutes,
+          mockExamFrequency: payload.mockExamFrequency,
+          toleranceDaysAllowed: payload.toleranceDaysAllowed,
+          currentBaseline: currentBaseline.ciphertext,
+          currentBaselineKeyVersion: currentBaseline.ciphertext ? currentBaseline.keyVersion : undefined,
+          constraints: constraints.ciphertext,
+          constraintsKeyVersion: constraints.ciphertext ? constraints.keyVersion : undefined,
+          finalReward: finalReward.ciphertext,
+          finalRewardKeyVersion: finalReward.ciphertext ? finalReward.keyVersion : undefined
+        }
+      });
+
+      await this.growthEvents.record(
+        {
+          userId,
+          goalId: createdGoal.id,
+          type: "GOAL_CREATED",
+          sourceResourceType: "GOAL",
+          sourceResourceId: createdGoal.id,
+          occurredAt: createdGoal.createdAt,
+          metadata: {
+            title: createdGoal.title,
+            category: createdGoal.category,
+            status: createdGoal.status
+          }
+        },
+        tx
+      );
+
+      return createdGoal;
     });
 
     return {
@@ -1516,29 +1541,52 @@ export class GoalsService {
     const { goal, todayStart, deviation, sourceTask, existingRescueTask, deviationEvent } =
       context;
     const rescueTaskDraft = await this.getRescueTaskDraft(goal, deviation, callContext);
-    const rescueTask = existingRescueTask
-      ? existingRescueTask.deviationEventId || !deviationEvent
-        ? existingRescueTask
-        : await this.prisma.dailyTask.update({
-            where: { id: existingRescueTask.id },
-            data: { deviationEventId: deviationEvent.id }
-          })
-      : await this.prisma.dailyTask.create({
-        data: {
+    const rescueTask = await this.prisma.$transaction(async (tx) => {
+      const task = existingRescueTask
+        ? existingRescueTask.deviationEventId || !deviationEvent
+          ? existingRescueTask
+          : await tx.dailyTask.update({
+              where: { id: existingRescueTask.id },
+              data: { deviationEventId: deviationEvent.id }
+            })
+        : await tx.dailyTask.create({
+          data: {
+            goalId: goal.id,
+            sourceDailyTaskId: sourceTask?.id,
+            deviationEventId: deviationEvent?.id,
+            taskDate: todayStart,
+            title: rescueTaskDraft.title,
+            description: rescueTaskDraft.description,
+            plannedMinutes: rescueTaskDraft.estimatedMinutes,
+            taskType: RESCUE_TASK_TYPE,
+            rescueReason: rescueTaskDraft.reason,
+            rescueTriggerCode: rescueTaskDraft.triggerCode,
+            rescueRiskLevel: deviation.riskLevel,
+            status: PENDING_STATUS
+          }
+        });
+
+      await this.growthEvents.record(
+        {
+          userId: goal.userId,
           goalId: goal.id,
-          sourceDailyTaskId: sourceTask?.id,
-          deviationEventId: deviationEvent?.id,
-          taskDate: todayStart,
-          title: rescueTaskDraft.title,
-          description: rescueTaskDraft.description,
-          plannedMinutes: rescueTaskDraft.estimatedMinutes,
-          taskType: RESCUE_TASK_TYPE,
-          rescueReason: rescueTaskDraft.reason,
-          rescueTriggerCode: rescueTaskDraft.triggerCode,
-          rescueRiskLevel: deviation.riskLevel,
-          status: PENDING_STATUS
-        }
-      });
+          type: "RESCUE_TASK_CREATED",
+          sourceResourceType: "DAILY_TASK",
+          sourceResourceId: task.id,
+          occurredAt: task.createdAt,
+          metadata: {
+            title: task.title,
+            deviationEventId: deviationEvent?.id ?? null,
+            riskLevel: deviation.riskLevel,
+            fallback: rescueTaskDraft.fallback,
+            provider: rescueTaskDraft.provider
+          }
+        },
+        tx
+      );
+
+      return task;
+    });
 
     return {
       goalId: goal.id,
@@ -1681,12 +1729,36 @@ export class GoalsService {
       }
     }
 
-    const updatedGoal = await this.prisma.goal.update({
-      where: { id: goal.id },
-      data: {
-        status: nextStatus,
-        toleranceDaysUsed
+    const updatedGoal = await this.prisma.$transaction(async (tx) => {
+      const settledGoal = await tx.goal.update({
+        where: { id: goal.id },
+        data: {
+          status: nextStatus,
+          toleranceDaysUsed
+        }
+      });
+
+      if (nextStatus === "FAILED" || nextStatus === "COMPLETED") {
+        await this.growthEvents.record(
+          {
+            userId,
+            goalId: goal.id,
+            type: nextStatus === "FAILED" ? "GOAL_FAILED" : "GOAL_COMPLETED",
+            sourceResourceType: "GOAL",
+            sourceResourceId: goal.id,
+            metadata: {
+              status: nextStatus,
+              toleranceDaysUsed,
+              toleranceDaysAllowed: goal.toleranceDaysAllowed,
+              reachedEndDate,
+              missedDayCount: missedDays.length
+            }
+          },
+          tx
+        );
       }
+
+      return settledGoal;
     });
 
     if (nextStatus === "FAILED") {
@@ -1919,27 +1991,48 @@ export class GoalsService {
     const currentBaseline = this.fields.encryptNullable(originalPlain.currentBaseline);
     const constraints = this.fields.encryptNullable(originalPlain.constraints);
     const finalReward = this.fields.encryptNullable(originalPlain.finalReward);
-    const goal = await this.prisma.goal.create({
-      data: {
-        userId,
-        title: payload.title ?? `${original.title}（重新开始）`,
-        description: description.ciphertext,
-        descriptionKeyVersion: description.keyVersion,
-        category: original.category,
-        status: "DRAFT",
-        startDate,
-        endDate,
-        dailyTimeBudgetMinutes:
-          payload.dailyTimeBudgetMinutes ?? original.dailyTimeBudgetMinutes,
-        toleranceDaysAllowed:
-          payload.toleranceDaysAllowed ?? original.toleranceDaysAllowed,
-        currentBaseline: currentBaseline.ciphertext,
-        currentBaselineKeyVersion: currentBaseline.ciphertext ? currentBaseline.keyVersion : undefined,
-        constraints: constraints.ciphertext,
-        constraintsKeyVersion: constraints.ciphertext ? constraints.keyVersion : undefined,
-        finalReward: finalReward.ciphertext,
-        finalRewardKeyVersion: finalReward.ciphertext ? finalReward.keyVersion : undefined
-      }
+    const goal = await this.prisma.$transaction(async (tx) => {
+      const restartedGoal = await tx.goal.create({
+        data: {
+          userId,
+          title: payload.title ?? `${original.title}（重新开始）`,
+          description: description.ciphertext,
+          descriptionKeyVersion: description.keyVersion,
+          category: original.category,
+          status: "DRAFT",
+          startDate,
+          endDate,
+          dailyTimeBudgetMinutes:
+            payload.dailyTimeBudgetMinutes ?? original.dailyTimeBudgetMinutes,
+          toleranceDaysAllowed:
+            payload.toleranceDaysAllowed ?? original.toleranceDaysAllowed,
+          currentBaseline: currentBaseline.ciphertext,
+          currentBaselineKeyVersion: currentBaseline.ciphertext ? currentBaseline.keyVersion : undefined,
+          constraints: constraints.ciphertext,
+          constraintsKeyVersion: constraints.ciphertext ? constraints.keyVersion : undefined,
+          finalReward: finalReward.ciphertext,
+          finalRewardKeyVersion: finalReward.ciphertext ? finalReward.keyVersion : undefined
+        }
+      });
+
+      await this.growthEvents.record(
+        {
+          userId,
+          goalId: restartedGoal.id,
+          type: "GOAL_RESTARTED",
+          sourceResourceType: "GOAL",
+          sourceResourceId: restartedGoal.id,
+          occurredAt: restartedGoal.createdAt,
+          metadata: {
+            sourceGoalId: original.id,
+            title: restartedGoal.title,
+            category: restartedGoal.category
+          }
+        },
+        tx
+      );
+
+      return restartedGoal;
     });
 
     return {
@@ -2559,18 +2652,38 @@ export class GoalsService {
       detectedAt: new Date()
     };
 
-    if (existingEvent) {
-      return this.prisma.deviationEvent.update({
-        where: { id: existingEvent.id },
-        data
-      });
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const event = existingEvent
+        ? await tx.deviationEvent.update({
+            where: { id: existingEvent.id },
+            data
+          })
+        : await tx.deviationEvent.create({
+            data: {
+              goalId: input.goal.id,
+              ...data
+            }
+          });
 
-    return this.prisma.deviationEvent.create({
-      data: {
-        goalId: input.goal.id,
-        ...data
-      }
+      await this.growthEvents.record(
+        {
+          userId: input.goal.userId,
+          goalId: input.goal.id,
+          type: "DEVIATION_DETECTED",
+          sourceResourceType: "DEVIATION_EVENT",
+          sourceResourceId: event.id,
+          occurredAt: event.detectedAt,
+          metadata: {
+            riskLevel: event.riskLevel,
+            primaryReasonCode: event.primaryReasonCode,
+            primaryReasonLabel: event.primaryReasonLabel,
+            sourceDailyTaskId: event.sourceDailyTaskId
+          }
+        },
+        tx
+      );
+
+      return event;
     });
   }
 

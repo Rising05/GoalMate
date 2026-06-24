@@ -689,7 +689,7 @@
 
 ### P3-2 统一成长事件时间线
 
-**状态：** `NOT_STARTED`
+**状态：** `IN_PROGRESS`（后端统一成长事件表、事件写入服务、分页筛选接口和首批核心业务事件事务写入已完成；待历史回填脚本、前端统一时间线切换和剩余事件类型接入）
 
 #### 事件类型
 
@@ -717,6 +717,37 @@
 - 写事件与业务状态变更保持事务一致性。
 - 历史已有数据提供回填策略，无法精确回填的事件明确标识为推导数据。
 - 支持按目标、日期、事件类型分页查询。
+
+#### 当前进度
+
+- [x] 新增 `growth_events` 统一事件表，包含 `userId`、`goalId`、`type`、`sourceResourceType`、`sourceResourceId`、`occurredAt`、`metadata`、`derived`。
+- [x] 新增 `GrowthEventsService`，业务写入使用 `(type, sourceResourceType, sourceResourceId)` 幂等 upsert，避免重复事件。
+- [x] 新增 `GET /growth-events` 查询接口，支持按目标、日期、事件类型分页查询。
+- [x] 目标创建写入 `GOAL_CREATED`，与目标创建处于同一事务。
+- [x] 计划生成请求写入 `PLAN_GENERATION_STARTED`，与 AI job 创建和额度扣减处于同一事务。
+- [x] 计划确认写入 `PLAN_CONFIRMED`，重规划版本确认额外写入 `REPLAN_CONFIRMED`。
+- [x] 任务完成写入 `TASK_COMPLETED`，救援任务完成额外写入 `RESCUE_TASK_COMPLETED`。
+- [x] 打卡评分完成写入 `CHECKIN_SCORED`，同步评分和异步 worker 路径均覆盖。
+- [x] 评分申诉提交写入 `SCORE_APPEALED`。
+- [x] 偏差检测写入 `DEVIATION_DETECTED`，与偏差事件创建或更新处于同一事务。
+- [x] 救援任务创建写入 `RESCUE_TASK_CREATED`，与救援任务创建或关联偏差事件处于同一事务。
+- [x] 目标结算写入 `GOAL_COMPLETED` 或 `GOAL_FAILED`。
+- [x] 失败目标重新开启写入 `GOAL_RESTARTED`，metadata 记录原目标 ID。
+- [x] 增加后端集成测试，覆盖业务写入统一事件、类型筛选、分页和用户隔离。
+- [ ] 历史数据回填脚本或管理任务，并将无法精确回填的事件标记为 `derived=true`。
+- [ ] `MILESTONE_REACHED`、`REPORT_GENERATED` 等剩余事件类型接入实际业务写入点。
+- [ ] 前端成长时间线切换为读取 `growth_events`，保留偏差救援链路聚合展示。
+- [ ] 驾驶舱最近活动改为从统一事件接口读取。
+- [ ] 热力图日期详情跳转到统一时间线对应日期筛选。
+
+#### 本轮验收记录
+
+- 2026-06-24：新增 `growth_events` 表和迁移 `20260624165000_add_growth_events`。
+- 2026-06-24：新增 `GrowthEventsModule`、`GrowthEventsService`、`GrowthEventsController`。
+- 2026-06-24：首批接入 `GOAL_CREATED`、`PLAN_GENERATION_STARTED`、`PLAN_CONFIRMED`、`REPLAN_REQUESTED`、`REPLAN_CONFIRMED`、`TASK_COMPLETED`、`CHECKIN_SCORED`、`SCORE_APPEALED`、`DEVIATION_DETECTED`、`RESCUE_TASK_CREATED`、`RESCUE_TASK_COMPLETED`、`GOAL_COMPLETED`、`GOAL_FAILED`、`GOAL_RESTARTED`。
+- 2026-06-24：`npm exec -w @goalmate/api prisma migrate deploy -- --schema prisma/schema.prisma`：通过，已应用新迁移。
+- 2026-06-24：`npm run typecheck`：通过。
+- 2026-06-24：`npm exec -w @goalmate/api node -- --import tsx --test src/growth-events/growth-events.integration.test.ts`：通过，1/1。
 
 #### 前端要求
 
@@ -971,7 +1002,7 @@ npm run prisma:migrate -w @goalmate/api
 | P2-2 | 微信支付正式接入 | `IN_PROGRESS` | 2026-06-24 | - | Codex | API v3 签名、通知验签解密和自动化验收完成；待真实商户资料联调 |
 | P2-3 | 订阅与会员权益模型 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 权益模型、Mock 支付链路、后台退款入口和自动化验收完成；待官方支付事件联调 |
 | P3-1 | AI 目标创建助手 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 本地完整链路完成；待真实 DeepSeek 体验联调 |
-| P3-2 | 统一成长事件时间线 | `NOT_STARTED` | - | - | - | - |
+| P3-2 | 统一成长事件时间线 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 后端统一事件表、首批事件写入和查询接口完成；待回填与前端切换 |
 | P3-3 | 后台三级权限 | `NOT_STARTED` | - | - | - | - |
 | P4-1 | 微信登录和账号绑定 | `NOT_STARTED` | - | - | - | - |
 | P4-2 | 微信小程序页面 | `NOT_STARTED` | - | - | - | - |

@@ -17,6 +17,7 @@ import { RequestTracingMiddleware } from "./observability/request-tracing.middle
 import { ObjectLifecycleModule } from "./object-lifecycle/object-lifecycle.module";
 import { SecurityModule } from "./security/security.module";
 import { LegalModule } from "./legal/legal.module";
+import { GrowthEventsModule } from "./growth-events/growth-events.module";
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { LegalModule } from "./legal/legal.module";
     ObservabilityModule,
     ObjectLifecycleModule,
     LegalModule,
+    GrowthEventsModule,
     AuthModule,
     GoalsModule,
     DailyTasksModule,

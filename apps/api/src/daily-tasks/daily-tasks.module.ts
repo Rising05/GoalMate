@@ -9,9 +9,10 @@ import { SCORING_PROVIDER } from "./scoring-provider";
 import { QuotaModule } from "../quota/quota.module";
 import { DeepSeekScoringProvider } from "./deepseek-scoring.provider";
 import { SecurityModule } from "../security/security.module";
+import { GrowthEventsModule } from "../growth-events/growth-events.module";
 
 @Module({
-  imports: [AuthModule, PrismaModule, QueueModule, QuotaModule, SecurityModule],
+  imports: [AuthModule, PrismaModule, QueueModule, QuotaModule, SecurityModule, GrowthEventsModule],
   controllers: [DailyTasksController],
   providers: [
     DailyTasksService,

@@ -10,9 +10,10 @@ import { MockReportNarrativeProvider } from "./mock-report-narrative.provider";
 import { REPORT_NARRATIVE_PROVIDER } from "./report-narrative.provider";
 import { QuotaModule } from "../quota/quota.module";
 import { SecurityModule } from "../security/security.module";
+import { GrowthEventsModule } from "../growth-events/growth-events.module";
 
 @Module({
-  imports: [AuthModule, forwardRef(() => AiJobsModule), QueueModule, QuotaModule, SecurityModule],
+  imports: [AuthModule, forwardRef(() => AiJobsModule), QueueModule, QuotaModule, SecurityModule, GrowthEventsModule],
   controllers: [GoalsController],
   providers: [
     GoalsService,

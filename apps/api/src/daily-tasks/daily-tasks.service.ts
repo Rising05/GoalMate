@@ -27,6 +27,7 @@ import { objectValue, scoreValue, stringValue } from "../ai/ai-validators";
 import { TraceContextService } from "../observability/trace-context.service";
 import { randomUUID } from "node:crypto";
 import { FieldEncryptionService } from "../security/field-encryption.service";
+import { GrowthEventsService } from "../growth-events/growth-events.service";
 
 type TaskWithGoalAndCheckins = DailyTask & {
   goal: Goal;
@@ -146,7 +147,10 @@ export class DailyTasksService {
     private readonly traces: TraceContextService = new TraceContextService(),
     @Optional()
     @Inject(FieldEncryptionService)
-    private readonly fields: FieldEncryptionService = new FieldEncryptionService()
+    private readonly fields: FieldEncryptionService = new FieldEncryptionService(),
+    @Optional()
+    @Inject(GrowthEventsService)
+    private readonly growthEvents: GrowthEventsService = new GrowthEventsService(prisma)
   ) {}
 
   async getTodayTasks(userId: string, goalId?: string) {
@@ -511,6 +515,8 @@ export class DailyTasksService {
             }
           });
 
+          await this.recordTaskCompletionEvents(tx, task, createdCheckin, investedMinutes);
+
           const updatedTask = await tx.dailyTask.findUniqueOrThrow({
             where: { id: task.id },
             include: this.taskInclude()
@@ -646,6 +652,25 @@ export class DailyTasksService {
           }
         }
       });
+
+      await this.recordTaskCompletionEvents(tx, task, createdCheckin, investedMinutes);
+      await this.growthEvents.record(
+        {
+          userId,
+          goalId: task.goalId,
+          type: "CHECKIN_SCORED",
+          sourceResourceType: "CHECKIN",
+          sourceResourceId: createdCheckin.id,
+          occurredAt: aiScore.createdAt,
+          metadata: {
+            dailyTaskId: task.id,
+            totalScore: score.totalScore,
+            aiScoreId: aiScore.id,
+            taskType: task.taskType
+          }
+        },
+        tx
+      );
 
       const updatedTask = await tx.dailyTask.findUniqueOrThrow({
         where: { id: task.id },
@@ -806,6 +831,24 @@ export class DailyTasksService {
               error: null
             }
           });
+          await this.growthEvents.record(
+            {
+              userId: job.userId,
+              goalId: checkin.goalId,
+              type: "CHECKIN_SCORED",
+              sourceResourceType: "CHECKIN",
+              sourceResourceId: checkin.id,
+              occurredAt: aiScore.createdAt,
+              metadata: {
+                dailyTaskId: checkin.dailyTaskId,
+                totalScore: score.totalScore,
+                aiScoreId: aiScore.id,
+                taskType: checkin.dailyTask?.taskType ?? null,
+                aiJobId: job.id
+              }
+            },
+            tx
+          );
 
           return {
             updatedCheckin: rescoredCheckin,
@@ -932,6 +975,23 @@ export class DailyTasksService {
             }
           }
         });
+        await this.growthEvents.record(
+          {
+            userId,
+            goalId: checkin.goalId,
+            type: "SCORE_APPEALED",
+            sourceResourceType: "SCORE_APPEAL",
+            sourceResourceId: createdAppeal.id,
+            occurredAt: createdAppeal.createdAt,
+            metadata: {
+              checkinId: checkin.id,
+              originalScore: checkin.aiScore!.totalScore,
+              status: createdAppeal.status,
+              aiJobId: createdJob.id
+            }
+          },
+          tx
+        );
 
         return {
           appeal: createdAppeal,
@@ -1025,6 +1085,25 @@ export class DailyTasksService {
           dailyTask: true
         }
       });
+      await this.growthEvents.record(
+        {
+          userId,
+          goalId: checkin.goalId,
+          type: "SCORE_APPEALED",
+          sourceResourceType: "SCORE_APPEAL",
+          sourceResourceId: createdAppeal.id,
+          occurredAt: createdAppeal.createdAt,
+          metadata: {
+            checkinId: checkin.id,
+            originalScore: checkin.aiScore!.totalScore,
+            newScore: appealResult.newScore,
+            accepted: appealResult.accepted,
+            status: createdAppeal.status,
+            aiJobId: createdJob.id
+          }
+        },
+        tx
+      );
 
       return {
         appeal: createdAppeal,
@@ -1627,6 +1706,53 @@ export class DailyTasksService {
 
   private toJson(value: unknown) {
     return value as Prisma.InputJsonValue;
+  }
+
+  private async recordTaskCompletionEvents(
+    tx: Prisma.TransactionClient,
+    task: DailyTask & { goal: Goal },
+    checkin: Checkin,
+    investedMinutes: number
+  ) {
+    await this.growthEvents.record(
+      {
+        userId: task.goal.userId,
+        goalId: task.goalId,
+        type: "TASK_COMPLETED",
+        sourceResourceType: "DAILY_TASK",
+        sourceResourceId: task.id,
+        occurredAt: checkin.submittedAt,
+        metadata: {
+          title: task.title,
+          taskType: task.taskType,
+          checkinId: checkin.id,
+          investedMinutes,
+          plannedMinutes: task.plannedMinutes
+        }
+      },
+      tx
+    );
+
+    if (task.taskType === RESCUE_TASK_TYPE) {
+      await this.growthEvents.record(
+        {
+          userId: task.goal.userId,
+          goalId: task.goalId,
+          type: "RESCUE_TASK_COMPLETED",
+          sourceResourceType: "DAILY_TASK",
+          sourceResourceId: task.id,
+          occurredAt: checkin.submittedAt,
+          metadata: {
+            title: task.title,
+            checkinId: checkin.id,
+            deviationEventId: task.deviationEventId,
+            rescueTriggerCode: task.rescueTriggerCode,
+            rescueRiskLevel: task.rescueRiskLevel
+          }
+        },
+        tx
+      );
+    }
   }
 
   private getMockAppealResult(

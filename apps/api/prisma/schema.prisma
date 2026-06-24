@@ -108,6 +108,7 @@ model User {
   usageRecords           UsageRecord[]
   quotaBuckets           QuotaBucket[]
   aiCallLogs             AiCallLog[]
+  growthEvents           GrowthEvent[]
 
   @@map("users")
 }
@@ -554,11 +555,35 @@ model Goal {
   reportArtifacts ReportArtifact[]
   failureReport   FailureReport?
   aiCallLogs      AiCallLog[]
+  growthEvents    GrowthEvent[]
   uploadAssets    UploadAsset[]
   intakeDraft     GoalIntakeDraft?
 
   @@index([userId, status])
   @@map("goals")
+}
+
+model GrowthEvent {
+  id                 String   @id @default(cuid())
+  userId             String
+  goalId             String
+  type               String
+  sourceResourceType String
+  sourceResourceId   String
+  occurredAt         DateTime @default(now())
+  metadata           Json?
+  derived            Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([type, sourceResourceType, sourceResourceId])
+  @@index([userId, occurredAt])
+  @@index([goalId, occurredAt])
+  @@index([userId, type, occurredAt])
+  @@map("growth_events")
 }
 
 model GoalIntakeDraft {
