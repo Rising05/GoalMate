@@ -84,6 +84,10 @@ describe("GrowthEventsService integration", () => {
       true
     );
     assert.equal(
+      all.events.some((event) => event.goalTitle === "统一成长事件目标"),
+      true
+    );
+    assert.equal(
       taskEvents.events.some(
         (event) =>
           event.type === "TASK_COMPLETED" &&

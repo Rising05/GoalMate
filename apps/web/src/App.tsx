@@ -55,6 +55,8 @@ import {
   GoalIntakeDraft,
   GoalIntakeFormDraft,
   GoalPlan,
+  GrowthEvent,
+  GrowthEventDay,
   NotificationChannel,
   NotificationPreference,
   ReportArtifact,
@@ -66,6 +68,7 @@ import {
   TaskCheckin,
   TimelineDay,
   TimelineItem,
+  TimelineRiskLevel,
   TodayDailyTask,
   WechatBinding,
   appealCheckinScore,
@@ -102,6 +105,7 @@ import {
   fetchEmailLogs,
   fetchFailureReport,
   fetchBillingOrders,
+  fetchGrowthEvents,
   fetchLatestGoalIntakeDraft,
   fetchGoalPlan,
   fetchGoalHealth,
@@ -512,6 +516,10 @@ function splitFormList(value: string) {
 }
 
 function getTimelineBadge(item: TimelineItem) {
+  if (growthEventTypeLabels[item.taskType]) {
+    return growthEventTypeLabels[item.taskType];
+  }
+
   if (item.kind === "DEVIATION") {
     return riskLevelLabels[item.rescueRiskLevel ?? "stable"] ?? "偏差";
   }
@@ -521,6 +529,191 @@ function getTimelineBadge(item: TimelineItem) {
     : item.aiScore
       ? "已完成"
       : "待评分";
+}
+
+function groupGrowthEventsByDay(events: GrowthEvent[]): GrowthEventDay[] {
+  const days = new Map<string, GrowthEventDay>();
+
+  for (const event of events) {
+    const date = toDateKey(new Date(event.occurredAt));
+    const day = days.get(date) ?? { date, events: [] };
+    day.events.push(event);
+    days.set(date, day);
+  }
+
+  return Array.from(days.values()).sort((left, right) =>
+    right.date.localeCompare(left.date)
+  );
+}
+
+const growthEventTypeLabels: Record<string, string> = {
+  GOAL_CREATED: "创建目标",
+  PLAN_GENERATION_STARTED: "开始生成计划",
+  PLAN_CONFIRMED: "确认计划",
+  TASK_COMPLETED: "完成任务",
+  CHECKIN_SCORED: "AI 评分完成",
+  SCORE_APPEALED: "评分申诉",
+  DEVIATION_DETECTED: "发现偏差",
+  RESCUE_TASK_CREATED: "创建救援任务",
+  RESCUE_TASK_COMPLETED: "完成救援任务",
+  REPLAN_REQUESTED: "请求重规划",
+  REPLAN_CONFIRMED: "确认重规划",
+  MILESTONE_REACHED: "达成里程碑",
+  REPORT_GENERATED: "生成报告",
+  GOAL_COMPLETED: "目标完成",
+  GOAL_FAILED: "目标失败",
+  GOAL_RESTARTED: "重新开启"
+};
+
+const growthEventFilterOptions = [
+  "GOAL_CREATED",
+  "PLAN_CONFIRMED",
+  "TASK_COMPLETED",
+  "CHECKIN_SCORED",
+  "DEVIATION_DETECTED",
+  "RESCUE_TASK_CREATED",
+  "RESCUE_TASK_COMPLETED",
+  "GOAL_COMPLETED",
+  "GOAL_FAILED"
+];
+
+function getGrowthEventLabel(type: string) {
+  return growthEventTypeLabels[type] ?? type;
+}
+
+function getGrowthEventDate(event: GrowthEvent) {
+  return toDateKey(new Date(event.occurredAt));
+}
+
+function getGrowthEventMetadataString(event: GrowthEvent, key: string) {
+  const value = event.metadata?.[key];
+
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "是" : "否";
+
+  return "";
+}
+
+function getGrowthEventTitle(event: GrowthEvent, linkedItem?: TimelineItem | null) {
+  return (
+    getGrowthEventMetadataString(event, "title") ||
+    linkedItem?.taskTitle ||
+    event.goalTitle ||
+    getGrowthEventLabel(event.type)
+  );
+}
+
+function getGrowthEventSummary(event: GrowthEvent, linkedItem?: TimelineItem | null) {
+  if (event.type === "TASK_COMPLETED" || event.type === "RESCUE_TASK_COMPLETED") {
+    const investedMinutes =
+      getGrowthEventMetadataString(event, "investedMinutes") ||
+      (linkedItem?.investedMinutes ? String(linkedItem.investedMinutes) : "");
+    return investedMinutes ? `投入 ${investedMinutes} 分钟` : "任务已完成";
+  }
+
+  if (event.type === "CHECKIN_SCORED") {
+    const score = getGrowthEventMetadataString(event, "totalScore");
+    return score ? `AI 评分 ${score}` : "评分已完成";
+  }
+
+  if (event.type === "DEVIATION_DETECTED") {
+    return (
+      getGrowthEventMetadataString(event, "primaryReasonLabel") ||
+      `风险 ${getGrowthEventMetadataString(event, "riskLevel") || "warning"}`
+    );
+  }
+
+  if (event.type === "RESCUE_TASK_CREATED") {
+    return getGrowthEventMetadataString(event, "riskLevel")
+      ? `风险 ${getGrowthEventMetadataString(event, "riskLevel")}`
+      : "救援任务已创建";
+  }
+
+  if (event.type === "GOAL_RESTARTED") {
+    return getGrowthEventMetadataString(event, "sourceGoalId")
+      ? "由失败目标重新开启"
+      : "目标已重新开启";
+  }
+
+  return event.derived ? "历史推导事件" : "业务事件";
+}
+
+function numberMetadataValue(event: GrowthEvent, key: string) {
+  const value = event.metadata?.[key];
+  return typeof value === "number" ? value : null;
+}
+
+function buildGrowthTimelineItem(
+  event: GrowthEvent,
+  linkedItem?: TimelineItem | null
+): TimelineItem {
+  const metadataDeviationEventId = getGrowthEventMetadataString(
+    event,
+    "deviationEventId"
+  );
+  const totalScore = numberMetadataValue(event, "totalScore");
+
+  return {
+    id: event.id,
+    kind:
+      linkedItem?.kind ??
+      (event.type === "DEVIATION_DETECTED" ? "DEVIATION" : "CHECKIN"),
+    chainStage:
+      linkedItem?.chainStage ??
+      (event.type === "DEVIATION_DETECTED" ? "DEVIATION_CHAIN" : "CHECKIN"),
+    timelineAt: event.occurredAt,
+    date: getGrowthEventDate(event),
+    submittedAt: linkedItem?.submittedAt ?? event.occurredAt,
+    detectedAt:
+      linkedItem?.detectedAt ??
+      (event.type === "DEVIATION_DETECTED" ? event.occurredAt : null),
+    goalId: event.goalId,
+    goalTitle: event.goalTitle ?? linkedItem?.goalTitle ?? "当前目标",
+    dailyTaskId:
+      linkedItem?.dailyTaskId ??
+      (event.sourceResourceType === "DAILY_TASK" ? event.sourceResourceId : null),
+    sourceDailyTaskId: linkedItem?.sourceDailyTaskId ?? null,
+    deviationEventId:
+      linkedItem?.deviationEventId ??
+      (event.sourceResourceType === "DEVIATION_EVENT"
+        ? event.sourceResourceId
+        : metadataDeviationEventId || null),
+    taskTitle: getGrowthEventTitle(event, linkedItem),
+    taskDescription:
+      linkedItem?.taskDescription ?? getGrowthEventSummary(event, linkedItem),
+    weeklyPlanTitle: linkedItem?.weeklyPlanTitle ?? null,
+    plannedMinutes:
+      linkedItem?.plannedMinutes ?? numberMetadataValue(event, "plannedMinutes"),
+    taskType: event.type,
+    isRescueTask: linkedItem?.isRescueTask ?? event.type.includes("RESCUE"),
+    rescueReason: linkedItem?.rescueReason ?? null,
+    rescueTriggerCode: linkedItem?.rescueTriggerCode ?? null,
+    rescueRiskLevel:
+      linkedItem?.rescueRiskLevel ??
+      ((getGrowthEventMetadataString(event, "riskLevel") as TimelineRiskLevel | "") ||
+        null),
+    deviationReasons: linkedItem?.deviationReasons ?? [],
+    deviationMetrics: linkedItem?.deviationMetrics ?? null,
+    sourceTask: linkedItem?.sourceTask ?? null,
+    rescueTasks: linkedItem?.rescueTasks ?? [],
+    investedMinutes:
+      linkedItem?.investedMinutes ?? numberMetadataValue(event, "investedMinutes"),
+    checkin: linkedItem?.checkin ?? null,
+    aiScore:
+      linkedItem?.aiScore ??
+      (totalScore !== null
+        ? {
+            totalScore,
+            analysisLevel: "BASIC",
+            isDetailedAnalysisUnlocked: false,
+            dimensions: null,
+            evidence: null,
+            summary: "AI 评分已完成",
+            suggestion: getGrowthEventSummary(event, linkedItem)
+          }
+        : null)
+  };
 }
 
 function getGoalStatusTone(status: string): GlassTone {
@@ -769,6 +962,8 @@ export function App() {
   const [todayTasks, setTodayTasks] = useState<TodayDailyTask[]>([]);
   const [activityDays, setActivityDays] = useState<ActivityDay[]>([]);
   const [timelineDays, setTimelineDays] = useState<TimelineDay[]>([]);
+  const [growthEvents, setGrowthEvents] = useState<GrowthEvent[]>([]);
+  const [selectedGrowthEventTypes, setSelectedGrowthEventTypes] = useState<string[]>([]);
   const [goalHealth, setGoalHealth] = useState<GoalHealth | null>(null);
   const [reportArtifacts, setReportArtifacts] = useState<ReportArtifact[]>([]);
   const [rescueTask, setRescueTask] = useState<RescueTask | null>(null);
@@ -954,11 +1149,68 @@ export function App() {
   const selectedHeatmapTimelineDay = timelineDays.find(
     (day) => day.date === selectedHeatmapDate
   );
-  const selectedTimelineDay = timelineDays.find(
+  const linkedTimelineItems = timelineDays.flatMap((day) => day.items);
+  const visibleGrowthEvents = selectedGrowthEventTypes.length
+    ? growthEvents.filter((event) => selectedGrowthEventTypes.includes(event.type))
+    : growthEvents;
+  const growthEventDays = groupGrowthEventsByDay(visibleGrowthEvents);
+  const growthTimelineItems = visibleGrowthEvents.map((event) =>
+    buildGrowthTimelineItem(event, findLinkedTimelineItem(event))
+  );
+  const growthLinkedItemIds = new Set(
+    visibleGrowthEvents
+      .map((event) => findLinkedTimelineItem(event)?.id)
+      .filter((id): id is string => Boolean(id))
+  );
+  const legacyFallbackTimelineItems = linkedTimelineItems.filter(
+    (item) =>
+      !growthLinkedItemIds.has(item.id) &&
+      (item.kind === "DEVIATION" || item.isRescueTask)
+  );
+  const displayTimelineDayMap = new Map<string, TimelineItem[]>();
+
+  for (const item of [...growthTimelineItems, ...legacyFallbackTimelineItems]) {
+    const items = displayTimelineDayMap.get(item.date) ?? [];
+    items.push(item);
+    displayTimelineDayMap.set(item.date, items);
+  }
+
+  const displayTimelineDays: TimelineDay[] = Array.from(displayTimelineDayMap.entries())
+    .map(([date, items]) => {
+      const sortedItems = items.sort(
+        (left, right) =>
+          new Date(right.timelineAt).getTime() - new Date(left.timelineAt).getTime()
+      );
+    const scoredItems = items.filter(
+      (item) => item.aiScore?.totalScore !== null && item.aiScore?.totalScore !== undefined
+    );
+
+    return {
+      date,
+      items: sortedItems,
+      investedMinutes: sortedItems.reduce(
+        (total, item) => total + (item.investedMinutes ?? 0),
+        0
+      ),
+      averageScore: scoredItems.length
+        ? Math.round(
+            scoredItems.reduce(
+              (total, item) => total + (item.aiScore?.totalScore ?? 0),
+              0
+            ) / scoredItems.length
+          )
+        : null
+    };
+    })
+    .sort((left, right) => right.date.localeCompare(left.date));
+  const selectedHeatmapGrowthEventDay = growthEventDays.find(
+    (day) => day.date === selectedHeatmapDate
+  );
+  const selectedTimelineDay = displayTimelineDays.find(
     (day) => day.date === selectedTimelineDate
   );
-  const recentTimelineItems = timelineDays
-    .flatMap((day) => day.items)
+  const recentGrowthEvents = growthEventDays
+    .flatMap((day) => day.events)
     .slice(0, 3);
   const rewardCardsForGoal = rewardBoard?.cards ?? [];
   const customRewardCount = rewardCardsForGoal.filter(
@@ -970,6 +1222,7 @@ export function App() {
       : rewardBoard?.limits.freeCustomCards;
   const selectedHeatmapTasks = selectedActivityDay?.tasks ?? [];
   const selectedHeatmapTimelineItems = selectedHeatmapTimelineDay?.items ?? [];
+  const selectedHeatmapGrowthEvents = selectedHeatmapGrowthEventDay?.events ?? [];
   const selectedHeatmapMinutes =
     selectedHeatmapTimelineDay?.investedMinutes ??
     selectedActivityDay?.investedMinutes ??
@@ -1159,6 +1412,8 @@ export function App() {
       setTodayTasks([]);
       setActivityDays([]);
       setTimelineDays([]);
+      setGrowthEvents([]);
+      setSelectedGrowthEventTypes([]);
       setGoalHealth(null);
       setReportArtifacts([]);
       setRescueTask(null);
@@ -1510,6 +1765,135 @@ export function App() {
     setActivePage("timeline");
   }
 
+  function toggleGrowthEventType(type: string) {
+    setSelectedGrowthEventTypes((current) =>
+      current.includes(type)
+        ? current.filter((item) => item !== type)
+        : [...current, type]
+    );
+  }
+
+  function findLinkedTimelineItem(event: GrowthEvent) {
+    if (event.sourceResourceType === "DEVIATION_EVENT") {
+      return linkedTimelineItems.find(
+        (item) => item.deviationEventId === event.sourceResourceId
+      );
+    }
+
+    if (event.sourceResourceType === "DAILY_TASK") {
+      const deviationEventId = getGrowthEventMetadataString(event, "deviationEventId");
+      return linkedTimelineItems.find(
+        (item) =>
+          item.dailyTaskId === event.sourceResourceId ||
+          item.sourceDailyTaskId === event.sourceResourceId ||
+          item.rescueTasks.some((task) => task.dailyTaskId === event.sourceResourceId) ||
+          (deviationEventId && item.deviationEventId === deviationEventId)
+      );
+    }
+
+    if (event.sourceResourceType === "CHECKIN") {
+      return linkedTimelineItems.find((item) => item.checkin?.id === event.sourceResourceId);
+    }
+
+    return null;
+  }
+
+  function renderLinkedTimelineDetails(item: TimelineItem | null | undefined) {
+    if (!item) {
+      return null;
+    }
+
+    return (
+      <>
+        {item.kind === "DEVIATION" ? (
+          <div className="timeline-chain">
+            <div className="timeline-chain-step">
+              <strong>触发偏差</strong>
+              <span>
+                {item.deviationReasons[0]?.detail ??
+                  item.rescueReason ??
+                  "系统检测到目标执行节奏偏离计划。"}
+              </span>
+              <div className="timeline-meta">
+                <span>
+                  风险 {riskLevelLabels[item.rescueRiskLevel ?? "stable"]}
+                </span>
+                {item.deviationReasons[0]?.label ? (
+                  <span>{item.deviationReasons[0].label}</span>
+                ) : null}
+                {item.sourceTask ? (
+                  <span>来源任务：{item.sourceTask.title}</span>
+                ) : null}
+              </div>
+            </div>
+            <div className="timeline-chain-step">
+              <strong>系统介入</strong>
+              {item.rescueTasks.length ? (
+                <div className="timeline-rescue-stack">
+                  {item.rescueTasks.map((task) => (
+                    <div key={task.id}>
+                      <span>
+                        {task.title} · {taskStatusLabels[task.status] ?? task.status}
+                      </span>
+                      <p>{task.rescueReason ?? task.description}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <span>偏差事件已记录，等待生成救援任务。</span>
+              )}
+            </div>
+            <div className="timeline-chain-step">
+              <strong>救援任务完成</strong>
+              {item.rescueTasks.some((task) => task.latestCheckin) ? (
+                item.rescueTasks
+                  .filter((task) => task.latestCheckin)
+                  .map((task) => (
+                    <div className="timeline-rescue-complete" key={task.id}>
+                      <span>
+                        {task.completedAt ? formatDateTime(task.completedAt) : "已完成"}
+                        {task.latestCheckin?.investedMinutes
+                          ? ` · ${task.latestCheckin.investedMinutes} 分钟`
+                          : ""}
+                        {task.latestCheckin?.aiScore?.totalScore !== null &&
+                        task.latestCheckin?.aiScore?.totalScore !== undefined
+                          ? ` · AI ${task.latestCheckin.aiScore.totalScore}`
+                          : ""}
+                      </span>
+                      {task.latestCheckin?.aiScore ? (
+                        <p>{task.latestCheckin.aiScore.suggestion}</p>
+                      ) : null}
+                    </div>
+                  ))
+              ) : (
+                <span>救援任务尚未完成，完成后会在这里沉淀复盘和建议。</span>
+              )}
+            </div>
+          </div>
+        ) : null}
+        {item.isRescueTask ? (
+          <div className="timeline-rescue-note">
+            <strong>救援任务复盘</strong>
+            <span>{item.rescueReason ?? "系统生成的补救动作已完成。"}</span>
+          </div>
+        ) : null}
+        {item.checkin ? (
+          <div className="reflection-note">
+            {item.checkin.content.split("\n").map((line, index) => (
+              <span key={`${item.id}-line-${index}`}>{line}</span>
+            ))}
+          </div>
+        ) : null}
+        {item.aiScore ? (
+          <div className="ai-advice-note">
+            <strong>{item.aiScore.summary}</strong>
+            <span>{item.aiScore.suggestion}</span>
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
   async function refreshDailyTaskData(
     token = session?.token,
     year = heatmapYear,
@@ -1523,10 +1907,14 @@ export function App() {
     setIsLoadingTimeline(true);
 
     try {
-      const [todayResponse, activityResponse, timelineResponse] = await Promise.all([
+      const [todayResponse, activityResponse, timelineResponse, growthEventsResponse] = await Promise.all([
         fetchTodayTasks(token, goalId),
         fetchTaskActivity(token, year, goalId),
-        fetchTaskTimeline(token, goalId)
+        fetchTaskTimeline(token, goalId),
+        fetchGrowthEvents(token, {
+          goalId,
+          pageSize: 80
+        })
       ]);
       const healthGoalId =
         goalId ??
@@ -1536,10 +1924,11 @@ export function App() {
       setTodayTasks(todayResponse.tasks);
       setActivityDays(activityResponse.days);
       setTimelineDays(timelineResponse.days);
+      setGrowthEvents(growthEventsResponse.events);
       setTimelineMessage(
-        timelineResponse.items.length
-          ? `最近 ${timelineResponse.items.length} 条成长记录。`
-          : "暂无复盘记录，先完成今日任务生成第一条时间线。"
+        growthEventsResponse.events.length
+          ? `最近 ${growthEventsResponse.events.length} 条统一成长事件。`
+          : "暂无成长事件，先创建目标或完成今日任务生成第一条时间线。"
       );
       if (healthGoalId) {
         const [health, artifactResponse] = await Promise.all([
@@ -4085,26 +4474,23 @@ export function App() {
                       <p className="eyebrow">Recent progress</p>
                       <h2>最近进展</h2>
                     </div>
-                    {recentTimelineItems.length ? (
+                    {recentGrowthEvents.length ? (
                       <div className="mini-progress-list">
-                        {recentTimelineItems.map((item) => (
+                        {recentGrowthEvents.map((event) => (
                           <button
-                            key={item.id}
+                            aria-label={`打开${formatActivityDate(getGrowthEventDate(event))}成长事件`}
+                            key={event.id}
                             type="button"
-                            onClick={() => openTimelineDate(item.date)}
+                            onClick={() => openTimelineDate(getGrowthEventDate(event))}
                           >
                             <div>
-                              <strong>{item.taskTitle}</strong>
+                              <strong>{getGrowthEventTitle(event)}</strong>
                               <span>
-                                {formatActivityDate(item.date)} ·{" "}
-                                {item.investedMinutes ?? item.plannedMinutes ?? 0} 分钟
+                                {formatActivityDate(getGrowthEventDate(event))} ·{" "}
+                                {event.goalTitle ?? "当前目标"}
                               </span>
                             </div>
-                            <em>
-                              {item.aiScore?.totalScore !== null && item.aiScore?.totalScore !== undefined
-                                ? `AI ${item.aiScore.totalScore}`
-                                : item.aiScore ? "已完成" : "待评分"}
-                            </em>
+                            <em>{getGrowthEventLabel(event.type)}</em>
                           </button>
                         ))}
                       </div>
@@ -4862,7 +5248,9 @@ export function App() {
                     <div className="activity-summary">
                       <span>{formatActivityDate(selectedHeatmapDate)}</span>
                       <strong>
-                        {selectedHeatmapTimelineItems.length || selectedHeatmapTasks.length} 条复盘记录
+                        {selectedHeatmapGrowthEvents.length ||
+                          selectedHeatmapTimelineItems.length ||
+                          selectedHeatmapTasks.length} 条成长记录
                       </strong>
                     </div>
                     <div className="activity-stats">
@@ -4879,7 +5267,10 @@ export function App() {
                     <div className="activity-actions">
                       <button
                         className="ghost-button"
-                        disabled={!selectedHeatmapTimelineItems.length}
+                        disabled={
+                          !selectedHeatmapGrowthEvents.length &&
+                          !selectedHeatmapTimelineItems.length
+                        }
                         type="button"
                         onClick={() => openTimelineDate(selectedHeatmapDate)}
                       >
@@ -4888,7 +5279,33 @@ export function App() {
                       </button>
                     </div>
                     <div className="activity-list">
-                      {selectedHeatmapTimelineItems.length ? (
+                      {selectedHeatmapGrowthEvents.length ? (
+                        selectedHeatmapGrowthEvents.map((event) => (
+                          <article key={event.id}>
+                            {event.type.includes("DEVIATION") ||
+                            event.type.includes("RESCUE") ? (
+                              <ShieldCheck size={18} aria-hidden="true" />
+                            ) : (
+                              <CheckCircle2 size={18} aria-hidden="true" />
+                            )}
+                            <div>
+                              <h2>{getGrowthEventTitle(event)}</h2>
+                              <p>
+                                {event.goalTitle ?? "当前目标"} ·{" "}
+                                {getGrowthEventLabel(event.type)} ·{" "}
+                                {getGrowthEventSummary(event)}
+                              </p>
+                              <p>发生时间 · {formatDateTime(event.occurredAt)}</p>
+                              {event.derived ? (
+                                <div className="timeline-rescue-note">
+                                  <strong>历史推导</strong>
+                                  <span>该记录来自历史数据回填，时间可能为推导值。</span>
+                                </div>
+                              ) : null}
+                            </div>
+                          </article>
+                        ))
+                      ) : selectedHeatmapTimelineItems.length ? (
                         selectedHeatmapTimelineItems.map((item) => (
                           <article key={item.id}>
                             {item.kind === "DEVIATION" ? (
@@ -4984,10 +5401,31 @@ export function App() {
                 </button>
               </div>
               <p className="form-message">{timelineMessage}</p>
+              <div className="event-filter-row" aria-label="成长事件类型筛选">
+                <button
+                  className={!selectedGrowthEventTypes.length ? "active" : ""}
+                  type="button"
+                  onClick={() => setSelectedGrowthEventTypes([])}
+                >
+                  全部
+                </button>
+                {growthEventFilterOptions.map((type) => (
+                  <button
+                    className={
+                      selectedGrowthEventTypes.includes(type) ? "active" : ""
+                    }
+                    key={type}
+                    type="button"
+                    onClick={() => toggleGrowthEventType(type)}
+                  >
+                    筛选：{getGrowthEventLabel(type)}
+                  </button>
+                ))}
+              </div>
 
-              {timelineDays.length ? (
+              {displayTimelineDays.length ? (
                 <div className="growth-timeline">
-                  {timelineDays.map((day) => (
+                  {displayTimelineDays.map((day) => (
                     <section
                       className={`timeline-day ${
                         day.date === selectedTimelineDate ? "is-focused" : ""
@@ -5188,19 +5626,23 @@ export function App() {
               </section>
               <section className="panel">
                 <p className="eyebrow">Recent</p>
-                {recentTimelineItems.length ? (
+                {recentGrowthEvents.length ? (
                   <div className="timeline-shortcuts">
-                    {recentTimelineItems.map((item) => (
+                    {recentGrowthEvents.map((event) => (
                       <button
+                        aria-label={`查看${formatActivityDate(getGrowthEventDate(event))}成长事件`}
                         className={
-                          item.date === selectedTimelineDate ? "active" : ""
+                          getGrowthEventDate(event) === selectedTimelineDate ? "active" : ""
                         }
-                        key={item.id}
+                        key={event.id}
                         type="button"
-                        onClick={() => setSelectedTimelineDate(item.date)}
+                        onClick={() => setSelectedTimelineDate(getGrowthEventDate(event))}
                       >
-                        <strong>{item.taskTitle}</strong>
-                        <span>{formatActivityDate(item.date)}</span>
+                        <strong>{getGrowthEventTitle(event)}</strong>
+                        <span>
+                          {formatActivityDate(getGrowthEventDate(event))} ·{" "}
+                          {getGrowthEventLabel(event.type)}
+                        </span>
                       </button>
                     ))}
                   </div>

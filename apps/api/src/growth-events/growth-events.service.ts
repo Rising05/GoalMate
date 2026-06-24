@@ -105,7 +105,14 @@ export class GrowthEventsService {
         where,
         orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
         skip: (filters.page - 1) * filters.pageSize,
-        take: filters.pageSize
+        take: filters.pageSize,
+        include: {
+          goal: {
+            select: {
+              title: true
+            }
+          }
+        }
       }),
       this.prisma.growthEvent.count({ where })
     ]);
@@ -118,11 +125,12 @@ export class GrowthEventsService {
     };
   }
 
-  serialize(event: GrowthEvent) {
+  serialize(event: GrowthEvent & { goal?: { title: string } }) {
     return {
       id: event.id,
       userId: event.userId,
       goalId: event.goalId,
+      goalTitle: event.goal?.title ?? null,
       type: event.type,
       sourceResourceType: event.sourceResourceType,
       sourceResourceId: event.sourceResourceId,

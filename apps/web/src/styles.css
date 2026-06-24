@@ -2309,6 +2309,30 @@ button.heat-cell:disabled {
   margin-top: 16px;
 }
 
+.event-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.event-filter-row button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.62);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.event-filter-row button.active {
+  color: var(--accent);
+  border-color: rgba(31, 95, 70, 0.25);
+  background: rgba(231, 240, 235, 0.72);
+}
+
 .timeline-day {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);

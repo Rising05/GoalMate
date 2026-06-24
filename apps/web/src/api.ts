@@ -316,6 +316,26 @@ export interface TimelineDay {
   items: TimelineItem[];
 }
 
+export interface GrowthEvent {
+  id: string;
+  userId: string;
+  goalId: string;
+  goalTitle: string | null;
+  type: string;
+  sourceResourceType: string;
+  sourceResourceId: string;
+  occurredAt: string;
+  metadata: Record<string, unknown> | null;
+  derived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GrowthEventDay {
+  date: string;
+  events: GrowthEvent[];
+}
+
 export type TimelineRiskLevel = "stable" | "warning" | "danger";
 
 export interface TimelineSourceTask {
@@ -2619,6 +2639,50 @@ export async function fetchTaskTimeline(token: string, goalId?: string) {
   }
 
   return data as { items: TimelineItem[]; days: TimelineDay[] };
+}
+
+export async function fetchGrowthEvents(
+  token: string,
+  filters: {
+    goalId?: string;
+    type?: string;
+    from?: string;
+    to?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}
+) {
+  const url = apiSearchUrl("/growth-events");
+
+  if (filters.goalId) url.searchParams.set("goalId", filters.goalId);
+  if (filters.type) url.searchParams.set("type", filters.type);
+  if (filters.from) url.searchParams.set("from", filters.from);
+  if (filters.to) url.searchParams.set("to", filters.to);
+  if (filters.page) url.searchParams.set("page", String(filters.page));
+  if (filters.pageSize) url.searchParams.set("pageSize", String(filters.pageSize));
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  const data = await parseJson<{
+    events: GrowthEvent[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "统一成长事件加载失败"));
+  }
+
+  return data as {
+    events: GrowthEvent[];
+    total: number;
+    page: number;
+    pageSize: number;
+  };
 }
 
 async function parseJson<T>(response: Response) {
