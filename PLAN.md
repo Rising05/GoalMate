@@ -689,7 +689,7 @@
 
 ### P3-2 统一成长事件时间线
 
-**状态：** `IN_PROGRESS`（统一成长事件表、首批核心业务事件事务写入、分页筛选接口和前端统一事件读取已完成；待历史回填脚本和剩余事件类型接入）
+**状态：** `IN_PROGRESS`（统一成长事件表、核心业务事件事务写入、历史回填接口、分页筛选接口和前端统一事件读取已完成；待里程碑完成运行时入口接入）
 
 #### 事件类型
 
@@ -734,8 +734,10 @@
 - [x] 目标结算写入 `GOAL_COMPLETED` 或 `GOAL_FAILED`。
 - [x] 失败目标重新开启写入 `GOAL_RESTARTED`，metadata 记录原目标 ID。
 - [x] 增加后端集成测试，覆盖业务写入统一事件、类型筛选、分页和用户隔离。
-- [ ] 历史数据回填脚本或管理任务，并将无法精确回填的事件标记为 `derived=true`。
-- [ ] `MILESTONE_REACHED`、`REPORT_GENERATED` 等剩余事件类型接入实际业务写入点。
+- [x] 新增当前用户历史数据回填接口 `POST /growth-events/backfill`，回填事件均标记为 `derived=true`。
+- [x] 报告产物生成写入 `REPORT_GENERATED`，与报告产物 upsert 和报告额度扣减处于同一事务。
+- [x] 历史已完成里程碑可通过回填生成 `MILESTONE_REACHED` 推导事件。
+- [ ] 新增里程碑完成业务入口，并在运行时写入 `MILESTONE_REACHED`。
 - [x] 前端成长时间线切换为读取 `growth_events`，保留偏差救援链路聚合展示。
 - [x] 驾驶舱最近活动改为从统一事件接口读取。
 - [x] 热力图日期详情跳转到统一时间线对应日期筛选。
@@ -751,6 +753,15 @@
 - 2026-06-24：前端新增 `fetchGrowthEvents`，成长时间线主列表和驾驶舱最近活动改为读取统一成长事件；旧 `/daily-tasks/timeline` 仅作为偏差救援链路详情来源。
 - 2026-06-24：前端成长时间线新增事件类型筛选，热力图日期详情支持跳转到对应统一事件日期。
 - 2026-06-24：`npm run test:integration`：通过，141/141（首次完整跑出现一次 MySQL billing audit 写冲突，复跑通过）。
+- 2026-06-24：`npm run build`：通过。
+- 2026-06-24：`npm run test:e2e`：通过，9/9。
+- 2026-06-24：`git diff --check`：通过。
+- 2026-06-24：新增 `POST /growth-events/backfill`，当前用户范围内回填目标、计划、任务、评分、申诉、偏差、报告和已完成里程碑事件，回填结果标记 `derived=true`。
+- 2026-06-24：`generateGoalReportArtifact` 写入 `REPORT_GENERATED` 运行时事件。
+- 2026-06-24：当前代码没有里程碑完成/取消完成业务入口，`MILESTONE_REACHED` 的运行时写入需要在新增该入口时接入。
+- 2026-06-24：`npm run typecheck`：通过。
+- 2026-06-24：`npm exec -w @goalmate/api node -- --import tsx --test src/growth-events/growth-events.integration.test.ts`：通过，3/3。
+- 2026-06-24：`npm run test:integration`：通过，143/143。
 - 2026-06-24：`npm run build`：通过。
 - 2026-06-24：`npm run test:e2e`：通过，9/9。
 - 2026-06-24：`git diff --check`：通过。
@@ -1008,7 +1019,7 @@ npm run prisma:migrate -w @goalmate/api
 | P2-2 | 微信支付正式接入 | `IN_PROGRESS` | 2026-06-24 | - | Codex | API v3 签名、通知验签解密和自动化验收完成；待真实商户资料联调 |
 | P2-3 | 订阅与会员权益模型 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 权益模型、Mock 支付链路、后台退款入口和自动化验收完成；待官方支付事件联调 |
 | P3-1 | AI 目标创建助手 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 本地完整链路完成；待真实 DeepSeek 体验联调 |
-| P3-2 | 统一成长事件时间线 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 统一事件表、首批事件写入、查询接口和前端读取完成；待历史回填与剩余事件类型 |
+| P3-2 | 统一成长事件时间线 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 统一事件表、回填接口、核心事件写入、查询接口和前端读取完成；待里程碑完成入口 |
 | P3-3 | 后台三级权限 | `NOT_STARTED` | - | - | - | - |
 | P4-1 | 微信登录和账号绑定 | `NOT_STARTED` | - | - | - | - |
 | P4-2 | 微信小程序页面 | `NOT_STARTED` | - | - | - | - |

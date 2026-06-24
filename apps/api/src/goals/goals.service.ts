@@ -1012,7 +1012,7 @@ export class GoalsService {
       narrative = fallbackProvider.generate(narrativeInput);
     }
 
-    return client.reportArtifact.upsert({
+    const artifact = await client.reportArtifact.upsert({
       where: {
         goalId_type_periodEnd: {
           goalId: report.goalId,
@@ -1048,6 +1048,28 @@ export class GoalsService {
         error: providerError
       }
     });
+
+    await this.growthEvents.record(
+      {
+        userId: goalOwner.userId,
+        goalId: report.goalId,
+        type: "REPORT_GENERATED",
+        sourceResourceType: "REPORT_ARTIFACT",
+        sourceResourceId: artifact.id,
+        occurredAt: artifact.createdAt,
+        metadata: {
+          title: artifact.title,
+          reportType: artifact.type,
+          periodStart: artifact.periodStart.toISOString(),
+          periodEnd: artifact.periodEnd.toISOString(),
+          provider: artifact.provider,
+          providerError: artifact.error
+        }
+      },
+      client
+    );
+
+    return artifact;
   }
 
   private summarizeHealthSnapshots(snapshots: HealthSnapshot[]) {
