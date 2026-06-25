@@ -5,6 +5,8 @@ import {
   Optional,
   UnauthorizedException
 } from "@nestjs/common";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { PasswordService } from "./password.service";
 import { SessionTokenService } from "./session-token.service";
@@ -19,9 +21,19 @@ interface AuthPayload {
   displayName?: string;
 }
 
+interface WechatSessionPayload {
+  openId: string;
+  unionId?: string | null;
+  sessionKey?: string | null;
+}
+
 const CURRENT_TERMS_VERSION = "terms-2026-06-23";
 const CURRENT_PRIVACY_VERSION = "privacy-2026-06-23";
 const CURRENT_AI_DISCLOSURE_VERSION = "ai-disclosure-2026-06-23";
+const WECHAT_MINIPROGRAM_CLIENT = "WECHAT_MINIPROGRAM";
+const WECHAT_ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+const WECHAT_REFRESH_TOKEN_TTL_DAYS = 30;
+const WECHAT_BIND_TOKEN_TTL_SECONDS = 10 * 60;
 
 const EXPORT_SCOPES = [
   "profile",
@@ -151,9 +163,241 @@ export class AuthService {
     return this.buildAuthResponse(user);
   }
 
+  async loginWechatMiniProgram(input: unknown) {
+    const body = this.objectInput(input);
+    const code = this.cleanText(body.code, 256);
+    const deviceId = this.cleanOptionalText(body.deviceId, 120);
+
+    if (!code) {
+      throw new BadRequestException("微信登录 code 不能为空");
+    }
+
+    const wechat = await this.exchangeWechatCode(code);
+    const binding = await this.findActiveWechatBinding(wechat);
+
+    if (!binding) {
+      return {
+        status: "NEEDS_BINDING",
+        bindToken: this.signWechatBindToken(wechat),
+        expiresIn: WECHAT_BIND_TOKEN_TTL_SECONDS
+      };
+    }
+
+    if (binding.user.status !== "ACTIVE") {
+      throw new UnauthorizedException("账号已不可用");
+    }
+
+    return {
+      status: "AUTHENTICATED",
+      ...(await this.createWechatMiniProgramSession(binding.user, {
+        deviceId,
+        metadata: { loginMethod: "WECHAT_CODE", bindingId: binding.id }
+      }))
+    };
+  }
+
+  async bindWechatMiniProgramExisting(input: unknown) {
+    const body = this.objectInput(input);
+    const bindToken = this.cleanText(body.bindToken, 2000);
+    const auth = this.parseAuthPayload(input, false);
+    const deviceId = this.cleanOptionalText(body.deviceId, 120);
+    const wechat = this.verifyWechatBindToken(bindToken);
+    const user = await this.prisma.user.findUnique({
+      where: { email: auth.email },
+      include: { membership: true, adminProfile: true }
+    });
+
+    if (!user || user.status !== "ACTIVE") {
+      throw new UnauthorizedException("邮箱或密码不正确");
+    }
+
+    const passwordMatches = this.passwordService.verify(auth.password, user.passwordHash);
+    if (!passwordMatches) {
+      throw new UnauthorizedException("邮箱或密码不正确");
+    }
+
+    const binding = await this.upsertWechatBindingForUser(user.id, wechat, {
+      nickname: this.cleanOptionalText(body.nickname, 80),
+      avatarUrl: this.cleanOptionalText(body.avatarUrl, 500)
+    });
+
+    return {
+      status: "AUTHENTICATED",
+      binding,
+      ...(await this.createWechatMiniProgramSession(user, {
+        deviceId,
+        metadata: { loginMethod: "BIND_EXISTING", bindingId: binding.id }
+      }))
+    };
+  }
+
+  async registerWechatMiniProgram(input: unknown) {
+    const body = this.objectInput(input);
+    const bindToken = this.cleanText(body.bindToken, 2000);
+    const auth = this.parseAuthPayload(input, true);
+    const deviceId = this.cleanOptionalText(body.deviceId, 120);
+    const wechat = this.verifyWechatBindToken(bindToken);
+    const existing = await this.prisma.user.findUnique({
+      where: { email: auth.email }
+    });
+
+    if (existing) {
+      throw new BadRequestException("该邮箱已注册");
+    }
+
+    const passwordHash = this.passwordService.hash(auth.password);
+    const acceptedAt = new Date();
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email: auth.email,
+          passwordHash,
+          displayName: auth.displayName,
+          termsVersion: CURRENT_TERMS_VERSION,
+          termsAcceptedAt: acceptedAt,
+          privacyVersion: CURRENT_PRIVACY_VERSION,
+          privacyAcceptedAt: acceptedAt,
+          aiDisclosureVersion: CURRENT_AI_DISCLOSURE_VERSION,
+          aiDisclosureAcceptedAt: acceptedAt,
+          requiresTermsAcceptance: false,
+          membership: {
+            create: {
+              plan: "FREE",
+              status: "ACTIVE"
+            }
+          }
+        }
+      });
+      await this.upsertWechatBindingForUser(
+        created.id,
+        wechat,
+        {
+          nickname: this.cleanOptionalText(body.nickname, 80),
+          avatarUrl: this.cleanOptionalText(body.avatarUrl, 500)
+        },
+        tx
+      );
+
+      return tx.user.findUniqueOrThrow({
+        where: { id: created.id },
+        include: { membership: true, adminProfile: true }
+      });
+    });
+
+    return {
+      status: "AUTHENTICATED",
+      ...(await this.createWechatMiniProgramSession(user, {
+        deviceId,
+        metadata: { loginMethod: "REGISTER_WECHAT" }
+      }))
+    };
+  }
+
+  async refreshWechatMiniProgramSession(input: unknown) {
+    const body = this.objectInput(input);
+    const refreshToken = this.cleanText(body.refreshToken, 500);
+
+    if (!refreshToken) {
+      throw new UnauthorizedException("Refresh Token 无效");
+    }
+
+    const session = await this.prisma.clientSession.findUnique({
+      where: { refreshTokenHash: this.hashToken(refreshToken) },
+      include: {
+        user: { include: { membership: true, adminProfile: true } }
+      }
+    });
+
+    if (
+      !session ||
+      session.clientType !== WECHAT_MINIPROGRAM_CLIENT ||
+      session.status !== "ACTIVE" ||
+      session.revokedAt ||
+      session.expiresAt <= new Date() ||
+      session.user.status !== "ACTIVE"
+    ) {
+      throw new UnauthorizedException("Refresh Token 已失效");
+    }
+
+    const nextRefreshToken = this.generateOpaqueToken();
+    const updated = await this.prisma.clientSession.update({
+      where: { id: session.id },
+      data: {
+        refreshTokenHash: this.hashToken(nextRefreshToken),
+        lastUsedAt: new Date()
+      }
+    });
+
+    return this.buildWechatSessionResponse(session.user, updated, nextRefreshToken);
+  }
+
+  async logoutWechatMiniProgram(input: unknown) {
+    const body = this.objectInput(input);
+    const refreshToken = this.cleanText(body.refreshToken, 500);
+
+    if (!refreshToken) {
+      return { revoked: false };
+    }
+
+    const result = await this.prisma.clientSession.updateMany({
+      where: {
+        refreshTokenHash: this.hashToken(refreshToken),
+        clientType: WECHAT_MINIPROGRAM_CLIENT,
+        status: "ACTIVE"
+      },
+      data: {
+        status: "REVOKED",
+        revokedAt: new Date()
+      }
+    });
+
+    return { revoked: result.count > 0 };
+  }
+
+  async unbindWechatMiniProgram(authorization: string | undefined, input: unknown) {
+    const token = this.extractBearerToken(authorization);
+    const session = this.sessionTokenService.verify(token);
+    await this.assertClientSessionActive(session);
+
+    if (session.clientType !== WECHAT_MINIPROGRAM_CLIENT) {
+      throw new BadRequestException("仅小程序会话可调用该解绑入口");
+    }
+
+    const body = this.objectInput(input);
+    if (body.confirm !== true) {
+      throw new BadRequestException("解绑微信账号需要明确确认");
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: session.sub },
+      select: { id: true, status: true }
+    });
+
+    if (!user || user.status !== "ACTIVE") {
+      throw new UnauthorizedException("登录状态已失效");
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const deleted = await tx.wechatBinding.deleteMany({
+        where: { userId: user.id }
+      });
+      await tx.clientSession.updateMany({
+        where: { userId: user.id, clientType: WECHAT_MINIPROGRAM_CLIENT },
+        data: {
+          status: "REVOKED",
+          revokedAt: new Date()
+        }
+      });
+      return deleted;
+    });
+
+    return { unbound: result.count > 0 };
+  }
+
   async getCurrentUser(authorization?: string) {
     const token = this.extractBearerToken(authorization);
     const session = this.sessionTokenService.verify(token);
+    await this.assertClientSessionActive(session);
     const user = await this.prisma.user.findUnique({
       where: { id: session.sub },
       include: { membership: true, adminProfile: true }
@@ -171,6 +415,7 @@ export class AuthService {
   async deleteCurrentUser(authorization?: string) {
     const token = this.extractBearerToken(authorization);
     const session = this.sessionTokenService.verify(token);
+    await this.assertClientSessionActive(session);
     const user = await this.prisma.user.findUnique({
       where: { id: session.sub },
       select: {
@@ -201,6 +446,7 @@ export class AuthService {
   async exportCurrentUserData(authorization: string | undefined, input: unknown) {
     const token = this.extractBearerToken(authorization);
     const session = this.sessionTokenService.verify(token);
+    await this.assertClientSessionActive(session);
     const user = await this.prisma.user.findUnique({
       where: { id: session.sub },
       select: {
@@ -535,6 +781,332 @@ export class AuthService {
     }
 
     return this.serializeExportValue(data) as Record<string, unknown>;
+  }
+
+  private async exchangeWechatCode(code: string): Promise<WechatSessionPayload> {
+    if (
+      process.env.WECHAT_MINIPROGRAM_MOCK_CODES === "true" ||
+      process.env.NODE_ENV !== "production"
+    ) {
+      const mock = this.parseMockWechatCode(code);
+      if (mock) {
+        return mock;
+      }
+    }
+
+    const appId = process.env.WECHAT_MINIPROGRAM_APP_ID?.trim();
+    const appSecret = process.env.WECHAT_MINIPROGRAM_APP_SECRET?.trim();
+
+    if (!appId || !appSecret) {
+      throw new BadRequestException("微信小程序登录未配置");
+    }
+
+    const url = new URL(
+      process.env.WECHAT_CODE2SESSION_URL?.trim() ||
+        "https://api.weixin.qq.com/sns/jscode2session"
+    );
+    url.searchParams.set("appid", appId);
+    url.searchParams.set("secret", appSecret);
+    url.searchParams.set("js_code", code);
+    url.searchParams.set("grant_type", "authorization_code");
+
+    const response = await fetch(url);
+    const data = (await response.json()) as {
+      openid?: string;
+      unionid?: string;
+      session_key?: string;
+      errcode?: number;
+      errmsg?: string;
+    };
+
+    if (!response.ok || data.errcode) {
+      throw new UnauthorizedException(data.errmsg || "微信登录 code 无效");
+    }
+
+    if (!data.openid) {
+      throw new UnauthorizedException("微信登录未返回 openId");
+    }
+
+    return {
+      openId: data.openid,
+      unionId: data.unionid ?? null,
+      sessionKey: data.session_key ?? null
+    };
+  }
+
+  private parseMockWechatCode(code: string): WechatSessionPayload | null {
+    if (!code.startsWith("mock:")) {
+      return null;
+    }
+
+    const [, openId, unionId] = code.split(":");
+    if (!openId || openId.length < 3) {
+      throw new UnauthorizedException("微信登录 code 无效");
+    }
+
+    return {
+      openId,
+      unionId: unionId || null,
+      sessionKey: "mock-session-key"
+    };
+  }
+
+  private async findActiveWechatBinding(wechat: WechatSessionPayload) {
+    const openIdHash = this.fields.blindIndex(wechat.openId);
+    const unionIdHash = this.fields.blindIndex(wechat.unionId);
+
+    return this.prisma.wechatBinding.findFirst({
+      where: {
+        status: "ACTIVE",
+        OR: [
+          { openIdHash },
+          ...(unionIdHash ? [{ unionIdHash }] : [])
+        ]
+      },
+      include: {
+        user: { include: { membership: true, adminProfile: true } }
+      }
+    });
+  }
+
+  private async upsertWechatBindingForUser(
+    userId: string,
+    wechat: WechatSessionPayload,
+    profile: { nickname?: string; avatarUrl?: string },
+    tx?: Prisma.TransactionClient
+  ) {
+    const client = tx ?? this.prisma;
+    const openIdHash = this.fields.blindIndex(wechat.openId);
+    const unionIdHash = this.fields.blindIndex(wechat.unionId);
+    const existing = await client.wechatBinding.findFirst({
+      where: {
+        OR: [
+          { openIdHash },
+          ...(unionIdHash ? [{ unionIdHash }] : [])
+        ],
+        NOT: { userId }
+      }
+    });
+
+    if (existing) {
+      throw new BadRequestException("该微信账号已绑定其他用户");
+    }
+
+    const openId = this.fields.encrypt(wechat.openId);
+    const unionId = this.fields.encryptNullable(wechat.unionId);
+    const binding = await client.wechatBinding.upsert({
+      where: { userId },
+      create: {
+        userId,
+        openId: openId.ciphertext,
+        openIdHash,
+        openIdKeyVersion: openId.keyVersion,
+        unionId: unionId.ciphertext,
+        unionIdHash,
+        unionIdKeyVersion: unionId.ciphertext ? unionId.keyVersion : undefined,
+        nickname: profile.nickname,
+        avatarUrl: profile.avatarUrl,
+        status: "ACTIVE"
+      },
+      update: {
+        openId: openId.ciphertext,
+        openIdHash,
+        openIdKeyVersion: openId.keyVersion,
+        unionId: unionId.ciphertext,
+        unionIdHash,
+        unionIdKeyVersion: unionId.ciphertext ? unionId.keyVersion : null,
+        nickname: profile.nickname,
+        avatarUrl: profile.avatarUrl,
+        status: "ACTIVE",
+        boundAt: new Date()
+      }
+    });
+
+    return {
+      id: binding.id,
+      userId: binding.userId,
+      openId: wechat.openId,
+      unionId: wechat.unionId ?? null,
+      nickname: binding.nickname,
+      avatarUrl: binding.avatarUrl,
+      status: binding.status,
+      boundAt: binding.boundAt.toISOString()
+    };
+  }
+
+  private async createWechatMiniProgramSession(
+    user: {
+      id: string;
+      email: string;
+      displayName: string | null;
+      status: string;
+      createdAt: Date;
+      membership: { plan: string; status: string; expiresAt: Date | null } | null;
+      adminProfile?: { role: string; status: string } | null;
+    },
+    options: {
+      deviceId?: string;
+      metadata?: Record<string, unknown>;
+    } = {}
+  ) {
+    const refreshToken = this.generateOpaqueToken();
+    const expiresAt = new Date();
+    expiresAt.setUTCDate(expiresAt.getUTCDate() + WECHAT_REFRESH_TOKEN_TTL_DAYS);
+    const session = await this.prisma.clientSession.create({
+      data: {
+        userId: user.id,
+        clientType: WECHAT_MINIPROGRAM_CLIENT,
+        deviceId: options.deviceId,
+        refreshTokenHash: this.hashToken(refreshToken),
+        expiresAt,
+        metadata: {
+          ...(options.metadata ?? {}),
+          deviceId: options.deviceId ?? null
+        }
+      }
+    });
+
+    return this.buildWechatSessionResponse(user, session, refreshToken);
+  }
+
+  private async buildWechatSessionResponse(
+    user: {
+      id: string;
+      email: string;
+      displayName: string | null;
+      status: string;
+      createdAt: Date;
+      membership: { plan: string; status: string; expiresAt: Date | null } | null;
+      adminProfile?: { role: string; status: string } | null;
+    },
+    session: { id: string; deviceId: string | null; expiresAt: Date },
+    refreshToken: string
+  ) {
+    return {
+      accessToken: this.sessionTokenService.sign({
+        sub: user.id,
+        email: user.email,
+        sessionId: session.id,
+        clientType: WECHAT_MINIPROGRAM_CLIENT,
+        deviceId: session.deviceId ?? undefined,
+        ttlSeconds: WECHAT_ACCESS_TOKEN_TTL_SECONDS
+      }),
+      accessTokenExpiresIn: WECHAT_ACCESS_TOKEN_TTL_SECONDS,
+      refreshToken,
+      refreshTokenExpiresAt: session.expiresAt.toISOString(),
+      clientType: WECHAT_MINIPROGRAM_CLIENT,
+      user: await this.sanitizeUser(user)
+    };
+  }
+
+  private async assertClientSessionActive(session: { sid?: string; sub: string }) {
+    if (!session.sid) {
+      return;
+    }
+
+    const clientSession = await this.prisma.clientSession.findFirst({
+      where: {
+        id: session.sid,
+        userId: session.sub,
+        status: "ACTIVE",
+        revokedAt: null,
+        expiresAt: { gt: new Date() }
+      },
+      select: { id: true }
+    });
+
+    if (!clientSession) {
+      throw new UnauthorizedException("登录状态已失效");
+    }
+  }
+
+  private signWechatBindToken(payload: WechatSessionPayload) {
+    const expiresAt = Math.floor(Date.now() / 1000) + WECHAT_BIND_TOKEN_TTL_SECONDS;
+    const encodedPayload = Buffer.from(
+      JSON.stringify({
+        openId: payload.openId,
+        unionId: payload.unionId ?? null,
+        sessionKey: payload.sessionKey ?? null,
+        exp: expiresAt
+      })
+    ).toString("base64url");
+    const signature = this.signTokenPayload(encodedPayload);
+
+    return `${encodedPayload}.${signature}`;
+  }
+
+  private verifyWechatBindToken(token: string): WechatSessionPayload {
+    const [encodedPayload, signature] = token.split(".");
+
+    if (!encodedPayload || !signature) {
+      throw new UnauthorizedException("微信绑定凭证无效");
+    }
+
+    const expectedSignature = this.signTokenPayload(encodedPayload);
+    const actual = Buffer.from(signature, "base64url");
+    const expected = Buffer.from(expectedSignature, "base64url");
+
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+      throw new UnauthorizedException("微信绑定凭证无效");
+    }
+
+    try {
+      const parsed = JSON.parse(
+        Buffer.from(encodedPayload, "base64url").toString("utf8")
+      ) as {
+        openId?: unknown;
+        unionId?: unknown;
+        sessionKey?: unknown;
+        exp?: unknown;
+      };
+
+      if (
+        typeof parsed.openId !== "string" ||
+        typeof parsed.exp !== "number" ||
+        (parsed.unionId !== null &&
+          parsed.unionId !== undefined &&
+          typeof parsed.unionId !== "string") ||
+        (parsed.sessionKey !== null &&
+          parsed.sessionKey !== undefined &&
+          typeof parsed.sessionKey !== "string")
+      ) {
+        throw new Error("Invalid bind token payload");
+      }
+
+      if (parsed.exp <= Math.floor(Date.now() / 1000)) {
+        throw new UnauthorizedException("微信绑定凭证已过期");
+      }
+
+      return {
+        openId: parsed.openId,
+        unionId: parsed.unionId as string | null | undefined,
+        sessionKey: parsed.sessionKey as string | null | undefined
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException("微信绑定凭证无效");
+    }
+  }
+
+  private signTokenPayload(payload: string) {
+    return createHmac("sha256", this.tokenSecret()).update(payload).digest("base64url");
+  }
+
+  private tokenSecret() {
+    return (
+      process.env.SESSION_SECRET ??
+      "dev-only-session-secret-change-before-production"
+    );
+  }
+
+  private generateOpaqueToken() {
+    return randomBytes(32).toString("base64url");
+  }
+
+  private hashToken(token: string) {
+    return createHash("sha256").update(token).digest("hex");
   }
 
   private async buildAuthResponse(user: {
@@ -1159,6 +1731,21 @@ export class AuthService {
 
     const email = value.trim().toLowerCase();
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
+  }
+
+  private objectInput(input: unknown) {
+    return input && typeof input === "object" && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : {};
+  }
+
+  private cleanText(value: unknown, maxLength: number) {
+    return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+  }
+
+  private cleanOptionalText(value: unknown, maxLength: number) {
+    const text = this.cleanText(value, maxLength);
+    return text || undefined;
   }
 
   private extractBearerToken(authorization?: string) {

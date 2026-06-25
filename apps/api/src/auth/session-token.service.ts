@@ -6,11 +6,18 @@ interface SessionPayload {
   email: string;
   iat: number;
   exp: number;
+  sid?: string;
+  clientType?: string;
+  deviceId?: string;
 }
 
 interface SignInput {
   sub: string;
   email: string;
+  sessionId?: string;
+  clientType?: string;
+  deviceId?: string;
+  ttlSeconds?: number;
 }
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -23,7 +30,10 @@ export class SessionTokenService {
       sub: input.sub,
       email: input.email,
       iat: now,
-      exp: now + SESSION_TTL_SECONDS
+      exp: now + (input.ttlSeconds ?? SESSION_TTL_SECONDS),
+      ...(input.sessionId ? { sid: input.sessionId } : {}),
+      ...(input.clientType ? { clientType: input.clientType } : {}),
+      ...(input.deviceId ? { deviceId: input.deviceId } : {})
     };
 
     const encodedPayload = Buffer.from(JSON.stringify(payload)).toString(
@@ -79,7 +89,10 @@ export class SessionTokenService {
         typeof parsed.sub !== "string" ||
         typeof parsed.email !== "string" ||
         typeof parsed.iat !== "number" ||
-        typeof parsed.exp !== "number"
+        typeof parsed.exp !== "number" ||
+        (parsed.sid !== undefined && typeof parsed.sid !== "string") ||
+        (parsed.clientType !== undefined && typeof parsed.clientType !== "string") ||
+        (parsed.deviceId !== undefined && typeof parsed.deviceId !== "string")
       ) {
         throw new Error("Invalid payload");
       }
@@ -90,4 +103,3 @@ export class SessionTokenService {
     }
   }
 }
-

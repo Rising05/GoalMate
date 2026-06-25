@@ -109,6 +109,124 @@ describe("AuthService quota integration", () => {
     assert.ok(current.user.adminPermissions.includes("VIEW_RAW_USER_CONTENT"));
   });
 
+  it("supports WeChat mini-program binding, refresh, revocation, and unbinding", async () => {
+    const suffix = `wechat-mini-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const registered = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "Mini User"
+    });
+    const login = await authService.loginWechatMiniProgram({
+      code: `mock:openid-${suffix}:unionid-${suffix}`,
+      deviceId: "iphone-test"
+    });
+
+    assert.equal(login.status, "NEEDS_BINDING");
+    assert.ok("bindToken" in login);
+
+    const bound = await authService.bindWechatMiniProgramExisting({
+      bindToken: login.bindToken,
+      email: registered.user.email,
+      password: "password-123",
+      deviceId: "iphone-test",
+      nickname: "Mini Nick"
+    });
+    assert.equal(bound.status, "AUTHENTICATED");
+    assert.equal(bound.clientType, "WECHAT_MINIPROGRAM");
+    assert.equal(bound.user.id, registered.user.id);
+    assert.ok(bound.accessToken);
+    assert.ok(bound.refreshToken);
+
+    const direct = await authService.loginWechatMiniProgram({
+      code: `mock:openid-${suffix}:unionid-${suffix}`,
+      deviceId: "iphone-test"
+    });
+    assert.equal(direct.status, "AUTHENTICATED");
+    assert.ok("user" in direct);
+    assert.equal(direct.user.id, registered.user.id);
+
+    const refreshed = await authService.refreshWechatMiniProgramSession({
+      refreshToken: bound.refreshToken
+    });
+    assert.equal(refreshed.user.id, registered.user.id);
+    assert.notEqual(refreshed.refreshToken, bound.refreshToken);
+    await assert.rejects(
+      () =>
+        authService.refreshWechatMiniProgramSession({
+          refreshToken: bound.refreshToken
+        }),
+      /Refresh Token 已失效/
+    );
+
+    const loggedOut = await authService.logoutWechatMiniProgram({
+      refreshToken: refreshed.refreshToken
+    });
+    assert.equal(loggedOut.revoked, true);
+    await assert.rejects(
+      () =>
+        authService.refreshWechatMiniProgramSession({
+          refreshToken: refreshed.refreshToken
+        }),
+      /Refresh Token 已失效/
+    );
+    await assert.rejects(
+      () => authService.getCurrentUser(`Bearer ${refreshed.accessToken}`),
+      /登录状态已失效/
+    );
+
+    const rebound = await authService.loginWechatMiniProgram({
+      code: `mock:openid-${suffix}:unionid-${suffix}`
+    });
+    assert.equal(rebound.status, "AUTHENTICATED");
+    assert.ok("accessToken" in rebound);
+    const unbound = await authService.unbindWechatMiniProgram(
+      `Bearer ${rebound.accessToken}`,
+      { confirm: true }
+    );
+    assert.equal(unbound.unbound, true);
+    const afterUnbind = await authService.loginWechatMiniProgram({
+      code: `mock:openid-${suffix}:unionid-${suffix}`
+    });
+    assert.equal(afterUnbind.status, "NEEDS_BINDING");
+  });
+
+  it("creates a new account from a WeChat mini-program bind token and rejects binding conflicts", async () => {
+    const suffix = `wechat-register-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const login = await authService.loginWechatMiniProgram({
+      code: `mock:openid-${suffix}:unionid-${suffix}`
+    });
+
+    assert.equal(login.status, "NEEDS_BINDING");
+    assert.ok("bindToken" in login);
+    const created = await authService.registerWechatMiniProgram({
+      bindToken: login.bindToken,
+      email: `${TEST_EMAIL_PREFIX}${suffix}@example.com`,
+      password: "password-123",
+      displayName: "Mini Registered"
+    });
+    assert.equal(created.status, "AUTHENTICATED");
+    assert.equal(created.user.email, `${TEST_EMAIL_PREFIX}${suffix}@example.com`);
+
+    const other = await authService.register({
+      email: `${TEST_EMAIL_PREFIX}${suffix}-other@example.com`,
+      password: "password-123",
+      displayName: "Other Mini"
+    });
+    const conflict = await authService.loginWechatMiniProgram({
+      code: `mock:openid-${suffix}:unionid-${suffix}`
+    });
+    assert.equal(conflict.status, "AUTHENTICATED");
+    await assert.rejects(
+      () =>
+        authService.bindWechatMiniProgramExisting({
+          bindToken: login.bindToken,
+          email: other.user.email,
+          password: "password-123"
+        }),
+      /该微信账号已绑定其他用户/
+    );
+  });
+
   it("exports selected current-user data without leaking other users or password hashes", async () => {
     const suffix = `export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const registered = await authService.register({

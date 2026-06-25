@@ -47,6 +47,23 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException("登录状态已失效");
     }
 
+    if (session.sid) {
+      const clientSession = await this.prisma.clientSession.findFirst({
+        where: {
+          id: session.sid,
+          userId: user.id,
+          status: "ACTIVE",
+          expiresAt: { gt: new Date() },
+          revokedAt: null
+        },
+        select: { id: true }
+      });
+
+      if (!clientSession) {
+        throw new UnauthorizedException("登录状态已失效");
+      }
+    }
+
     request.user = {
       id: user.id,
       email: user.email

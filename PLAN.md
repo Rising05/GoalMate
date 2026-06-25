@@ -2,7 +2,7 @@
 
 > 文档性质：后续开发的唯一执行清单与进度台账
 > 创建日期：2026-06-19
-> 当前状态：实施中；P0-1、P0-2、P3-2、P3-3 已完成，P0-3 代码完成并等待真实 DeepSeek 预发布验证；P1-2 仓库实现完成并等待生产密钥和历史数据迁移演练
+> 当前状态：实施中；P0-1、P0-2、P3-2、P3-3、P4-1 已完成，P0-3 代码完成并等待真实 DeepSeek 预发布验证；P4-2 是下一项可继续编码工作
 > 适用范围：`SPEC.md` 中尚未完整落地或仅完成基础版、预留版的能力
 
 ## 1. 文档目标
@@ -845,7 +845,7 @@
 
 ### P4-1 微信登录和账号绑定
 
-**状态：** `NOT_STARTED`
+**状态：** `DONE`（后端小程序 code2session、未绑定态绑定令牌、绑定已有账号、注册新账号、短期 Access Token、可撤销 Refresh Token、退出和解绑均已完成；小程序页面属于 P4-2）
 
 #### 功能需求
 
@@ -866,6 +866,36 @@
 - Token 标记客户端类型和设备信息。
 - 支持账号禁用、删除和密码修改后的失效策略。
 - 不复用当前无法撤销的长期 Token 设计作为最终小程序方案。
+
+#### 当前进度
+
+- [x] 新增 `client_sessions` 表和迁移 `20260625163000_add_client_sessions`，用于保存可撤销客户端会话。
+- [x] `SessionTokenService` 支持短期小程序 Access Token，payload 标记 `sid`、`clientType=WECHAT_MINIPROGRAM` 和 `deviceId`。
+- [x] `AuthGuard` 与 AuthService 自有接口均会校验带 `sid` 的客户端会话是否仍为 `ACTIVE`、未撤销且未过期。
+- [x] 新增 `POST /auth/wechat-mini/login`：服务端用 code 换取 openId/unionId；已绑定时直接签发小程序会话，未绑定时返回短期 `bindToken`。
+- [x] 新增 `POST /auth/wechat-mini/bind-existing`：用户输入已有 Web 账号邮箱密码后，将未绑定微信身份绑定到该用户。
+- [x] 新增 `POST /auth/wechat-mini/register`：用户用 `bindToken` 创建新账号并绑定微信身份。
+- [x] 新增 `POST /auth/wechat-mini/refresh`：使用可撤销 Refresh Token 轮换出新的 Access Token 和 Refresh Token。
+- [x] 新增 `POST /auth/wechat-mini/logout`：撤销指定小程序 Refresh Token。
+- [x] 新增 `DELETE /auth/wechat-mini/binding`：小程序会话内明确确认后解绑微信身份，并撤销该用户所有小程序会话。
+- [x] 绑定冲突使用 openId/unionId 安全索引识别，禁止同一微信身份绑定多个用户。
+- [x] Web 原有长 token 与小程序 `client_sessions` 并存，互不影响；小程序会话可独立撤销。
+- [x] 测试环境支持 `mock:<openId>:<unionId>` code；生产环境默认不启用 mock code，必须配置真实微信 `code2session`。
+
+#### 本轮验收记录
+
+- 2026-06-25：新增 `client_sessions` 数据模型和迁移，已执行 `prisma migrate deploy`。
+- 2026-06-25：新增小程序登录、绑定已有账号、注册新账号、刷新、退出和解绑接口。
+- 2026-06-25：Access Token 标记小程序会话 ID、客户端类型和设备；Refresh Token 仅存 SHA-256 hash。
+- 2026-06-25：新增 Auth 集成测试，覆盖未绑定登录、绑定已有账号、已绑定直接登录、Refresh Token 轮换、旧 Refresh Token 失效、退出撤销、Access Token 撤销后失效、解绑和绑定冲突。
+- 2026-06-25：`npm run prisma:generate -w @goalmate/api`：通过。
+- 2026-06-25：`npm exec -w @goalmate/api prisma migrate deploy -- --schema prisma/schema.prisma`：通过。
+- 2026-06-25：`npm run typecheck`：通过。
+- 2026-06-25：`npm exec -w @goalmate/api node -- --import tsx --test src/auth/auth.service.integration.test.ts`：通过，9/9。
+- 2026-06-25：`npm run test:integration`：通过，151/151。
+- 2026-06-25：`npm run build`：通过。
+- 2026-06-25：`npm run test:e2e`：通过，9/9。
+- 2026-06-25：`git diff --check`：通过。
 
 ---
 
@@ -1042,6 +1072,264 @@ npm run prisma:migrate -w @goalmate/api
 - 无水平溢出、文字遮挡和玻璃层拦截点击。
 - 普通用户和管理员入口权限截图检查。
 
+### 12.1 接力 Agent 剩余工作说明
+
+> 给接力 Agent：接手前先执行 `git status -sb`、`git log --oneline -5`、`npm run typecheck`。不要重做已标记 `DONE` 的工作；对 `IN_PROGRESS` 项先读本节说明，再读对应源码和测试。每完成一个小闭环，必须更新本文档、运行标准验收命令、提交并推送。
+
+#### 当前代码入口速查
+
+- API 主入口：`apps/api/src`。
+- Web 主入口：`apps/web/src/App.tsx`、`apps/web/src/api.ts`。
+- Prisma Schema：`apps/api/prisma/schema.prisma`。
+- 数据库迁移：`apps/api/prisma/migrations`。
+- 后端集成测试：`apps/api/src/**/*.integration.test.ts`。
+- E2E：`tests/e2e/core-flow.spec.ts`。
+- 环境变量模板：优先搜索 `.env.example`、`docker-compose.yml`、`ops/` 和各 Provider 代码中的 `process.env`。
+
+#### P0-3 真实 AI Provider 补齐（剩余：预发布真实调用验收）
+
+当前代码状态：DeepSeek Provider、AI 调用日志、Schema 校验、Prompt 版本化、Mock/规则降级和自动化测试已完成。剩余不是重构代码，而是在 Staging 配置真实 DeepSeek Key 后做小样本真实调用验证。
+
+接力步骤：
+
+1. 配置 Staging 环境变量：DeepSeek API Key、Base URL、模型名、超时、最大重试次数和真实 Provider 开关。
+2. 执行目标解析、计划生成、打卡评分、申诉复评、救援任务、失败复盘、周/月报告各 1-2 条真实调用。
+3. 在后台或数据库核对 `ai_call_logs`：`provider`、`model`、`promptVersion`、`inputHash`、耗时、token、成本估算、错误分类均正确。
+4. 故意构造一次超时或 Schema 异常响应，确认不会污染业务表，用户能看到明确失败或降级提示。
+5. 将 Staging 真实调用记录写回 P0-3 的“本轮验收记录”，再把状态改为 `DONE`。
+
+不要做：
+
+- 不要把真实 API Key 写入仓库。
+- 不要在测试环境默认调用真实 DeepSeek。
+- 不要让模型输出绕过后端 Schema 和业务校验。
+
+#### P1-1 云对象存储与病毒扫描（剩余：生产 S3/ClamAV 联调）
+
+当前代码状态：S3 协议 Provider、本地测试 Provider、直传、完成回调、服务端复核、ClamAV INSTREAM、扫描/删除/清理 Worker 和自动化测试已完成。
+
+接力步骤：
+
+1. 在 Staging/Production 创建私有 Bucket，开启最小权限访问。需要验证 Bucket 不能匿名读写。
+2. 配置 S3 兼容环境变量：endpoint、region、bucket、access key、secret key、force path style、签名有效期。
+3. 部署 ClamAV 服务，配置 host、port、timeout。扫描超时或连接失败必须保持阻断，不允许默认放行。
+4. 用 Web 上传一张图片和一个 PDF，确认状态链路为 `PENDING_UPLOAD -> UPLOADED -> SCANNING -> READY`。
+5. 上传 EICAR 或测试恶意内容，确认进入 `QUARANTINED`/`REJECTED`，不能下载、不能用于打卡。
+6. 删除目标和删除账号后，检查对象删除任务生成、重试和最终对象清理结果。
+7. 将真实 Bucket、ClamAV、CORS、删除补偿和扫描失败记录写入 P1-1，再改为 `DONE`。
+
+必须补充的证据：
+
+- Bucket 私有访问截图或命令输出。
+- 正常上传/下载签名 URL 验证。
+- 恶意文件拦截记录。
+- 删除任务补偿记录。
+
+#### P1-2 敏感数据加密与 AI 脱敏（剩余：生产密钥与历史迁移演练）
+
+当前代码状态：版本化加密服务、敏感字段接入、AI DTO 白名单、日志清理、条款/隐私同意、数据导出和自动化测试已完成。
+
+接力步骤：
+
+1. 选择并配置生产密钥托管方式。推荐使用云 KMS 或至少使用部署平台 Secret 管理，不能使用默认开发密钥。
+2. 设置 `FIELD_ENCRYPTION_KEYS`、`FIELD_ENCRYPTION_ACTIVE_VERSION`、`FIELD_ENCRYPTION_HASH_SECRET` 等环境变量。
+3. 在 Staging 用生产同构数据跑历史迁移脚本，确认目标、打卡、奖励、失败报告、微信 openId/unionId 等字段均已加密或生成安全索引。
+4. 执行迁移前备份，记录回滚步骤。
+5. 做一次密钥轮换演练：新增新版本 key、切换 active version、新写入使用新 key、旧数据仍可解密。
+6. 抓取一条 AI 请求样本，确认不含邮箱、昵称、用户 ID、无关原文和密钥 metadata。
+7. 更新 P1-2 验收记录，状态改为 `DONE`。
+
+风险点：
+
+- 盲索引 hash secret 变更会影响 openId/unionId 查找，必须演练。
+- 不要在日志中打印解密后的原文。
+- 数据导出应只返回当前用户自己的解密数据，不返回 key version。
+
+#### P1-3 可观测性、备份与故障恢复（剩余：告警接收人与异地备份）
+
+当前代码状态：request/trace ID、关键业务指标、Prometheus readiness/metrics、队列补偿、备份脚本模板和本地恢复演练已完成。
+
+接力步骤：
+
+1. 部署 Prometheus/Alertmanager 或等价平台，并配置接收人：邮件、飞书、企业微信或 PagerDuty。
+2. 设置告警规则：API 5xx、P95 延迟、AI Job 失败率、队列积压、支付回调失败、上传扫描失败、MySQL/Redis 不可用。
+3. 配置 Sentry 或等价错误平台，确认敏感原文被过滤。
+4. 配置 MySQL 异地备份和对象存储版本控制/软删除。
+5. 跑一次恢复演练：从备份恢复 MySQL，验证 RPO/RTO，抽样验证用户、目标、任务、支付和上传记录。
+6. 模拟一个 `QUEUED` Job 丢失队列消息，使用队列补偿接口恢复入队。
+7. 将 Alert 接收人、备份位置、恢复演练时间、RPO/RTO 写入 P1-3，状态改为 `DONE`。
+
+#### P2-1 Stripe 正式支付（剩余：真实 Test Mode 联调）
+
+当前代码状态：Stripe SDK Checkout、raw body Webhook 验签、事件幂等、金额校验和统一权益链路已完成。
+
+接力步骤：
+
+1. 配置 Stripe Test Mode Secret Key、Webhook Secret、Price/产品策略或由服务端套餐动态生成 price_data。
+2. 创建 Checkout Session，完成一笔测试卡支付。
+3. 用 Stripe CLI 转发 Webhook 到本地或 Staging，验证 `checkout.session.completed` 和 `payment_intent.succeeded`。
+4. 重放同一个事件，确认不会重复延长会员。
+5. 触发退款、争议、订阅取消或续费测试事件，确认 P2-3 的订单、支付明细、订阅和 entitlement 更新正确。
+6. 接入 Stripe Billing Portal：新增后端创建 Portal Session 接口，前端账号页提供跳转入口。
+7. 更新 P2-1 真实联调记录，状态按证据改为 `DONE` 或继续 `IN_PROGRESS`。
+
+不要做：
+
+- 不要信任客户端金额或套餐 ID 外的价格参数。
+- 不要用 JSON 解析后的 body 做 Stripe Webhook 验签。
+
+#### P2-2 微信支付正式接入（剩余：真实商户联调）
+
+当前代码状态：API v3 Native 下单签名、通知验签解密、退款通知和统一权益链路已完成。
+
+接力步骤：
+
+1. 获取真实商户号、AppID/小程序 AppID、商户私钥、证书序列号、API v3 key 和平台证书。
+2. 配置密钥到部署 Secret，不要提交仓库。
+3. 根据业务形态确认 Native、JSAPI 或小程序支付。若小程序支付是主入口，需要确认 `openid` 来源与 P4-1 绑定 openId 一致。
+4. 完成真实下单和支付结果通知联调。
+5. 增加查询订单接口和关闭订单接口，处理用户创建订单后未支付、超时和取消场景。
+6. 增加退款申请接口，并用真实退款通知验证权益撤销。
+7. 验证平台证书序列号轮换，不能只支持单固定公钥。
+8. 更新 P2-2 联调证据，满足后改为 `DONE`。
+
+#### P2-3 订阅与会员权益模型（剩余：生产账务核对）
+
+当前代码状态：数据模型、Mock 支付、官方 Stripe/微信事件接入、后台退款、entitlement 和会员投影已完成。
+
+接力步骤：
+
+1. 在 Stripe 和微信支付真实联调后，分别做账务核对：本地订单金额、服务商订单金额、支付事件、订阅、entitlement、membership 投影必须一致。
+2. 抽样验证退款、争议、取消订阅、续费和管理员手动会员变更。
+3. 增加一个后台或脚本化核对入口，输出“订单 -> 支付明细 -> 订阅 -> entitlement -> membership”链路。
+4. 记录对账异常处理 Runbook：金额不一致、服务商成功但本地失败、本地成功但服务商无记录、重复回调。
+5. 更新 P2-3 为 `DONE`。
+
+#### P3-1 AI 目标创建助手（剩余：真实 DeepSeek 体验验收）
+
+当前代码状态：目标助手草稿、加密、恢复、字段接受/覆盖、落地目标、前端体验和 Mock/规则 fallback 已完成。
+
+接力步骤：
+
+1. 配置真实 DeepSeek Provider。
+2. 用 5 类典型目标测试：考研、四六级/雅思托福、GPA、证书、自定义学习目标。
+3. 每类检查：识别字段是否合理、最多 3 个补充问题、风险建议是否可执行、用户覆盖后不会被 AI 静默覆盖。
+4. 刷新页面确认草稿、问答和已接受字段恢复。
+5. 真实 AI 失败时确认前端可继续普通表单。
+6. 将体验问题修到可接受后，把 P3-1 标为 `DONE`。
+
+#### P4-2 微信小程序页面（下一项主要编码工作）
+
+P4-1 后端认证已完成。P4-2 需要真正创建小程序客户端或等价的轻量移动端包，并打通“微信登录 -> 今日任务 -> 上传图片 -> 打卡 -> Web 可见”的闭环。
+
+建议实现顺序：
+
+1. 建立小程序项目结构。若仓库已有小程序目录，沿用；没有则建议新增 `apps/miniprogram`，不要把小程序专属状态写进 Web App。
+2. 增加小程序 API client：
+   - `POST /auth/wechat-mini/login`
+   - `POST /auth/wechat-mini/bind-existing`
+   - `POST /auth/wechat-mini/register`
+   - `POST /auth/wechat-mini/refresh`
+   - `POST /auth/wechat-mini/logout`
+   - `DELETE /auth/wechat-mini/binding`
+   - 复用今日任务、任务详情、上传、完成打卡、提醒偏好接口。
+3. 登录/绑定页：
+   - 调 `wx.login` 取得 code。
+   - 调后端 login；若返回 `NEEDS_BINDING`，展示“绑定已有账号”和“创建新账号”两条路径。
+   - 保存 Access Token、Refresh Token、过期时间和绑定状态。
+   - Access Token 过期前自动 refresh；refresh 失败回到登录页。
+4. 当前目标摘要页：
+   - 读取当前 active/at-risk/replanning 目标。
+   - 展示目标标题、剩余天数、健康分、今日任务数量、最近风险。
+   - 无目标时提示去 Web 创建目标，不在首版做完整目标创建。
+5. 今日任务列表：
+   - 调现有今日任务接口。
+   - 区分 `PREVIEW`、`PENDING`、`DONE`、`SCORING`、`SCORED`。
+   - 支持下拉刷新和弱网重试。
+6. 任务详情和打卡表单：
+   - 展示任务描述、计划分钟、证据要求、学习任务字段。
+   - 表单字段包括复盘内容、投入分钟、完成子项、题量、正确题数、证据链接/图片。
+   - 提交必须幂等：重复点击不能产生两次打卡或重复扣额度。
+7. 图片/截图上传：
+   - 使用现有上传创建和完成回调接口。
+   - 上传 source 必须为 `WECHAT_MINIPROGRAM`。
+   - 处理上传中断、扫描中、扫描失败和超限。
+8. 简版完成结果：
+   - 提交后展示任务状态、AI Job 状态、基础评分或 Pro 详细评分入口。
+   - 如果评分异步排队，展示“评分中”并轮询。
+9. 提醒入口和绑定状态：
+   - 展示当前微信绑定状态。
+   - 可进入提醒偏好设置；默认只做开关和提醒时间，不做复杂模板管理。
+10. 账号页：
+   - 展示邮箱、会员、当前绑定 openId 的脱敏信息。
+   - 支持退出登录和解绑微信；解绑必须二次确认。
+11. 验收：
+   - 小程序用户能从登录到完成一次带图片的任务打卡。
+   - Web 登录同一账号能立即看到任务状态和上传证据。
+   - 另一个用户不能读取该任务或下载该上传资产。
+   - Token 过期、refresh 失败、弱网、上传中断和重复提交有明确 UI。
+
+#### P5-1 性能和容量验证（P4-2 后做）
+
+目标是证明系统能支撑至少 100 名早期用户，不是做大规模压测炫技。
+
+建议实现顺序：
+
+1. 新增压测数据生成脚本，建议放在 `apps/api/src/perf` 或 `ops/perf`：
+   - 创建用户、目标、计划、任务、打卡、上传资产 metadata、AI Job、邮件日志。
+   - 参数化用户数、目标数、任务天数、历史打卡密度。
+   - 脚本必须可重复执行，测试数据要带统一前缀并可清理。
+2. 选择压测工具。可用 k6、Artillery 或轻量 Node 脚本；选一个即可。
+3. 场景至少覆盖：
+   - 登录和获取当前用户。
+   - 读取目标列表、今日任务、健康报告。
+   - 批量提交打卡并创建评分 Job。
+   - 管理后台分页读取用户、目标、AI Job、邮件日志。
+   - 时间线、热力图和报告列表在历史数据增长后的响应。
+4. 记录 P50/P95/P99、错误率、数据库连接、慢查询和队列积压。
+5. 优化发现的问题：
+   - 缺索引时加迁移。
+   - N+1 查询时改 include/select 或批量查询。
+   - 大列表必须分页或设上限。
+   - Worker 并发需要可配置。
+6. 输出 `docs/performance-baseline-YYYY-MM-DD.md`，写明机器、数据规模、命令、结果和优化。
+7. P95 达标并记录后，将 P5-1 改为 `DONE`。
+
+#### P5-2 发布流程和灰度运营（最后一项）
+
+目标是让项目能受控上线，而不是只写一份发布说明。
+
+建议实现顺序：
+
+1. 整理环境变量清单：
+   - API、Web、数据库、Redis、S3、ClamAV、DeepSeek、Stripe、微信支付、微信小程序、邮件、监控、加密密钥。
+   - 标注必填/可选、Development/Staging/Production 差异。
+2. CI：
+   - PR 执行 `npm run typecheck`、`npm run test:integration`、`npm run build`、`git diff --check`。
+   - 主分支部署 Staging 后执行 E2E。
+   - 失败时阻止合并或部署。
+3. 迁移策略：
+   - 发布前备份。
+   - Prisma migration 先在 Staging 跑。
+   - 大表变更要分阶段。
+   - 记录回滚策略，尤其是 auth/session、支付和加密字段。
+4. Feature Flag：
+   - 控制真实 AI、自动提醒、正式支付、小程序入口。
+   - 灰度期间默认只给内部账号或白名单打开高风险能力。
+5. 发布 Runbook：
+   - 发布前检查清单。
+   - 发布步骤。
+   - 验证步骤。
+   - 回滚步骤。
+   - 暂停条件：越权、数据错乱、重复扣费、提醒轰炸、AI 大面积失败、上传安全异常。
+6. 灰度运营：
+   - 第一批内部账号。
+   - 第二批 10-20 名学生。
+   - 观察至少一周后扩大到约 100 名。
+   - 每日检查指标、错误、支付、提醒、AI 成本和用户反馈。
+7. 输出 `docs/release-runbook.md` 和 `docs/gray-release-checklist.md`。
+8. 完成一次 Staging 发布演练和一次回滚演练后，将 P5-2 改为 `DONE`。
+
 ## 13. 总进度台账
 
 | ID | 工作项 | 状态 | 开始日期 | 完成日期 | 负责人 | 验收结果 |
@@ -1058,7 +1346,7 @@ npm run prisma:migrate -w @goalmate/api
 | P3-1 | AI 目标创建助手 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 本地完整链路完成；待真实 DeepSeek 体验联调 |
 | P3-2 | 统一成长事件时间线 | `DONE` | 2026-06-24 | 2026-06-25 | Codex | 147/147 integration，9/9 E2E；统一事件表、回填接口、运行时事件写入、查询接口、前端读取和里程碑完成入口完成 |
 | P3-3 | 后台三级权限 | `DONE` | 2026-06-25 | 2026-06-25 | Codex | 149/149 integration，9/9 E2E；三级权限矩阵、权限拒绝审计、管理员管理和前端权限展示完成 |
-| P4-1 | 微信登录和账号绑定 | `NOT_STARTED` | - | - | - | - |
+| P4-1 | 微信登录和账号绑定 | `DONE` | 2026-06-25 | 2026-06-25 | Codex | 151/151 integration，9/9 E2E；小程序 code2session、账号绑定、可撤销 Refresh Token、退出和解绑完成 |
 | P4-2 | 微信小程序页面 | `NOT_STARTED` | - | - | - | - |
 | P5-1 | 性能和容量验证 | `NOT_STARTED` | - | - | - | - |
 | P5-2 | 发布流程和灰度运营 | `NOT_STARTED` | - | - | - | - |
@@ -1249,9 +1537,9 @@ npm run prisma:migrate -w @goalmate/api
 9. P2-2 微信支付正式接入。
 10. P3-1 AI 目标创建助手。
 11. P3-2 统一成长事件时间线。
-12. P3-3 后台三级权限。
-13. P4-1 微信登录和账号绑定。
-14. P4-2 微信小程序页面。
+12. P3-3 后台三级权限（已完成）。
+13. P4-1 微信登录和账号绑定（已完成）。
+14. P4-2 微信小程序页面（下一项主要编码工作）。
 15. P5-1 性能和容量验证。
 16. P5-2 发布和灰度运营验收。
 
