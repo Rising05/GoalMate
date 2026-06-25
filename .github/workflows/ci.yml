@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run typecheck
+
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: goalmate
+          MYSQL_DATABASE: goalmate
+        ports: ["3306:3306"]
+        options: --health-cmd "mysqladmin ping -h localhost" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run prisma:generate -w @goalmate/api
+      - run: npm run prisma:migrate -w @goalmate/api
+        env:
+          DATABASE_URL: mysql://root:goalmate@127.0.0.1:3306/goalmate
+      - run: npm run test:integration
+        env:
+          DATABASE_URL: mysql://root:goalmate@127.0.0.1:3306/goalmate
+          REDIS_URL: redis://127.0.0.1:6379
+          SESSION_SECRET: ci-test-secret
+          MOCK_PAYMENT_WEBHOOK_SECRET: ci-mock-payment
+          MOCK_PAYMENT_CHECKOUT_URL: http://localhost:5173/mock-checkout
+          FIELD_ENCRYPTION_KEYS: '{"v1":"ci-test-key-32-bytes-long!!!!!1"}'
+          FIELD_ENCRYPTION_ACTIVE_VERSION: v1
+          FIELD_ENCRYPTION_HASH_SECRET: ci-hash-secret-32
+          AI_PROVIDER: mock
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+
+  lint-diff:
+    name: Git Diff Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git diff --check $(git merge-base origin/main HEAD)..HEAD
