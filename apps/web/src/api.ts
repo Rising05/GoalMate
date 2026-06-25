@@ -112,11 +112,14 @@ export interface GoalPlan {
 
 export interface Milestone {
   id: string;
+  goalId?: string;
   title: string;
   description: string | null;
   targetDate: string;
   rewardText: string | null;
   isCompleted: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface WeeklyPlan {
@@ -1540,6 +1543,37 @@ export async function fetchGoalPlan(token: string, goalId: string) {
   }
 
   return data as { plan: GoalPlan };
+}
+
+export async function setMilestoneCompletion(
+  token: string,
+  goalId: string,
+  milestoneId: string,
+  completed: boolean
+) {
+  const response = await fetch(
+    apiUrl(`/goals/${goalId}/milestones/${milestoneId}/completion`),
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ completed })
+    }
+  );
+
+  const data = await parseJson<{
+    milestone: Milestone;
+    changed: boolean;
+    completed: boolean;
+  }>(response);
+
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data, "里程碑状态更新失败"));
+  }
+
+  return data as { milestone: Milestone; changed: boolean; completed: boolean };
 }
 
 export async function fetchGoalHealth(token: string, goalId: string) {

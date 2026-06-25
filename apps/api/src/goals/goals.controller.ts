@@ -199,6 +199,21 @@ export class GoalsController {
     return this.aiJobsService.getGoalPlan(request.user!.id, id);
   }
 
+  @Post(":id/milestones/:milestoneId/completion")
+  setMilestoneCompletion(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Param("milestoneId") milestoneId: string,
+    @Body() body: unknown
+  ) {
+    return this.goalsService.setMilestoneCompletion(
+      request.user!.id,
+      id,
+      milestoneId,
+      body
+    );
+  }
+
   @Post(":id/generate-plan")
   generatePlan(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
     return this.aiJobsService.generateGoalPlan(request.user!.id, id);

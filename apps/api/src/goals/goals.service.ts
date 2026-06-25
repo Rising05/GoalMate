@@ -17,6 +17,7 @@ import {
   GoalIntakeDraft,
   GoalStatus,
   HealthSnapshot,
+  Milestone,
   Prisma,
   ReportArtifact
 } from "@prisma/client";
@@ -573,6 +574,117 @@ export class GoalsService {
     return {
       deletedGoalId: goal.id,
       objectDeletionsScheduled: goalAssets.length
+    };
+  }
+
+  async setMilestoneCompletion(
+    userId: string,
+    goalId: string,
+    milestoneId: string,
+    input: unknown = {}
+  ) {
+    const body =
+      input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    const completed =
+      body.completed === undefined || body.completed === null
+        ? undefined
+        : this.parseBoolean(body.completed);
+
+    const goal = await this.getOwnedGoal(userId, goalId);
+    const milestone = await this.prisma.milestone.findFirst({
+      where: {
+        id: milestoneId,
+        goalId: goal.id
+      }
+    });
+
+    if (!milestone) {
+      throw new NotFoundException("里程碑不存在");
+    }
+
+    const nextCompleted = completed === undefined ? !milestone.isCompleted : completed;
+
+    if (nextCompleted === milestone.isCompleted) {
+      return {
+        milestone: this.serializeMilestone(milestone),
+        changed: false,
+        completed: milestone.isCompleted
+      };
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.milestone.update({
+        where: { id: milestone.id },
+        data: { isCompleted: nextCompleted }
+      });
+
+      if (nextCompleted) {
+        await this.growthEvents.record(
+          {
+            userId,
+            goalId: goal.id,
+            type: "MILESTONE_REACHED",
+            sourceResourceType: "MILESTONE",
+            sourceResourceId: milestone.id,
+            occurredAt: result.updatedAt,
+            metadata: {
+              title: milestone.title,
+              targetDate: milestone.targetDate.toISOString()
+            }
+          },
+          tx
+        );
+      } else {
+        await tx.growthEvent.deleteMany({
+          where: {
+            userId,
+            goalId: goal.id,
+            type: "MILESTONE_REACHED",
+            sourceResourceType: "MILESTONE",
+            sourceResourceId: milestone.id
+          }
+        });
+      }
+
+      return result;
+    });
+
+    return {
+      milestone: this.serializeMilestone(updated),
+      changed: true,
+      completed: updated.isCompleted
+    };
+  }
+
+  private parseBoolean(value: unknown) {
+    if (typeof value === "boolean") {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true" || normalized === "1") {
+        return true;
+      }
+      if (normalized === "false" || normalized === "0") {
+        return false;
+      }
+    }
+
+    throw new BadRequestException("completed 必须是布尔值");
+  }
+
+  private serializeMilestone(milestone: Milestone) {
+    return {
+      id: milestone.id,
+      goalId: milestone.goalId,
+      title: milestone.title,
+      description: milestone.description,
+      targetDate: milestone.targetDate.toISOString(),
+      rewardText: milestone.rewardText,
+      isCompleted: milestone.isCompleted,
+      createdAt: milestone.createdAt.toISOString(),
+      updatedAt: milestone.updatedAt.toISOString()
     };
   }
 

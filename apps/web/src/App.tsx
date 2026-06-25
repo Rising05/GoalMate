@@ -127,6 +127,7 @@ import {
   requestGoalReplan,
   restartGoal,
   retryFailedEmailLogs,
+  setMilestoneCompletion,
   settleGoal,
   unbindWechat,
   updateGoalIntakeDraft,
@@ -959,6 +960,7 @@ export function App() {
   const [isConfirmingPlan, setIsConfirmingPlan] = useState(false);
   const [isRequestingReplan, setIsRequestingReplan] = useState(false);
   const [isLoadingPlan, setIsLoadingPlan] = useState(false);
+  const [updatingMilestoneId, setUpdatingMilestoneId] = useState<string | null>(null);
   const [todayTasks, setTodayTasks] = useState<TodayDailyTask[]>([]);
   const [activityDays, setActivityDays] = useState<ActivityDay[]>([]);
   const [timelineDays, setTimelineDays] = useState<TimelineDay[]>([]);
@@ -1701,6 +1703,34 @@ export function App() {
       }
     } finally {
       setIsLoadingPlan(false);
+    }
+  }
+
+  async function handleSetMilestoneCompletion(
+    milestoneId: string,
+    completed: boolean
+  ) {
+    if (!session || !selectedGoalId) {
+      setPlanMessage("请先登录并选择目标。");
+      return;
+    }
+
+    setUpdatingMilestoneId(milestoneId);
+    setPlanMessage(completed ? "正在标记里程碑完成..." : "正在取消里程碑完成...");
+
+    try {
+      await setMilestoneCompletion(session.token, selectedGoalId, milestoneId, completed);
+      await loadGoalPlan(session.token, selectedGoalId);
+      await refreshDailyTaskData(session.token, heatmapYear, selectedGoalId);
+      setPlanMessage(
+        completed
+          ? "里程碑已完成，成长时间线已记录。"
+          : "里程碑已取消完成，成长时间线已同步。"
+      );
+    } catch (error) {
+      setPlanMessage(error instanceof Error ? error.message : "里程碑状态更新失败");
+    } finally {
+      setUpdatingMilestoneId(null);
     }
   }
 
@@ -4519,6 +4549,22 @@ export function App() {
                             <div key={milestone.id}>
                               <strong>{milestone.title}</strong>
                               <span>{formatDate(milestone.targetDate)}</span>
+                              <button
+                                className="ghost-button"
+                                disabled={
+                                  !selectedGeneratedPlan.isActive ||
+                                  updatingMilestoneId === milestone.id
+                                }
+                                type="button"
+                                onClick={() =>
+                                  handleSetMilestoneCompletion(
+                                    milestone.id,
+                                    !milestone.isCompleted
+                                  )
+                                }
+                              >
+                                {milestone.isCompleted ? "取消完成" : "标记完成"}
+                              </button>
                             </div>
                           ))}
                         </div>
@@ -4687,6 +4733,31 @@ export function App() {
                             <h3>{milestone.title}</h3>
                             <p>{milestone.description}</p>
                             <strong>{formatDate(milestone.targetDate)}</strong>
+                            <GlassStatusBadge
+                              tone={milestone.isCompleted ? "stable" : "neutral"}
+                            >
+                              {milestone.isCompleted ? "已完成" : "未完成"}
+                            </GlassStatusBadge>
+                            <button
+                              className="ghost-button"
+                              disabled={
+                                !selectedGeneratedPlan.isActive ||
+                                updatingMilestoneId === milestone.id
+                              }
+                              type="button"
+                              onClick={() =>
+                                handleSetMilestoneCompletion(
+                                  milestone.id,
+                                  !milestone.isCompleted
+                                )
+                              }
+                            >
+                              {updatingMilestoneId === milestone.id
+                                ? "同步中"
+                                : milestone.isCompleted
+                                  ? "取消完成"
+                                  : "标记完成"}
+                            </button>
                           </div>
                         </article>
                       ))}
