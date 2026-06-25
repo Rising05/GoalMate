@@ -10,6 +10,7 @@ import {
   AiJob,
   AiCallLog,
   AiJobStatus,
+  AdminUser,
   AuditLog,
   EmailLog,
   Goal,
@@ -31,8 +32,13 @@ import { UploadsService } from "../uploads/uploads.service";
 import { FieldEncryptionService } from "../security/field-encryption.service";
 import { BILLING_PRO_ENTITLEMENT_LIMITS, BillingService } from "../billing/billing.service";
 import { QUOTA_CAPABILITIES } from "../quota/quota.service";
-
-type AdminRole = "OPERATOR" | "SUPER_ADMIN";
+import {
+  ADMIN_ROLES,
+  AdminPermission,
+  AdminRole,
+  getAdminPermissions,
+  hasAdminPermission
+} from "./admin-permissions";
 
 const MEMBERSHIP_PLANS = new Set<MembershipPlan>(["FREE", "PRO"]);
 const MEMBERSHIP_STATUSES = new Set<MembershipStatus>([
@@ -41,7 +47,7 @@ const MEMBERSHIP_STATUSES = new Set<MembershipStatus>([
   "MANUAL"
 ]);
 const USER_STATUSES = new Set<UserStatus>(["ACTIVE", "DISABLED", "DELETED"]);
-const ADMIN_ROLES = new Set<AdminRole>(["OPERATOR", "SUPER_ADMIN"]);
+const ADMIN_STATUSES = new Set(["ACTIVE", "DISABLED"]);
 const GOAL_STATUSES = new Set<GoalStatus>([
   "DRAFT",
   "GENERATING_PLAN",
@@ -102,7 +108,7 @@ export class AdminService {
   ) {}
 
   async getOverview(actorUserId: string) {
-    const admin = await this.assertAdmin(actorUserId);
+    const admin = await this.assertAdminPermission(actorUserId, "VIEW_SYSTEM_METRICS");
     const [
       userCount,
       activeGoalCount,
@@ -136,7 +142,8 @@ export class AdminService {
     return {
       admin: {
         role: admin.role,
-        status: admin.status
+        status: admin.status,
+        permissions: getAdminPermissions(admin.role)
       },
       metrics: {
         users: userCount,
@@ -154,7 +161,7 @@ export class AdminService {
   }
 
   async reconcileQueues(actorUserId: string, input: unknown) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_SYSTEM_METRICS");
     if (!this.queueReconciliation) throw new BadRequestException("队列补偿服务未配置");
     const body = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
@@ -171,7 +178,7 @@ export class AdminService {
   }
 
   async listUsers(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_USER_SUMMARY");
     const filters = this.parseUserSearchFilters(input);
     const pagination = this.parsePagination(input);
     const where: Prisma.UserWhereInput = {
@@ -247,7 +254,8 @@ export class AdminService {
         membership: user.membership
           ? this.serializeMembership(user.membership)
           : null,
-        adminRole: user.adminProfile?.role ?? null,
+        adminRole:
+          user.adminProfile?.status === "ACTIVE" ? user.adminProfile.role : null,
         counts: {
           goals: user._count.goals,
           aiJobs: user._count.aiJobs,
@@ -258,7 +266,7 @@ export class AdminService {
   }
 
   async listGoals(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_GOAL_STATUS");
     const filters = this.parseGoalFilters(input);
     const pagination = this.parsePagination(input);
     const where: Prisma.GoalWhereInput = {
@@ -316,7 +324,7 @@ export class AdminService {
   }
 
   async listAiJobs(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_AI_JOBS");
     const filters = this.parseAiJobFilters(input);
     const pagination = this.parsePagination(input);
     const where: Prisma.AiJobWhereInput = {
@@ -357,7 +365,7 @@ export class AdminService {
   }
 
   async retryAiJob(actorUserId: string, jobId: string, input: unknown) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "RETRY_AI_JOBS");
     const job = await this.prisma.aiJob.findUnique({
       where: { id: jobId },
       include: {
@@ -425,7 +433,7 @@ export class AdminService {
   }
 
   async listAiCallLogs(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_AI_JOBS");
     const data = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
     const pagination = this.parsePagination(data);
     const capability = typeof data.capability === "string" && data.capability.trim() ? data.capability.trim() : undefined;
@@ -450,7 +458,7 @@ export class AdminService {
   }
 
   async listEmailLogs(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_NOTIFICATION_LOGS");
     const filters = this.parseEmailLogFilters(input);
     const pagination = this.parsePagination(input);
     const where: Prisma.EmailLogWhereInput = {
@@ -492,7 +500,7 @@ export class AdminService {
   }
 
   async listUploadAssets(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_USER_SUMMARY");
     const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
     const pagination = this.parsePagination(input);
     const query = this.cleanOptionalFilterText(body.query);
@@ -534,7 +542,7 @@ export class AdminService {
   }
 
   async cleanupUploads(actorUserId: string, input: unknown) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_SYSTEM_METRICS");
     if (!this.uploadsService) throw new BadRequestException("上传清理服务未配置");
     const body = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
@@ -550,7 +558,7 @@ export class AdminService {
   }
 
   async listPaymentEvents(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_USER_SUMMARY");
     const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
     const pagination = this.parsePagination(input);
     const provider = this.cleanOptionalFilterText(body.provider)?.toUpperCase();
@@ -580,7 +588,7 @@ export class AdminService {
   }
 
   async refundPaymentOrder(actorUserId: string, orderId: string, input: unknown) {
-    await this.assertAdmin(actorUserId, "SUPER_ADMIN");
+    await this.assertAdminPermission(actorUserId, "REFUND_PAYMENT");
     if (!this.billingService) throw new BadRequestException("支付服务未配置");
     const result = await this.billingService.adminRefundOrder(actorUserId, orderId, input);
     await this.createAuditLog(actorUserId, {
@@ -596,7 +604,7 @@ export class AdminService {
   }
 
   async listMembershipAudits(actorUserId: string, input: unknown = {}) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "ADJUST_MEMBERSHIP");
     const pagination = this.parsePagination(input);
     const audits = await this.prisma.membershipAudit.findMany({
       skip: pagination.skip, take: pagination.pageSize, orderBy: { createdAt: "desc" },
@@ -617,7 +625,7 @@ export class AdminService {
   }
 
   async retryEmailLog(actorUserId: string, logId: string, input: unknown) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "RETRY_NOTIFICATION");
     const payload = this.parseAdminRetryPayload(input);
     const log = await this.prisma.emailLog.findUnique({ where: { id: logId } });
     if (!log) throw new NotFoundException("提醒日志不存在");
@@ -643,7 +651,7 @@ export class AdminService {
     targetUserId: string,
     input: unknown
   ) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "ADJUST_MEMBERSHIP");
     const targetUser = await this.prisma.user.findUnique({
       where: { id: targetUserId },
       select: { id: true, email: true }
@@ -742,12 +750,91 @@ export class AdminService {
     };
   }
 
+  async listAdminProfiles(actorUserId: string, input: unknown = {}) {
+    await this.assertAdminPermission(actorUserId, "MANAGE_ADMINS");
+    const pagination = this.parsePagination(input);
+    const [admins, total] = await Promise.all([
+      this.prisma.adminUser.findMany({
+        orderBy: { updatedAt: "desc" },
+        skip: pagination.skip,
+        take: pagination.pageSize,
+        include: {
+          user: { select: { email: true, displayName: true, status: true } }
+        }
+      }),
+      this.prisma.adminUser.count()
+    ]);
+
+    return {
+      total,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      admins: admins.map((admin) => this.serializeAdminProfile(admin, admin.user))
+    };
+  }
+
+  async updateAdminProfile(
+    actorUserId: string,
+    targetUserId: string,
+    input: unknown
+  ) {
+    await this.assertAdminPermission(actorUserId, "MANAGE_ADMINS");
+    const payload = this.parseAdminProfilePayload(input);
+    const targetUser = await this.prisma.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true, email: true, displayName: true, status: true }
+    });
+
+    if (!targetUser) {
+      throw new NotFoundException("用户不存在");
+    }
+
+    const previous = await this.prisma.adminUser.findUnique({
+      where: { userId: targetUserId }
+    });
+    await this.assertCanChangeActiveSuperAdmin(targetUserId, payload.role, payload.status);
+
+    const admin = await this.prisma.adminUser.upsert({
+      where: { userId: targetUserId },
+      create: {
+        userId: targetUserId,
+        role: payload.role,
+        status: payload.status
+      },
+      update: {
+        role: payload.role,
+        status: payload.status
+      },
+      include: {
+        user: { select: { email: true, displayName: true, status: true } }
+      }
+    });
+
+    await this.createAuditLog(actorUserId, {
+      action: previous ? "ADMIN_PROFILE_UPDATE" : "ADMIN_PROFILE_CREATE",
+      targetType: "ADMIN_USER",
+      targetId: admin.userId,
+      reason: payload.reason,
+      metadata: {
+        targetEmail: targetUser.email,
+        fromRole: previous?.role ?? null,
+        toRole: admin.role,
+        fromStatus: previous?.status ?? null,
+        toStatus: admin.status
+      }
+    });
+
+    return {
+      admin: this.serializeAdminProfile(admin, admin.user)
+    };
+  }
+
   async getRawUserContent(
     actorUserId: string,
     targetUserId: string,
     reason?: string
   ) {
-    await this.assertAdmin(actorUserId, "SUPER_ADMIN");
+    await this.assertAdminPermission(actorUserId, "VIEW_RAW_USER_CONTENT");
     const auditReason = typeof reason === "string" ? reason.trim() : "";
 
     if (auditReason.length < 6) {
@@ -861,7 +948,7 @@ export class AdminService {
   }
 
   async listAuditLogs(actorUserId: string) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "VIEW_SYSTEM_METRICS");
     const logs = await this.prisma.auditLog.findMany({
       orderBy: { createdAt: "desc" },
       take: 100,
@@ -876,7 +963,7 @@ export class AdminService {
   }
 
   async listSystemConfigs(actorUserId: string) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "MANAGE_SYSTEM_CONFIG");
     const configs = await this.prisma.systemConfig.findMany({
       orderBy: { key: "asc" }
     });
@@ -887,7 +974,7 @@ export class AdminService {
   }
 
   async runNotificationScheduler(actorUserId: string, input: unknown) {
-    await this.assertAdmin(actorUserId);
+    await this.assertAdminPermission(actorUserId, "RETRY_NOTIFICATION");
     const body = input && typeof input === "object"
       ? input as Record<string, unknown>
       : {};
@@ -924,7 +1011,7 @@ export class AdminService {
   }
 
   async upsertSystemConfig(actorUserId: string, input: unknown) {
-    await this.assertAdmin(actorUserId, "SUPER_ADMIN");
+    await this.assertAdminPermission(actorUserId, "MANAGE_SYSTEM_CONFIG");
     const payload = this.parseSystemConfigPayload(input);
     const config = await this.prisma.systemConfig.upsert({
       where: { key: payload.key },
@@ -955,20 +1042,89 @@ export class AdminService {
     };
   }
 
-  private async assertAdmin(actorUserId: string, requiredRole?: AdminRole) {
+  private async assertAdminPermission(
+    actorUserId: string,
+    permission: AdminPermission
+  ) {
     const admin = await this.prisma.adminUser.findUnique({
       where: { userId: actorUserId }
     });
 
     if (!admin || admin.status !== "ACTIVE") {
+      await this.createPermissionDeniedAudit(
+        actorUserId,
+        permission,
+        admin,
+        "无后台访问权限"
+      );
       throw new ForbiddenException("无后台访问权限");
     }
 
-    if (requiredRole === "SUPER_ADMIN" && admin.role !== "SUPER_ADMIN") {
-      throw new ForbiddenException("需要超级管理员权限");
+    if (!hasAdminPermission(admin.role, permission)) {
+      await this.createPermissionDeniedAudit(
+        actorUserId,
+        permission,
+        admin,
+        "后台权限不足"
+      );
+      throw new ForbiddenException("后台权限不足");
     }
 
     return admin;
+  }
+
+  private async createPermissionDeniedAudit(
+    actorUserId: string,
+    permission: AdminPermission,
+    admin: { role: string; status: string } | null,
+    reason: string
+  ) {
+    try {
+      await this.createAuditLog(actorUserId, {
+        action: "ADMIN_PERMISSION_DENIED",
+        targetType: "ADMIN_PERMISSION",
+        targetId: permission,
+        reason,
+        metadata: {
+          permission,
+          role: admin?.role ?? null,
+          status: admin?.status ?? null
+        }
+      });
+    } catch {
+      // Permission checks should not leak audit persistence failures to callers.
+    }
+  }
+
+  private async assertCanChangeActiveSuperAdmin(
+    targetUserId: string,
+    nextRole: AdminRole,
+    nextStatus: string
+  ) {
+    const existing = await this.prisma.adminUser.findUnique({
+      where: { userId: targetUserId }
+    });
+
+    if (
+      !existing ||
+      existing.role !== "SUPER_ADMIN" ||
+      existing.status !== "ACTIVE" ||
+      (nextRole === "SUPER_ADMIN" && nextStatus === "ACTIVE")
+    ) {
+      return;
+    }
+
+    const remainingSuperAdmins = await this.prisma.adminUser.count({
+      where: {
+        userId: { not: targetUserId },
+        role: "SUPER_ADMIN",
+        status: "ACTIVE"
+      }
+    });
+
+    if (remainingSuperAdmins === 0) {
+      throw new BadRequestException("至少保留一个有效超级管理员");
+    }
   }
 
   private parseUserSearchFilters(input: unknown) {
@@ -1037,6 +1193,42 @@ export class AdminService {
     }
 
     return role as AdminRole;
+  }
+
+  private parseRequiredAdminRole(value: unknown) {
+    const role = this.parseOptionalAdminRole(value);
+
+    if (!role) {
+      throw new BadRequestException("后台角色不正确");
+    }
+
+    return role;
+  }
+
+  private parseRequiredAdminStatus(value: unknown) {
+    const status = typeof value === "string" ? value.trim().toUpperCase() : "";
+
+    if (!ADMIN_STATUSES.has(status)) {
+      throw new BadRequestException("后台账号状态不正确");
+    }
+
+    return status;
+  }
+
+  private parseAdminProfilePayload(input: unknown) {
+    const body =
+      input && typeof input === "object" && !Array.isArray(input)
+        ? (input as Record<string, unknown>)
+        : {};
+    const role = this.parseRequiredAdminRole(body.role ?? body.adminRole);
+    const status = this.parseRequiredAdminStatus(body.status);
+    const reason = this.cleanText(body.reason, 500);
+
+    if (reason.length < 4) {
+      throw new BadRequestException("管理员变更原因至少需要 4 个字符");
+    }
+
+    return { role, status, reason };
   }
 
   private parseGoalFilters(input: unknown) {
@@ -1326,6 +1518,24 @@ export class AdminService {
       expiresAt: membership.expiresAt?.toISOString() ?? null,
       createdAt: membership.createdAt.toISOString(),
       updatedAt: membership.updatedAt.toISOString()
+    };
+  }
+
+  private serializeAdminProfile(
+    admin: AdminUser,
+    user: Pick<User, "email" | "displayName" | "status">
+  ) {
+    return {
+      id: admin.id,
+      userId: admin.userId,
+      email: user.email,
+      displayName: user.displayName,
+      userStatus: user.status,
+      role: admin.role,
+      status: admin.status,
+      permissions: getAdminPermissions(admin.role),
+      createdAt: admin.createdAt.toISOString(),
+      updatedAt: admin.updatedAt.toISOString()
     };
   }
 

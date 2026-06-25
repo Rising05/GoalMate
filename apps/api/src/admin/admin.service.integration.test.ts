@@ -44,7 +44,7 @@ describe("AdminService integration", () => {
     await prisma.adminUser.create({
       data: {
         userId: admin.id,
-        role: "OPERATOR",
+        role: "SYSTEM_ADMIN",
         status: "ACTIVE"
       }
     });
@@ -56,7 +56,8 @@ describe("AdminService integration", () => {
     const aiJobs = await adminService.listAiJobs(admin.id);
     const emailLogs = await adminService.listEmailLogs(admin.id);
 
-    assert.equal(overview.admin.role, "OPERATOR");
+    assert.equal(overview.admin.role, "SYSTEM_ADMIN");
+    assert.ok(overview.admin.permissions.includes("VIEW_SYSTEM_METRICS"));
     assert.ok(overview.metrics.users >= 2);
     assert.ok(users.users.some((item) => item.id === member.id));
     assert.ok(goals.goals.some((item) => item.id === goal.id));
@@ -254,8 +255,14 @@ describe("AdminService integration", () => {
       status: "MANUAL",
       reason: "用户线下付费后手动开通"
     });
-    const [auditLogs, entitlementCount] = await Promise.all([
-      adminService.listAuditLogs(admin.id),
+    const [auditLog, entitlementCount] = await Promise.all([
+      prisma.auditLog.findFirst({
+        where: {
+          actorUserId: admin.id,
+          action: "MEMBERSHIP_UPDATE",
+          targetId: member.id
+        }
+      }),
       prisma.entitlement.count({
         where: {
           userId: member.id,
@@ -269,14 +276,7 @@ describe("AdminService integration", () => {
     assert.equal(result.membership.plan, "PRO");
     assert.equal(result.membership.status, "MANUAL");
     assert.equal(entitlementCount, 8);
-    assert.ok(
-      auditLogs.logs.some(
-        (log) =>
-          log.action === "MEMBERSHIP_UPDATE" &&
-          log.targetId === member.id &&
-          log.reason === "用户线下付费后手动开通"
-      )
-    );
+    assert.ok(auditLog);
   });
 
   it("requires super-admin access and a reason before returning raw content", async () => {
@@ -332,9 +332,62 @@ describe("AdminService integration", () => {
     );
   });
 
-  it("lets a super-admin upsert system config with audit logging", async () => {
-    const { user: superAdmin } = await createUser("config-super");
+  it("audits permission denials and blocks operators from AI retries", async () => {
+    const { user: operator } = await createUser("permission-operator");
+    const { user: member, goal } =
+      await createUserWithOperationalData("permission-retry");
 
+    await prisma.adminUser.create({
+      data: {
+        userId: operator.id,
+        role: "OPERATOR",
+        status: "ACTIVE"
+      }
+    });
+    const failedJob = await prisma.aiJob.create({
+      data: {
+        userId: member.id,
+        goalId: goal.id,
+        type: "GOAL_PLAN_GENERATION",
+        status: "FAILED",
+        attempts: 3,
+        payload: {
+          source: "permission-test"
+        },
+        error: "provider timeout"
+      }
+    });
+
+    await assert.rejects(
+      () =>
+        adminService.retryAiJob(operator.id, failedJob.id, {
+          reason: "尝试越权重试 AI 任务"
+        }),
+      ForbiddenException
+    );
+
+    const denied = await prisma.auditLog.findFirst({
+      where: {
+        actorUserId: operator.id,
+        action: "ADMIN_PERMISSION_DENIED",
+        targetId: "RETRY_AI_JOBS"
+      }
+    });
+    assert.ok(denied);
+    assert.equal((denied.metadata as { permission: string }).permission, "RETRY_AI_JOBS");
+  });
+
+  it("lets a super-admin manage admins and protects the last active super-admin", async () => {
+    const { user: superAdmin } = await createUser("admin-manager-super");
+    const { user: targetAdmin } = await createUser("admin-manager-target");
+
+    await prisma.adminUser.updateMany({
+      where: {
+        role: "SUPER_ADMIN",
+        status: "ACTIVE"
+      },
+      data: { status: "DISABLED" }
+    });
     await prisma.adminUser.create({
       data: {
         userId: superAdmin.id,
@@ -343,7 +396,52 @@ describe("AdminService integration", () => {
       }
     });
 
-    const result = await adminService.upsertSystemConfig(superAdmin.id, {
+    await assert.rejects(
+      () =>
+        adminService.updateAdminProfile(superAdmin.id, superAdmin.id, {
+          role: "SYSTEM_ADMIN",
+          status: "ACTIVE",
+          reason: "降级最后一个超级管理员"
+        }),
+      BadRequestException
+    );
+
+    const created = await adminService.updateAdminProfile(
+      superAdmin.id,
+      targetAdmin.id,
+      {
+        role: "SYSTEM_ADMIN",
+        status: "ACTIVE",
+        reason: "授予系统配置和重试权限"
+      }
+    );
+    const admins = await adminService.listAdminProfiles(superAdmin.id);
+    const audit = await prisma.auditLog.findFirst({
+      where: {
+        actorUserId: superAdmin.id,
+        action: "ADMIN_PROFILE_CREATE",
+        targetId: targetAdmin.id
+      }
+    });
+
+    assert.equal(created.admin.role, "SYSTEM_ADMIN");
+    assert.ok(created.admin.permissions.includes("MANAGE_SYSTEM_CONFIG"));
+    assert.ok(admins.admins.some((admin) => admin.userId === targetAdmin.id));
+    assert.ok(audit);
+  });
+
+  it("lets a system admin upsert system config with audit logging", async () => {
+    const { user: systemAdmin } = await createUser("config-system");
+
+    await prisma.adminUser.create({
+      data: {
+        userId: systemAdmin.id,
+        role: "SYSTEM_ADMIN",
+        status: "ACTIVE"
+      }
+    });
+
+    const result = await adminService.upsertSystemConfig(systemAdmin.id, {
       key: TEST_CONFIG_KEY,
       value: {
         enabled: true,
@@ -352,8 +450,8 @@ describe("AdminService integration", () => {
       description: "后台集成测试配置",
       reason: "验证系统配置管理"
     });
-    const configs = await adminService.listSystemConfigs(superAdmin.id);
-    const auditLogs = await adminService.listAuditLogs(superAdmin.id);
+    const configs = await adminService.listSystemConfigs(systemAdmin.id);
+    const auditLogs = await adminService.listAuditLogs(systemAdmin.id);
 
     assert.equal(result.config.key, TEST_CONFIG_KEY);
     assert.deepEqual(result.config.value, {
@@ -385,17 +483,17 @@ describe("AdminService integration", () => {
       now: "2026-06-10T10:00:00.000+08:00",
       reason: "补偿执行遗漏的到期提醒"
     });
-    const auditLogs = await service.listAuditLogs(admin.id);
+    const auditLog = await prisma.auditLog.findFirst({
+      where: {
+        actorUserId: admin.id,
+        action: "NOTIFICATION_SCHEDULER_RUN",
+        targetId: result.schedulerRunId
+      }
+    });
 
     assert.equal(result.source, "ADMIN_COMPENSATION");
     assert.ok(result.schedulerRunId);
-    assert.ok(
-      auditLogs.logs.some(
-        (log) =>
-          log.action === "NOTIFICATION_SCHEDULER_RUN" &&
-          log.targetId === result.schedulerRunId
-      )
-    );
+    assert.ok(auditLog);
   });
 
   it("lets an admin retry a failed failure-report job with audit logging", async () => {
@@ -405,7 +503,7 @@ describe("AdminService integration", () => {
     await prisma.adminUser.create({
       data: {
         userId: admin.id,
-        role: "OPERATOR",
+        role: "SYSTEM_ADMIN",
         status: "ACTIVE"
       }
     });

@@ -128,6 +128,23 @@ export class AdminController {
     return this.adminService.listAuditLogs(request.user!.id);
   }
 
+  @Get("admin-users")
+  listAdminProfiles(
+    @Req() request: AuthenticatedRequest,
+    @Query() query: Record<string, unknown>
+  ) {
+    return this.adminService.listAdminProfiles(request.user!.id, query);
+  }
+
+  @Patch("admin-users/:userId")
+  updateAdminProfile(
+    @Req() request: AuthenticatedRequest,
+    @Param("userId") userId: string,
+    @Body() body: unknown
+  ) {
+    return this.adminService.updateAdminProfile(request.user!.id, userId, body);
+  }
+
   @Get("system-configs")
   listSystemConfigs(@Req() request: AuthenticatedRequest) {
     return this.adminService.listSystemConfigs(request.user!.id);

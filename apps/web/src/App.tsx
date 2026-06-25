@@ -36,6 +36,7 @@ import {
   AdminGoal,
   AdminGoalFilters,
   AdminOverview,
+  AdminProfile,
   AdminRawContent,
   AdminUploadAsset,
   AdminPaymentEvent,
@@ -94,6 +95,7 @@ import {
   fetchAdminEmailLogs,
   fetchAdminGoals,
   fetchAdminOverview,
+  fetchAdminProfiles,
   fetchAdminRawContent,
   fetchAdminUploadAssets,
   fetchAdminPaymentEvents,
@@ -132,6 +134,7 @@ import {
   unbindWechat,
   updateGoalIntakeDraft,
   updateAdminMembership,
+  updateAdminProfile,
   updateNotificationPreference,
   updateRewardCard,
   uploadEvidenceFile,
@@ -155,6 +158,66 @@ interface NavItem {
   label: string;
   description: string;
   icon: LucideIcon;
+}
+
+type AdminPermission =
+  | "VIEW_USER_SUMMARY"
+  | "VIEW_GOAL_STATUS"
+  | "ADJUST_MEMBERSHIP"
+  | "VIEW_NOTIFICATION_LOGS"
+  | "RETRY_NOTIFICATION"
+  | "VIEW_AI_JOBS"
+  | "RETRY_AI_JOBS"
+  | "MANAGE_SYSTEM_CONFIG"
+  | "VIEW_SYSTEM_METRICS"
+  | "VIEW_RAW_USER_CONTENT"
+  | "REFUND_PAYMENT"
+  | "MANAGE_ADMINS";
+
+function getFallbackAdminPermissions(role: string | null | undefined): AdminPermission[] {
+  if (role === "SUPER_ADMIN") {
+    return [
+      "VIEW_USER_SUMMARY",
+      "VIEW_GOAL_STATUS",
+      "ADJUST_MEMBERSHIP",
+      "VIEW_NOTIFICATION_LOGS",
+      "RETRY_NOTIFICATION",
+      "VIEW_AI_JOBS",
+      "RETRY_AI_JOBS",
+      "MANAGE_SYSTEM_CONFIG",
+      "VIEW_SYSTEM_METRICS",
+      "VIEW_RAW_USER_CONTENT",
+      "REFUND_PAYMENT",
+      "MANAGE_ADMINS"
+    ];
+  }
+
+  if (role === "SYSTEM_ADMIN") {
+    return [
+      "VIEW_USER_SUMMARY",
+      "VIEW_GOAL_STATUS",
+      "ADJUST_MEMBERSHIP",
+      "VIEW_NOTIFICATION_LOGS",
+      "RETRY_NOTIFICATION",
+      "VIEW_AI_JOBS",
+      "RETRY_AI_JOBS",
+      "MANAGE_SYSTEM_CONFIG",
+      "VIEW_SYSTEM_METRICS"
+    ];
+  }
+
+  if (role === "OPERATOR") {
+    return [
+      "VIEW_USER_SUMMARY",
+      "VIEW_GOAL_STATUS",
+      "ADJUST_MEMBERSHIP",
+      "VIEW_NOTIFICATION_LOGS",
+      "RETRY_NOTIFICATION",
+      "VIEW_AI_JOBS"
+    ];
+  }
+
+  return [];
 }
 
 const navItems: NavItem[] = [
@@ -978,6 +1041,8 @@ export function App() {
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminUserTotal, setAdminUserTotal] = useState(0);
+  const [adminProfiles, setAdminProfiles] = useState<AdminProfile[]>([]);
+  const [adminProfileTotal, setAdminProfileTotal] = useState(0);
   const [adminGoals, setAdminGoals] = useState<AdminGoal[]>([]);
   const [adminGoalTotal, setAdminGoalTotal] = useState(0);
   const [adminAiJobs, setAdminAiJobs] = useState<AdminAiJob[]>([]);
@@ -1126,6 +1191,13 @@ export function App() {
   const [isRefreshingAiJob, setIsRefreshingAiJob] = useState(false);
   const [isCancellingAiJob, setIsCancellingAiJob] = useState(false);
 
+  const activeAdminPermissions = (
+    session?.user.adminPermissions?.length
+      ? session.user.adminPermissions
+      : getFallbackAdminPermissions(session?.user.adminRole)
+  ) as AdminPermission[];
+  const canAdmin = (permission: AdminPermission) =>
+    activeAdminPermissions.includes(permission);
   const isAdminUser = Boolean(session?.user.adminRole);
   const visibleNavItems = isAdminUser
     ? navItems
@@ -1428,6 +1500,8 @@ export function App() {
       setAdminOverview(null);
       setAdminUsers([]);
       setAdminUserTotal(0);
+      setAdminProfiles([]);
+      setAdminProfileTotal(0);
       setAdminGoals([]);
       setAdminGoalTotal(0);
       setAdminAiJobs([]);
@@ -3582,6 +3656,13 @@ export function App() {
     setIsLoadingAdmin(true);
 
     try {
+      const permissions = (
+        session?.user.adminPermissions?.length
+          ? session.user.adminPermissions
+          : getFallbackAdminPermissions(session?.user.adminRole)
+      ) as AdminPermission[];
+      const hasPermission = (permission: AdminPermission) =>
+        permissions.includes(permission);
       const [
         overview,
         usersResponse,
@@ -3592,18 +3673,42 @@ export function App() {
         configsResponse,
         assetsResponse,
         paymentsResponse,
-        membershipAuditsResponse
+        membershipAuditsResponse,
+        adminProfilesResponse
       ] = await Promise.all([
-        fetchAdminOverview(token),
-        fetchAdminUsers(token, adminUserFilters),
-        fetchAdminGoals(token, adminGoalFilters),
-        fetchAdminAiJobs(token, adminAiJobFilters),
-        fetchAdminEmailLogs(token, adminEmailLogFilters),
-        fetchAdminAuditLogs(token),
-        fetchAdminSystemConfigs(token),
-        fetchAdminUploadAssets(token),
-        fetchAdminPaymentEvents(token),
-        fetchAdminMembershipAudits(token)
+        hasPermission("VIEW_SYSTEM_METRICS")
+          ? fetchAdminOverview(token)
+          : Promise.resolve(null),
+        hasPermission("VIEW_USER_SUMMARY")
+          ? fetchAdminUsers(token, adminUserFilters)
+          : Promise.resolve({ users: [], total: 0 }),
+        hasPermission("VIEW_GOAL_STATUS")
+          ? fetchAdminGoals(token, adminGoalFilters)
+          : Promise.resolve({ goals: [], total: 0 }),
+        hasPermission("VIEW_AI_JOBS")
+          ? fetchAdminAiJobs(token, adminAiJobFilters)
+          : Promise.resolve({ jobs: [], total: 0 }),
+        hasPermission("VIEW_NOTIFICATION_LOGS")
+          ? fetchAdminEmailLogs(token, adminEmailLogFilters)
+          : Promise.resolve({ logs: [], total: 0 }),
+        hasPermission("VIEW_SYSTEM_METRICS")
+          ? fetchAdminAuditLogs(token)
+          : Promise.resolve({ logs: [] }),
+        hasPermission("MANAGE_SYSTEM_CONFIG")
+          ? fetchAdminSystemConfigs(token)
+          : Promise.resolve({ configs: [] }),
+        hasPermission("VIEW_USER_SUMMARY")
+          ? fetchAdminUploadAssets(token)
+          : Promise.resolve({ assets: [], total: 0 }),
+        hasPermission("VIEW_USER_SUMMARY")
+          ? fetchAdminPaymentEvents(token)
+          : Promise.resolve({ events: [], total: 0 }),
+        hasPermission("ADJUST_MEMBERSHIP")
+          ? fetchAdminMembershipAudits(token)
+          : Promise.resolve({ audits: [], total: 0 }),
+        hasPermission("MANAGE_ADMINS")
+          ? fetchAdminProfiles(token)
+          : Promise.resolve({ admins: [], total: 0 })
       ]);
 
       setAdminOverview(overview);
@@ -3620,7 +3725,13 @@ export function App() {
       setAdminUploadAssets(assetsResponse.assets);
       setAdminPaymentEvents(paymentsResponse.events);
       setAdminMembershipAudits(membershipAuditsResponse.audits);
-      setAdminMessage("后台数据已加载。");
+      setAdminProfiles(adminProfilesResponse.admins);
+      setAdminProfileTotal(adminProfilesResponse.total);
+      setAdminMessage(
+        overview
+          ? "后台数据已加载。"
+          : "后台数据已按当前权限加载；系统运行指标需 SYSTEM_ADMIN 或 SUPER_ADMIN。"
+      );
       setAdminRawForm((current) => ({
         ...current,
         userId: current.userId || usersResponse.users[0]?.id || ""
@@ -3850,6 +3961,38 @@ export function App() {
       setAdminMessage(error instanceof Error ? error.message : "会员状态更新失败");
     } finally {
       setAdminMembershipUpdatingUserId(null);
+    }
+  }
+
+  async function handleUpdateAdminProfile(
+    userId: string,
+    role: "OPERATOR" | "SYSTEM_ADMIN" | "SUPER_ADMIN",
+    status: "ACTIVE" | "DISABLED"
+  ) {
+    if (!session) {
+      setAdminMessage("请先登录超级管理员账号。");
+      return;
+    }
+
+    const reason = window.prompt(
+      "填写管理员变更原因（至少 4 个字符）",
+      status === "DISABLED" ? "停用后台管理员身份" : `调整后台角色为 ${role}`
+    );
+
+    if (!reason) {
+      return;
+    }
+
+    setIsLoadingAdmin(true);
+
+    try {
+      await updateAdminProfile(session.token, userId, { role, status, reason });
+      await loadAdminDashboard(session.token);
+      setAdminMessage("管理员身份已更新并写入审计日志。");
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : "管理员身份更新失败");
+    } finally {
+      setIsLoadingAdmin(false);
     }
   }
 
@@ -6497,30 +6640,48 @@ export function App() {
               </div>
               <p className="form-message">{adminMessage}</p>
 
-              {adminOverview ? (
+              {adminOverview ||
+              adminUsers.length ||
+              adminGoals.length ||
+              adminAiJobs.length ||
+              adminEmailLogs.length ? (
                 <div className="admin-sections">
-                  <section>
-                    <p className="eyebrow">Summary</p>
-                    <div className="metric-grid admin-metric-grid">
-                      {[
-                        ["用户", adminOverview.metrics.users],
-                        ["活跃目标", adminOverview.metrics.activeGoals],
-                        ["风险目标", adminOverview.metrics.atRiskGoals],
-                        ["失败 AI 任务", adminOverview.metrics.failedAiJobs],
-                        ["排队 AI 任务", adminOverview.metrics.pendingAiJobs],
-                        ["PRO 会员", adminOverview.metrics.proMemberships],
-                        ["待发邮件", adminOverview.metrics.queuedEmails],
-                        ["后台角色", adminOverview.admin.role]
-                      ].map(([label, value]) => (
-                        <GlassMetricCard
-                          key={String(label)}
-                          label={String(label)}
-                          tone={label === "风险目标" || label === "失败 AI 任务" ? "warning" : "neutral"}
-                          value={value}
-                        />
-                      ))}
-                    </div>
-                  </section>
+                  {adminOverview ? (
+                    <section>
+                      <p className="eyebrow">Summary</p>
+                      <div className="metric-grid admin-metric-grid">
+                        {[
+                          ["用户", adminOverview.metrics.users],
+                          ["活跃目标", adminOverview.metrics.activeGoals],
+                          ["风险目标", adminOverview.metrics.atRiskGoals],
+                          ["失败 AI 任务", adminOverview.metrics.failedAiJobs],
+                          ["排队 AI 任务", adminOverview.metrics.pendingAiJobs],
+                          ["PRO 会员", adminOverview.metrics.proMemberships],
+                          ["待发邮件", adminOverview.metrics.queuedEmails],
+                          ["后台角色", adminOverview.admin.role]
+                        ].map(([label, value]) => (
+                          <GlassMetricCard
+                            key={String(label)}
+                            label={String(label)}
+                            tone={
+                              label === "风险目标" || label === "失败 AI 任务"
+                                ? "warning"
+                                : "neutral"
+                            }
+                            value={value}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ) : (
+                    <section>
+                      <p className="eyebrow">Summary</p>
+                      <h2>系统运行指标</h2>
+                      <p className="muted-text">
+                        当前角色无系统运行指标权限，仅展示允许查看的后台模块。
+                      </p>
+                    </section>
+                  )}
 
                   <section>
                     <p className="eyebrow">Goals</p>
@@ -6685,7 +6846,7 @@ export function App() {
                               {job.status} · {job.attempts} 次
                               {job.error ? ` · ${job.error}` : ""}
                             </span>
-                            {job.status === "FAILED" ? (
+                            {job.status === "FAILED" && canAdmin("RETRY_AI_JOBS") ? (
                               <button
                                 className="ghost-button"
                                 disabled={adminRetryingAiJobId === job.id}
@@ -6772,6 +6933,7 @@ export function App() {
                     <button
                       className="ghost-button"
                       type="button"
+                      disabled={!canAdmin("RETRY_NOTIFICATION")}
                       onClick={() => void handleRunAdminNotificationScheduler()}
                     >
                       补偿执行到期提醒扫描
@@ -6795,7 +6957,9 @@ export function App() {
                             {log.errorCode ? <span>错误码：{log.errorCode}</span> : null}
                             {log.skipReason ? <span>跳过原因：{log.skipReason}</span> : null}
                             {log.schedulerRunId ? <span>调度 ID：{log.schedulerRunId}</span> : null}
-                            {log.status === "FAILED" && log.attempts < 3 ? (
+                            {log.status === "FAILED" &&
+                            log.attempts < 3 &&
+                            canAdmin("RETRY_NOTIFICATION") ? (
                               <button className="ghost-button" type="button" onClick={() => void handleRetryAdminEmailLog(log)}>
                                 重试提醒
                               </button>
@@ -6926,6 +7090,7 @@ export function App() {
                     >
                       <option value="">全部</option>
                       <option value="OPERATOR">OPERATOR</option>
+                      <option value="SYSTEM_ADMIN">SYSTEM_ADMIN</option>
                       <option value="SUPER_ADMIN">SUPER_ADMIN</option>
                     </select>
                   </label>
@@ -6964,6 +7129,7 @@ export function App() {
                           className="ghost-button"
                           type="button"
                           disabled={
+                            !canAdmin("ADJUST_MEMBERSHIP") ||
                             adminMembershipUpdatingUserId === user.id ||
                             user.membership?.plan === "PRO"
                           }
@@ -6971,6 +7137,56 @@ export function App() {
                         >
                           开通 PRO
                         </button>
+                        {canAdmin("MANAGE_ADMINS") ? (
+                          <div className="form-actions">
+                            <button
+                              className="ghost-button"
+                              type="button"
+                              disabled={user.adminRole === "SYSTEM_ADMIN"}
+                              onClick={() =>
+                                void handleUpdateAdminProfile(
+                                  user.id,
+                                  "SYSTEM_ADMIN",
+                                  "ACTIVE"
+                                )
+                              }
+                            >
+                              设为系统管理员
+                            </button>
+                            <button
+                              className="ghost-button"
+                              type="button"
+                              disabled={user.adminRole === "SUPER_ADMIN"}
+                              onClick={() =>
+                                void handleUpdateAdminProfile(
+                                  user.id,
+                                  "SUPER_ADMIN",
+                                  "ACTIVE"
+                                )
+                              }
+                            >
+                              设为超级管理员
+                            </button>
+                            {user.adminRole ? (
+                              <button
+                                className="ghost-button"
+                                type="button"
+                                onClick={() =>
+                                  void handleUpdateAdminProfile(
+                                    user.id,
+                                    user.adminRole as
+                                      | "OPERATOR"
+                                      | "SYSTEM_ADMIN"
+                                      | "SUPER_ADMIN",
+                                    "DISABLED"
+                                  )
+                                }
+                              >
+                                停用后台身份
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -6978,6 +7194,33 @@ export function App() {
                   <p className="muted-text">暂无用户数据。</p>
                 )}
               </section>
+
+              {canAdmin("MANAGE_ADMINS") ? (
+                <section className="panel">
+                  <p className="eyebrow">Admins</p>
+                  <h2>管理员账号</h2>
+                  <p className="muted-text">
+                    当前显示 {adminProfiles.length}/{adminProfileTotal} 个管理员身份。
+                  </p>
+                  {adminProfiles.length ? (
+                    <div className="admin-table-list">
+                      {adminProfiles.slice(0, 8).map((admin) => (
+                        <article key={admin.id}>
+                          <div>
+                            <strong>{admin.displayName ?? admin.email}</strong>
+                            <span>
+                              {admin.role} · {admin.status}
+                            </span>
+                          </div>
+                          <span>{admin.permissions.join("、")}</span>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-text">暂无管理员账号。</p>
+                  )}
+                </section>
+              ) : null}
 
               <section className="panel">
                 <p className="eyebrow">Raw view</p>
@@ -7019,7 +7262,7 @@ export function App() {
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={!session}
+                    disabled={!session || !canAdmin("VIEW_RAW_USER_CONTENT")}
                     onClick={() => void handleLoadAdminRawContent()}
                   >
                     查看并审计
@@ -7081,7 +7324,11 @@ export function App() {
                   <button
                     className="primary-button"
                     type="button"
-                    disabled={!session || isSavingAdminConfig}
+                    disabled={
+                      !session ||
+                      isSavingAdminConfig ||
+                      !canAdmin("MANAGE_SYSTEM_CONFIG")
+                    }
                     onClick={() => void handleSaveAdminConfig()}
                   >
                     {isSavingAdminConfig ? "保存中" : "保存配置"}

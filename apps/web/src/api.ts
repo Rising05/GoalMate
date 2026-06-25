@@ -22,6 +22,7 @@ export interface AuthUser {
     expiresAt: string | null;
   } | null;
   adminRole: string | null;
+  adminPermissions: string[];
   legalConsent: {
     termsVersion: string | null;
     termsAcceptedAt: string | null;
@@ -809,6 +810,7 @@ export interface AdminOverview {
   admin: {
     role: string;
     status: string;
+    permissions: string[];
   };
   metrics: {
     users: number;
@@ -843,6 +845,19 @@ export interface AdminUser {
     aiJobs: number;
     emailLogs: number;
   };
+}
+
+export interface AdminProfile {
+  id: string;
+  userId: string;
+  email: string;
+  displayName: string | null;
+  userStatus: string;
+  role: string;
+  status: string;
+  permissions: string[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AdminUserFilters {
@@ -2257,6 +2272,36 @@ export async function fetchAdminPaymentEvents(token: string) {
 
 export async function fetchAdminMembershipAudits(token: string) {
   return fetchAdminCollection<{ audits: AdminMembershipAudit[]; total: number }>(token, "membership-audits", "后台会员审计加载失败");
+}
+
+export async function fetchAdminProfiles(token: string) {
+  return fetchAdminCollection<{ admins: AdminProfile[]; total: number }>(
+    token,
+    "admin-users",
+    "管理员列表加载失败"
+  );
+}
+
+export async function updateAdminProfile(
+  token: string,
+  userId: string,
+  payload: {
+    role: "OPERATOR" | "SYSTEM_ADMIN" | "SUPER_ADMIN";
+    status: "ACTIVE" | "DISABLED";
+    reason: string;
+  }
+) {
+  const response = await fetch(apiUrl(`/admin/admin-users/${userId}`), {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await parseJson<{ admin: AdminProfile }>(response);
+  if (!response.ok) throw new Error(getErrorMessage(data, "管理员更新失败"));
+  return data as { admin: AdminProfile };
 }
 
 export async function retryAdminEmailLog(token: string, logId: string, reason: string) {

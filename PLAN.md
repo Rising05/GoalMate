@@ -2,7 +2,7 @@
 
 > 文档性质：后续开发的唯一执行清单与进度台账
 > 创建日期：2026-06-19
-> 当前状态：实施中；P0-1、P0-2、P3-2 已完成，P0-3 代码完成并等待真实 DeepSeek 预发布验证；P1-2 仓库实现完成并等待生产密钥和历史数据迁移演练
+> 当前状态：实施中；P0-1、P0-2、P3-2、P3-3 已完成，P0-3 代码完成并等待真实 DeepSeek 预发布验证；P1-2 仓库实现完成并等待生产密钥和历史数据迁移演练
 > 适用范围：`SPEC.md` 中尚未完整落地或仅完成基础版、预留版的能力
 
 ## 1. 文档目标
@@ -786,7 +786,7 @@
 
 ### P3-3 后台三级权限
 
-**状态：** `NOT_STARTED`
+**状态：** `DONE`（后端三级权限矩阵、权限拒绝审计、管理员管理入口、最后超级管理员保护和前端 permission 展示控制均已完成）
 
 #### 角色矩阵
 
@@ -810,6 +810,34 @@
 - 前端导航和按钮根据 permission 展示，但后端继续独立验证。
 - 角色变更、禁用管理员和权限拒绝写入审计。
 - 最后一个有效超级管理员不能被误禁用或降级。
+
+#### 当前进度
+
+- [x] 新增 `SYSTEM_ADMIN` 角色，并保留 `OPERATOR`、`SUPER_ADMIN` 两端角色。
+- [x] 新增集中式后台权限矩阵 `admin-permissions.ts`，后端 AdminService 按 permission 校验能力。
+- [x] 当前用户资料返回 `adminPermissions`，前端不再只依赖角色名判断敏感按钮。
+- [x] `OPERATOR` 保留用户摘要、目标状态、会员调整、提醒日志、提醒重试和 AI Job 只读能力。
+- [x] `SYSTEM_ADMIN` 增加 AI/报告任务重试、系统配置、系统运行指标能力，但不能查看用户原文或管理管理员。
+- [x] `SUPER_ADMIN` 拥有用户原文查看、管理员管理和支付退款等最高风险能力。
+- [x] 新增 `GET /admin/admin-users` 和 `PATCH /admin/admin-users/:userId` 管理员管理接口。
+- [x] 管理员角色变更、禁用管理员和权限拒绝均写入审计日志。
+- [x] 禁止降级或禁用最后一个有效 `SUPER_ADMIN`。
+- [x] 前端后台加载按 `adminPermissions` 条件请求数据，避免低权限角色因敏感接口 403 导致整页失败。
+- [x] 前端 AI Job 重试、提醒重试、会员调整、敏感原文、系统配置和管理员管理按钮按 permission 展示或禁用。
+
+#### 本轮验收记录
+
+- 2026-06-25：新增集中权限定义 `apps/api/src/admin/admin-permissions.ts`。
+- 2026-06-25：AdminService 改为显式 permission 校验，覆盖 P3-3 角色矩阵。
+- 2026-06-25：新增后台管理员列表/更新接口，管理员变更写入审计，并保护最后一个有效超级管理员。
+- 2026-06-25：权限不足统一写入 `ADMIN_PERMISSION_DENIED` 审计日志。
+- 2026-06-25：AuthService 返回 `adminPermissions`，前端后台页按权限加载数据和展示操作按钮。
+- 2026-06-25：`npm run typecheck`：通过。
+- 2026-06-25：`npm exec -w @goalmate/api node -- --import tsx --test src/admin/admin.service.integration.test.ts`：通过，12/12。
+- 2026-06-25：`npm run test:integration`：通过，149/149。
+- 2026-06-25：`npm run build`：通过。
+- 2026-06-25：`npm run test:e2e`：通过，9/9。
+- 2026-06-25：`git diff --check`：通过。
 
 ---
 
@@ -1029,7 +1057,7 @@ npm run prisma:migrate -w @goalmate/api
 | P2-3 | 订阅与会员权益模型 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 权益模型、Mock 支付链路、后台退款入口和自动化验收完成；待官方支付事件联调 |
 | P3-1 | AI 目标创建助手 | `IN_PROGRESS` | 2026-06-24 | - | Codex | 本地完整链路完成；待真实 DeepSeek 体验联调 |
 | P3-2 | 统一成长事件时间线 | `DONE` | 2026-06-24 | 2026-06-25 | Codex | 147/147 integration，9/9 E2E；统一事件表、回填接口、运行时事件写入、查询接口、前端读取和里程碑完成入口完成 |
-| P3-3 | 后台三级权限 | `NOT_STARTED` | - | - | - | - |
+| P3-3 | 后台三级权限 | `DONE` | 2026-06-25 | 2026-06-25 | Codex | 149/149 integration，9/9 E2E；三级权限矩阵、权限拒绝审计、管理员管理和前端权限展示完成 |
 | P4-1 | 微信登录和账号绑定 | `NOT_STARTED` | - | - | - | - |
 | P4-2 | 微信小程序页面 | `NOT_STARTED` | - | - | - | - |
 | P5-1 | 性能和容量验证 | `NOT_STARTED` | - | - | - | - |

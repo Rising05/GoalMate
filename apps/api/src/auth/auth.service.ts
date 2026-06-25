@@ -11,6 +11,7 @@ import { SessionTokenService } from "./session-token.service";
 import { QuotaService } from "../quota/quota.service";
 import { ObjectDeletionService } from "../object-lifecycle/object-deletion.service";
 import { FieldEncryptionService } from "../security/field-encryption.service";
+import { getAdminPermissions } from "../admin/admin-permissions";
 
 interface AuthPayload {
   email: string;
@@ -608,6 +609,10 @@ export class AuthService {
         : null,
       adminRole:
         user.adminProfile?.status === "ACTIVE" ? user.adminProfile.role : null,
+      adminPermissions:
+        user.adminProfile?.status === "ACTIVE"
+          ? getAdminPermissions(user.adminProfile.role)
+          : [],
       legalConsent: {
         termsVersion: user.termsVersion ?? null,
         termsAcceptedAt: user.termsAcceptedAt?.toISOString() ?? null,

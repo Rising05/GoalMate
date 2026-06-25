@@ -105,6 +105,8 @@ describe("AuthService quota integration", () => {
     );
 
     assert.equal(current.user.adminRole, "SUPER_ADMIN");
+    assert.ok(current.user.adminPermissions.includes("MANAGE_ADMINS"));
+    assert.ok(current.user.adminPermissions.includes("VIEW_RAW_USER_CONTENT"));
   });
 
   it("exports selected current-user data without leaking other users or password hashes", async () => {
