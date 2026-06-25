@@ -1,0 +1,13 @@
+{
+  "name": "@goalmate/miniapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GoalMate WeChat Mini Program",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "miniprogram-api-typings": "^3.12.3",
+    "typescript": "^5.5.0"
+  }
+}

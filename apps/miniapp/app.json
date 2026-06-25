@@ -1,0 +1,39 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/login/login",
+    "pages/checkin/checkin",
+    "pages/result/result",
+    "pages/account/account"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#4F46E5",
+    "navigationBarTitleText": "GoalMate",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#F8FAFC"
+  },
+  "tabBar": {
+    "color": "#94A3B8",
+    "selectedColor": "#4F46E5",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "今日任务",
+        "iconPath": "images/tab-tasks.png",
+        "selectedIconPath": "images/tab-tasks-active.png"
+      },
+      {
+        "pagePath": "pages/account/account",
+        "text": "我的",
+        "iconPath": "images/tab-account.png",
+        "selectedIconPath": "images/tab-account-active.png"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}

@@ -1,0 +1,42 @@
+<view class="container result-page">
+  <!-- Success -->
+  <view class="result-card card" wx:if="{{checkinSuccess}}">
+    <view class="result-icon success-icon">✅</view>
+    <view class="text-xl font-bold mt-8 mb-4">打卡成功！</view>
+    <view class="text-sm text-secondary mb-16">任务已完成，继续加油！</view>
+
+    <!-- Score polling -->
+    <view class="score-section" wx:if="{{scoring}}">
+      <view class="loading">
+        <text>AI 评分中...</text>
+      </view>
+    </view>
+
+    <!-- Score result -->
+    <view class="score-section" wx:if="{{!scoring && score != null}}">
+      <view class="score-display">
+        <text class="score-number">{{score}}</text>
+        <text class="score-unit">/100</text>
+      </view>
+      <view class="text-sm text-secondary mt-4">AI 综合评分</view>
+    </view>
+
+    <!-- Score summary -->
+    <view class="text-sm text-secondary mt-8" wx:if="{{scoreSummary}}">
+      {{scoreSummary}}
+    </view>
+  </view>
+
+  <!-- Error -->
+  <view class="result-card card" wx:if="{{!checkinSuccess}}">
+    <view class="result-icon error-icon">❌</view>
+    <view class="text-xl font-bold mt-8 mb-4">提交失败</view>
+    <view class="text-sm text-secondary mb-16">{{errorMsg || '请重试'}}</view>
+  </view>
+
+  <!-- Actions -->
+  <view class="result-actions mt-16">
+    <button class="btn btn-primary btn-block mb-8" bindtap="goToTasks">返回今日任务</button>
+    <button class="btn btn-outline btn-block" bindtap="goToTaskDetail" wx:if="{{taskId}}">查看任务详情</button>
+  </view>
+</view>

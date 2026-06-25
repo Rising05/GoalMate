@@ -1,0 +1,99 @@
+<view class="container">
+  <!-- Profile Card -->
+  <view class="card mb-12">
+    <view class="flex-row">
+      <view class="avatar">🎯</view>
+      <view class="flex-1 ml-12">
+        <view class="text-lg font-medium">{{user.email || '加载中...'}}</view>
+        <view class="flex-row mt-4">
+          <text class="tag {{membership.plan === 'PRO' ? 'tag-success' : 'tag-muted'}} mr-8">
+            {{membership.plan === 'PRO' ? 'Pro 会员' : '免费版'}}
+          </text>
+          <text wx:if="{{membership.status === 'ACTIVE' && membership.expiresAt}}" class="text-sm text-muted">
+            到期 {{membership.expiresAt}}
+          </text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- Membership Info -->
+  <view class="card mb-12" wx:if="{{quota}}">
+    <view class="text-md font-medium mb-12">用量概览</view>
+    <view class="quota-grid">
+      <view class="quota-item">
+        <view class="quota-value">{{quota.activeGoals.used}}/{{quota.activeGoals.limit || '∞'}}</view>
+        <view class="quota-label">进行中目标</view>
+      </view>
+      <view class="quota-item">
+        <view class="quota-value">{{quota.aiJobsToday.used}}/{{quota.aiJobsToday.limit || '∞'}}</view>
+        <view class="quota-label">今日AI评分</view>
+      </view>
+      <view class="quota-item">
+        <view class="quota-value">{{quota.planGenerationsThisMonth.used}}/{{quota.planGenerationsThisMonth.limit || '∞'}}</view>
+        <view class="quota-label">月度计划</view>
+      </view>
+      <view class="quota-item">
+        <view class="quota-value">{{quota.reportsThisMonth.used}}/{{quota.reportsThisMonth.limit || '∞'}}</view>
+        <view class="quota-label">月度报告</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- Reminder Preferences -->
+  <view class="card mb-12">
+    <view class="flex-between mb-12">
+      <view class="text-md font-medium">提醒设置</view>
+      <switch checked="{{reminderEnabled}}" bindchange="onReminderToggle" color="#4F46E5" />
+    </view>
+    <view wx:if="{{reminderEnabled}}">
+      <view class="input-group">
+        <view class="input-label">提醒时间</view>
+        <picker mode="time" value="{{reminderTime}}" bindchange="onReminderTimeChange">
+          <view class="input">{{reminderTime || '08:00'}}</view>
+        </picker>
+      </view>
+      <view class="input-group">
+        <view class="input-label">时区</view>
+        <picker mode="selector" range="{{timezones}}" value="{{timezoneIndex}}" bindchange="onTimezoneChange">
+          <view class="input">{{timezones[timezoneIndex] || 'Asia/Shanghai'}}</view>
+        </picker>
+      </view>
+      <view class="flex-row text-sm text-muted mb-8">
+        <text>微信通知 {{wechatBound ? '已绑定' : '已绑定(通过小程序登录)'}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- WeChat Binding Status -->
+  <view class="card mb-12">
+    <view class="flex-between">
+      <view class="text-md font-medium">微信绑定</view>
+      <text class="tag tag-success">已绑定</text>
+    </view>
+    <view class="text-sm text-secondary mt-4">通过微信小程序登录即已绑定</view>
+  </view>
+
+  <!-- Danger Zone -->
+  <view class="card mb-12">
+    <view class="text-md font-medium mb-12" style="color: #EF4444;">账号操作</view>
+    <button class="btn btn-danger btn-block mb-8" bindtap="handleUnbind" loading="{{unbinding}}">
+      解绑微信账号
+    </button>
+    <view class="text-sm text-muted mb-8" wx:if="{{showUnbindConfirm}}">
+      解绑后将无法通过微信登录，确定要继续吗？
+    </view>
+    <view class="flex-row" wx:if="{{showUnbindConfirm}}">
+      <button class="btn btn-danger btn-block mr-8" bindtap="confirmUnbind" loading="{{unbinding}}">确认解绑</button>
+      <button class="btn btn-outline btn-block" bindtap="cancelUnbind">取消</button>
+    </view>
+    <button class="btn btn-outline-danger btn-block" bindtap="handleLogout" loading="{{loggingOut}}">
+      退出登录
+    </button>
+  </view>
+
+  <!-- Version -->
+  <view class="text-center text-sm text-muted mt-16 mb-16">
+    GoalMate 小程序 v0.1.0
+  </view>
+</view>

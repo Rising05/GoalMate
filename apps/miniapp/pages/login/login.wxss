@@ -1,0 +1,68 @@
+.login-page {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+  display: flex;
+  flex-direction: column;
+}
+
+.login-header {
+  padding: 120rpx 48rpx 60rpx;
+  text-align: center;
+  color: #FFFFFF;
+}
+
+.login-logo {
+  font-size: 80rpx;
+  margin-bottom: 16rpx;
+}
+
+.login-title {
+  font-size: 48rpx;
+  font-weight: 700;
+  margin-bottom: 8rpx;
+}
+
+.login-subtitle {
+  font-size: 28rpx;
+  opacity: 0.85;
+}
+
+.login-body {
+  flex: 1;
+  background: #F8FAFC;
+  border-radius: 32rpx 32rpx 0 0;
+  padding: 48rpx 32rpx;
+}
+
+.tab-bar {
+  display: flex;
+  background: #F1F5F9;
+  border-radius: 12rpx;
+  padding: 4rpx;
+}
+
+.tab-item {
+  flex: 1;
+  text-align: center;
+  padding: 16rpx;
+  font-size: 26rpx;
+  color: #64748B;
+  border-radius: 10rpx;
+}
+
+.tab-active {
+  background: #FFFFFF;
+  color: #4F46E5;
+  font-weight: 500;
+  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.06);
+}
+
+.error-msg {
+  color: #EF4444;
+  font-size: 26rpx;
+  text-align: center;
+  margin-top: 16rpx;
+  padding: 12rpx;
+  background: #FEF2F2;
+  border-radius: 8rpx;
+}

@@ -1,0 +1,81 @@
+<view class="login-page">
+  <!-- Header -->
+  <view class="login-header">
+    <view class="login-logo">🎯</view>
+    <view class="login-title">GoalMate</view>
+    <view class="login-subtitle">AI 驱动的学习目标伙伴</view>
+  </view>
+
+  <!-- Step: WeChat Login -->
+  <view class="login-body" wx:if="{{step === 'wechat-login'}}">
+    <view class="card">
+      <view class="text-center mb-16">
+        <view class="text-lg font-medium mb-8">微信一键登录</view>
+        <view class="text-sm text-secondary">授权微信账号以使用 GoalMate</view>
+      </view>
+      <button class="btn btn-primary btn-block" bindtap="handleWechatLogin" loading="{{loading}}">
+        微信授权登录
+      </button>
+      <view class="error-msg" wx:if="{{error}}">{{error}}</view>
+    </view>
+  </view>
+
+  <!-- Step: Bind or Register -->
+  <view class="login-body" wx:if="{{step === 'bind-or-register'}}">
+    <view class="card mb-12">
+      <view class="text-lg font-medium text-center mb-8">关联 GoalMate 账号</view>
+      <view class="text-sm text-secondary text-center mb-12">
+        你的微信尚未绑定 GoalMate 账号，请登录已有账号或创建新账号
+      </view>
+
+      <!-- Tab -->
+      <view class="tab-bar mb-12">
+        <view class="tab-item {{tab === 'bind' ? 'tab-active' : ''}}" bindtap="switchTab" data-tab="bind">
+          登录已有账号
+        </view>
+        <view class="tab-item {{tab === 'register' ? 'tab-active' : ''}}" bindtap="switchTab" data-tab="register">
+          创建新账号
+        </view>
+      </view>
+
+      <!-- Bind form -->
+      <view wx:if="{{tab === 'bind'}}">
+        <view class="input-group">
+          <view class="input-label">邮箱</view>
+          <input class="input" type="text" placeholder="请输入邮箱" value="{{email}}" bindinput="onEmailInput" />
+        </view>
+        <view class="input-group">
+          <view class="input-label">密码</view>
+          <input class="input" type="password" placeholder="请输入密码" value="{{password}}" bindinput="onPasswordInput" />
+        </view>
+        <button class="btn btn-primary btn-block mt-8" bindtap="handleBindExisting" loading="{{loading}}">
+          登录并绑定微信
+        </button>
+      </view>
+
+      <!-- Register form -->
+      <view wx:if="{{tab === 'register'}}">
+        <view class="input-group">
+          <view class="input-label">邮箱</view>
+          <input class="input" type="text" placeholder="请输入邮箱" value="{{email}}" bindinput="onEmailInput" />
+        </view>
+        <view class="input-group">
+          <view class="input-label">昵称</view>
+          <input class="input" type="text" placeholder="如何称呼你" value="{{displayName}}" bindinput="onDisplayNameInput" />
+        </view>
+        <view class="input-group">
+          <view class="input-label">密码</view>
+          <input class="input" type="password" placeholder="请设置密码 (至少8位)" value="{{password}}" bindinput="onPasswordInput" />
+        </view>
+        <view class="text-sm text-muted mb-12">
+          注册即表示同意服务条款和隐私政策
+        </view>
+        <button class="btn btn-primary btn-block" bindtap="handleRegister" loading="{{loading}}">
+          创建账号并绑定微信
+        </button>
+      </view>
+    </view>
+
+    <view class="error-msg" wx:if="{{error}}">{{error}}</view>
+  </view>
+</view>

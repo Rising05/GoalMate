@@ -1,0 +1,223 @@
+page {
+  --color-primary: #4F46E5;
+  --color-primary-light: #EEF2FF;
+  --color-text: #1E293B;
+  --color-text-secondary: #64748B;
+  --color-text-muted: #94A3B8;
+  --color-bg: #F8FAFC;
+  --color-bg-card: #FFFFFF;
+  --color-border: #E2E8F0;
+  --color-success: #22C55E;
+  --color-warning: #F59E0B;
+  --color-danger: #EF4444;
+  --color-info: #3B82F6;
+  --radius-sm: 8rpx;
+  --radius-md: 12rpx;
+  --radius-lg: 16rpx;
+  --shadow-sm: 0 1rpx 3rpx rgba(0,0,0,0.06);
+  --shadow-md: 0 4rpx 12rpx rgba(0,0,0,0.08);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 28rpx;
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  box-sizing: border-box;
+}
+
+.container {
+  padding: 24rpx;
+  min-height: 100vh;
+}
+
+.card {
+  background: var(--color-bg-card);
+  border-radius: var(--radius-md);
+  padding: 24rpx;
+  margin-bottom: 16rpx;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88rpx;
+  border-radius: var(--radius-md);
+  font-size: 30rpx;
+  font-weight: 500;
+  border: none;
+  padding: 0 32rpx;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #FFFFFF;
+}
+
+.btn-primary:active {
+  opacity: 0.85;
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-primary);
+  border: 2rpx solid var(--color-primary);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #FFFFFF;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.btn-small {
+  height: 60rpx;
+  font-size: 24rpx;
+  padding: 0 20rpx;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
+
+.input-group {
+  margin-bottom: 24rpx;
+}
+
+.input-label {
+  font-size: 26rpx;
+  color: var(--color-text-secondary);
+  margin-bottom: 8rpx;
+}
+
+.input {
+  width: 100%;
+  height: 88rpx;
+  background: var(--color-bg);
+  border: 2rpx solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0 24rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  border-color: var(--color-primary);
+}
+
+.textarea {
+  width: 100%;
+  min-height: 160rpx;
+  background: var(--color-bg);
+  border: 2rpx solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 16rpx 24rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 40rpx;
+  padding: 0 12rpx;
+  border-radius: 20rpx;
+  font-size: 22rpx;
+  font-weight: 500;
+}
+
+.tag-success {
+  background: #DCFCE7;
+  color: #15803D;
+}
+
+.tag-warning {
+  background: #FEF3C7;
+  color: #B45309;
+}
+
+.tag-danger {
+  background: #FEE2E2;
+  color: #B91C1C;
+}
+
+.tag-info {
+  background: #DBEAFE;
+  color: #1D4ED8;
+}
+
+.tag-muted {
+  background: #F1F5F9;
+  color: #64748B;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40rpx 0;
+  color: var(--color-text-muted);
+  font-size: 26rpx;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80rpx 0;
+  color: var(--color-text-muted);
+  font-size: 26rpx;
+}
+
+.empty-icon {
+  font-size: 80rpx;
+  margin-bottom: 16rpx;
+}
+
+.divider {
+  height: 1rpx;
+  background: var(--color-border);
+  margin: 16rpx 0;
+}
+
+.flex-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.flex-between {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.mb-4 { margin-bottom: 8rpx; }
+.mb-8 { margin-bottom: 16rpx; }
+.mb-12 { margin-bottom: 24rpx; }
+.mb-16 { margin-bottom: 32rpx; }
+.mt-4 { margin-top: 8rpx; }
+.mt-8 { margin-top: 16rpx; }
+.mr-4 { margin-right: 8rpx; }
+.mr-8 { margin-right: 16rpx; }
+.text-sm { font-size: 24rpx; }
+.text-lg { font-size: 32rpx; }
+.text-xl { font-size: 36rpx; }
+.text-muted { color: var(--color-text-muted); }
+.text-secondary { color: var(--color-text-secondary); }
+.text-center { text-align: center; }
+.font-medium { font-weight: 500; }
+.font-bold { font-weight: 700; }

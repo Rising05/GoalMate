@@ -1,0 +1,95 @@
+<view class="container">
+  <!-- Goal Selector -->
+  <view class="goal-selector card" wx:if="{{goals.length > 1}}">
+    <picker mode="selector" range="{{goalNames}}" value="{{selectedGoalIndex}}" bindchange="onGoalChange">
+      <view class="flex-between">
+        <view class="flex-row">
+          <text class="text-lg mr-8">{{currentGoalName || '所有目标'}}</text>
+          <text class="text-muted">▼</text>
+        </view>
+        <text class="tag tag-muted">{{goals.length}} 个目标</text>
+      </view>
+    </picker>
+  </view>
+
+  <!-- Current Goal Summary -->
+  <view class="goal-summary card mb-12" wx:if="{{currentGoal}}">
+    <view class="flex-between mb-8">
+      <view class="flex-row">
+        <text class="text-lg font-bold">{{currentGoal.title}}</text>
+      </view>
+      <text class="tag {{currentGoal.status === 'ACTIVE' ? 'tag-success' : 'tag-muted'}}">
+        {{currentGoal.status === 'ACTIVE' ? '进行中' : currentGoal.status}}
+      </text>
+    </view>
+    <view class="flex-row text-sm text-secondary">
+      <text class="mr-8">📅 {{currentGoal.startDate}} — {{currentGoal.endDate}}</text>
+      <text wx:if="{{currentGoal.toleranceDaysAllowed > 0}}">
+        容错 {{currentGoal.toleranceDaysUsed}}/{{currentGoal.toleranceDaysAllowed}}
+      </text>
+    </view>
+  </view>
+
+  <!-- Date Header -->
+  <view class="date-header mb-12">
+    <text class="text-lg font-medium">{{todayDateStr}}</text>
+    <text class="text-sm text-muted">{{todayWeekday}}</text>
+  </view>
+
+  <!-- Loading -->
+  <view class="loading" wx:if="{{loading}}">
+    <text>加载中...</text>
+  </view>
+
+  <!-- Empty -->
+  <view class="empty" wx:if="{{!loading && tasks.length === 0}}">
+    <view class="empty-icon">📋</view>
+    <text>今天暂无任务</text>
+    <text class="text-sm text-muted mt-4">在 Web 端创建目标并生成计划</text>
+  </view>
+
+  <!-- Task List -->
+  <view wx:if="{{!loading && tasks.length > 0}}">
+    <view class="task-card card" wx:for="{{tasks}}" wx:key="id" bindtap="goToCheckin" data-taskid="{{item.id}}" data-goalid="{{item.goalId}}" data-goaltitle="{{item.goalTitle}}">
+      <!-- Task header -->
+      <view class="flex-between mb-8">
+        <view class="flex-row flex-1">
+          <view class="task-status-icon {{item.status === 'COMPLETED' ? 'completed' : 'pending'}}">
+            {{item.status === 'COMPLETED' ? '✓' : '○'}}
+          </view>
+          <view class="flex-1">
+            <text class="font-medium {{item.status === 'COMPLETED' ? 'text-muted' : ''}}">{{item.title}}</text>
+          </view>
+        </view>
+        <view class="flex-row">
+          <text wx:if="{{item.rescueRiskLevel}}" class="tag {{item.rescueRiskLevel === 'danger' ? 'tag-danger' : item.rescueRiskLevel === 'warning' ? 'tag-warning' : 'tag-muted'}} mr-4">
+            救援
+          </text>
+          <text wx:if="{{item.plannedMinutes}}" class="text-sm text-muted">{{item.plannedMinutes}}分钟</text>
+        </view>
+      </view>
+
+      <!-- Task description -->
+      <view class="text-sm text-secondary mb-8" wx:if="{{item.description}}">
+        {{item.description}}
+      </view>
+
+      <!-- Task meta -->
+      <view class="flex-row text-sm">
+        <text class="tag tag-muted mr-4" wx:if="{{item.subject}}">{{item.subject}}</text>
+        <text class="text-muted" wx:if="{{item.goalTitle && goals.length > 1}}">来自 {{item.goalTitle}}</text>
+      </view>
+
+      <!-- Score display for completed -->
+      <view class="flex-between mt-8" wx:if="{{item.status === 'COMPLETED' && item.latestCheckin}}">
+        <view class="flex-row">
+          <text wx:if="{{item.latestCheckin.aiScore && item.latestCheckin.aiScore.totalScore != null}}" class="tag tag-info mr-4">
+            评分 {{item.latestCheckin.aiScore.totalScore}}
+          </text>
+          <text wx:if="{{item.latestCheckin.studyMood}}" class="text-sm text-muted">{{item.latestCheckin.studyMood}}</text>
+        </view>
+        <text class="text-sm text-muted">{{item.latestCheckin.submittedAt}}</text>
+      </view>
+    </view>
+  </view>
+</view>

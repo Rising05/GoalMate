@@ -1,0 +1,108 @@
+<view class="container">
+  <!-- Task Detail -->
+  <view class="card mb-12">
+    <view class="flex-between mb-8">
+      <text class="text-lg font-bold">{{task.title}}</text>
+      <text class="tag {{task.status === 'COMPLETED' ? 'tag-success' : 'tag-muted'}}">
+        {{task.status === 'COMPLETED' ? '已完成' : '待打卡'}}
+      </text>
+    </view>
+    <view class="text-sm text-secondary mb-8" wx:if="{{task.description}}">
+      {{task.description}}
+    </view>
+    <view class="flex-row text-sm">
+      <text class="tag tag-muted mr-4" wx:if="{{task.subject}}">{{task.subject}}</text>
+      <text class="text-muted mr-8" wx:if="{{task.plannedMinutes}}">计划 {{task.plannedMinutes}} 分钟</text>
+      <text class="text-muted" wx:if="{{goalTitle}}">目标: {{goalTitle}}</text>
+    </view>
+    <view class="flex-row text-sm mt-4" wx:if="{{task.rescueReason}}">
+      <text class="tag tag-warning">救援: {{task.rescueReason}}</text>
+    </view>
+  </view>
+
+  <!-- Existing Checkin Display -->
+  <view class="card mb-12" wx:if="{{task.latestCheckin}}">
+    <view class="text-md font-medium mb-8">已提交打卡</view>
+    <view class="text-sm text-secondary mb-4">{{task.latestCheckin.content}}</view>
+    <view class="flex-row text-sm mb-4">
+      <text class="text-muted mr-8">投入 {{task.latestCheckin.investedMinutes || 0}} 分钟</text>
+      <text wx:if="{{task.latestCheckin.studyMood}}" class="text-muted mr-8">{{task.latestCheckin.studyMood}}</text>
+    </view>
+    <!-- Existing evidence -->
+    <view class="evidence-list" wx:if="{{task.latestCheckin.evidenceFiles.length > 0}}">
+      <text class="text-sm text-secondary mb-4">已上传证据:</text>
+      <view class="evidence-item" wx:for="{{task.latestCheckin.evidenceFiles}}" wx:key="*this" wx:if="{{item.url}}">
+        <image wx:if="{{item.mimeType && item.mimeType.indexOf('image') !== -1}}" src="{{item.url}}" mode="aspectFill" class="evidence-thumb" bindtap="previewImage" data-url="{{item.url}}"></image>
+        <text wx:else class="text-sm text-muted">{{item.name || '文件'}}</text>
+      </view>
+    </view>
+    <!-- Score -->
+    <view class="flex-between mt-8" wx:if="{{task.latestCheckin.aiScore}}">
+      <view class="flex-row">
+        <text wx:if="{{task.latestCheckin.aiScore.totalScore != null}}" class="tag tag-info">
+          总分 {{task.latestCheckin.aiScore.totalScore}}/100
+        </text>
+      </view>
+      <text class="text-sm text-muted">提交于 {{task.latestCheckin.submittedAt}}</text>
+    </view>
+  </view>
+
+  <!-- Checkin Form (only for PENDING tasks) -->
+  <view class="card" wx:if="{{task.status !== 'COMPLETED'}}">
+    <view class="text-md font-medium mb-12">学习打卡</view>
+
+    <!-- Content -->
+    <view class="input-group">
+      <view class="input-label">学习内容与复盘 *</view>
+      <textarea class="textarea" placeholder="描述你今天完成了什么、学到什么、遇到什么问题..." value="{{content}}" bindinput="onContentInput" maxlength="2000"></textarea>
+    </view>
+
+    <!-- Invested Minutes -->
+    <view class="input-group">
+      <view class="input-label">投入时间 (分钟)</view>
+      <input class="input" type="number" placeholder="实际学习时长" value="{{investedMinutes}}" bindinput="onMinutesInput" />
+    </view>
+
+    <!-- Study Mood -->
+    <view class="input-group">
+      <view class="input-label">学习状态</view>
+      <view class="mood-selector">
+        <view class="mood-item {{studyMood === '😊 积极' ? 'mood-active' : ''}}" bindtap="selectMood" data-mood="😊 积极">😊 积极</view>
+        <view class="mood-item {{studyMood === '😐 一般' ? 'mood-active' : ''}}" bindtap="selectMood" data-mood="😐 一般">😐 一般</view>
+        <view class="mood-item {{studyMood === '😞 困难' ? 'mood-active' : ''}}" bindtap="selectMood" data-mood="😞 困难">😞 困难</view>
+      </view>
+    </view>
+
+    <!-- Photo evidence -->
+    <view class="input-group">
+      <view class="input-label">学习证据 (截图/照片)</view>
+      <view class="evidence-upload">
+        <view class="evidence-preview-list" wx:if="{{uploadedFiles.length > 0}}">
+          <view class="evidence-preview-item" wx:for="{{uploadedFiles}}" wx:key="id">
+            <image src="{{item.tempPath}}" mode="aspectFill" class="evidence-preview-img"></image>
+            <view class="evidence-preview-del" bindtap="removeFile" data-id="{{item.id}}">✕</view>
+            <view wx:if="{{item.uploading}}" class="evidence-uploading">上传中...</view>
+            <view wx:if="{{item.uploaded}}" class="evidence-done">✓</view>
+          </view>
+        </view>
+        <view class="evidence-add" bindtap="chooseImage" wx:if="{{uploadedFiles.length < 5}}">
+          <text class="evidence-add-icon">+</text>
+          <text class="text-sm text-muted">拍照/相册</text>
+        </view>
+      </view>
+    </view>
+
+    <!-- Error -->
+    <view class="error-msg mb-12" wx:if="{{error}}">{{error}}</view>
+
+    <!-- Submit -->
+    <button class="btn btn-primary btn-block" bindtap="submitCheckin" loading="{{submitting}}" disabled="{{submitting}}">
+      提交打卡
+    </button>
+  </view>
+
+  <!-- Back to tasks -->
+  <view class="text-center mt-16" wx:if="{{task.status === 'COMPLETED'}}">
+    <button class="btn btn-outline btn-block" bindtap="goBack">返回任务列表</button>
+  </view>
+</view>

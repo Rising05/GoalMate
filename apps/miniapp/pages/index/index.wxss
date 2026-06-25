@@ -1,0 +1,40 @@
+.goal-selector {
+  padding: 20rpx 24rpx;
+}
+
+.date-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12rpx;
+}
+
+.task-card {
+  transition: background 0.2s;
+}
+
+.task-card:active {
+  background: #F8FAFC;
+}
+
+.task-status-icon {
+  width: 40rpx;
+  height: 40rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  margin-right: 16rpx;
+  flex-shrink: 0;
+}
+
+.task-status-icon.pending {
+  border: 2rpx solid #CBD5E1;
+  color: #CBD5E1;
+}
+
+.task-status-icon.completed {
+  background: #DCFCE7;
+  color: #22C55E;
+  border: 2rpx solid #22C55E;
+}
